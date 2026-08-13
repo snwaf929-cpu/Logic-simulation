@@ -2,7 +2,10 @@ package com.foreverspark.logicsim.client.chip;
 
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipLookup;
+import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
@@ -50,25 +53,29 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public void save(String name, CircuitDocument circuit) throws IOException {
+        save(name, circuit, DEFAULT_CHIP_COLOR, new ChipVisualSettings());
+    }
+
+    public void save(String name, CircuitDocument circuit, int color, ChipVisualSettings visual) throws IOException {
         String normalized = validateName(name);
         Files.createDirectories(chipDirectory);
 
-        ChipDefinition definition = new ChipDefinition(normalized, copyDocument(circuit));
-        try (Writer writer = Files.newBufferedWriter(file(normalized), StandardCharsets.UTF_8)) {
-            GSON.toJson(definition, writer);
-        }
+        ChipVisualSettings visualCopy = copyVisual(visual);
+        ChipDefinition definition = new ChipDefinition(normalized, copyDocument(circuit), visualCopy);
+        writeDefinition(definition);
 
         cachedDefinitions.put(normalized, copyDefinition(definition));
-        layout.chips.computeIfAbsent(normalized, ignored -> new ChipMeta());
+        ChipMeta meta = layout.chips.computeIfAbsent(normalized, ignored -> new ChipMeta());
+        meta.color = forceOpaque(color);
         saveLayout();
     }
 
     public ChipDefinition load(String name) throws IOException {
         String normalized = validateName(name);
-        ChipDefinition cached = cachedDefinitions.get(normalized);
+        ChipDefinition cached = findCached(normalized);
         if (cached == null) {
             refreshChipCache();
-            cached = cachedDefinitions.get(normalized);
+            cached = findCached(normalized);
         }
         if (cached == null) {
             throw new IOException("Chip does not exist: " + normalized);
@@ -76,13 +83,16 @@ public final class ClientChipLibrary implements ChipLookup {
         return copyDefinition(cached);
     }
 
+    /** Read-only lookup used by the compiler/editor. Returned definitions must not be mutated. */
     @Override
     public ChipDefinition find(String name) {
-        try {
-            return load(name);
-        } catch (IOException | IllegalArgumentException ignored) {
-            return null;
-        }
+        if (name == null) return null;
+        return findCached(name.trim());
+    }
+
+    public boolean exists(String name) {
+        if (name == null || name.isBlank()) return false;
+        return findCached(name.trim()) != null;
     }
 
     public List<String> names() {
@@ -115,7 +125,7 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public String folderOf(String chipName) {
-        ChipMeta meta = layout.chips.get(chipName);
+        ChipMeta meta = chipMeta(chipName);
         if (meta == null || meta.folder == null) {
             return "";
         }
@@ -123,8 +133,13 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public int chipColor(String chipName) {
-        ChipMeta meta = layout.chips.get(chipName);
+        ChipMeta meta = chipMeta(chipName);
         return meta == null ? DEFAULT_CHIP_COLOR : normalizeColor(meta.color, DEFAULT_CHIP_COLOR);
+    }
+
+    public ChipVisualSettings chipVisual(String chipName) {
+        ChipDefinition definition = findCached(chipName);
+        return definition == null ? new ChipVisualSettings() : copyVisual(definition.visual);
     }
 
     public int folderColor(String folderName) {
@@ -138,13 +153,17 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public void createFolder(String name) throws IOException {
+        createFolder(name, DEFAULT_FOLDER_COLOR);
+    }
+
+    public void createFolder(String name, int color) throws IOException {
         String normalized = validateFolderName(name);
         if (folderMeta(normalized) != null) {
             throw new IllegalArgumentException("Folder already exists: " + normalized);
         }
         FolderMeta folder = new FolderMeta();
         folder.name = normalized;
-        folder.color = DEFAULT_FOLDER_COLOR;
+        folder.color = forceOpaque(color);
         folder.expanded = true;
         layout.folders.add(folder);
         saveLayout();
@@ -191,20 +210,67 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public void setChipColor(String chipName, int color) throws IOException {
-        requireChip(chipName);
-        ChipMeta meta = layout.chips.computeIfAbsent(chipName, ignored -> new ChipMeta());
+        String canonical = requireChip(chipName);
+        ChipMeta meta = layout.chips.computeIfAbsent(canonical, ignored -> new ChipMeta());
         meta.color = forceOpaque(color);
         saveLayout();
     }
 
     public void moveChipToFolder(String chipName, String folderName) throws IOException {
-        requireChip(chipName);
+        String canonical = requireChip(chipName);
         String target = folderName == null ? "" : folderName;
         if (!target.isBlank()) {
-            requireFolder(target);
+            target = requireFolder(target).name;
         }
-        ChipMeta meta = layout.chips.computeIfAbsent(chipName, ignored -> new ChipMeta());
+        ChipMeta meta = layout.chips.computeIfAbsent(canonical, ignored -> new ChipMeta());
         meta.folder = target;
+        saveLayout();
+    }
+
+    /**
+     * Rename a saved chip and update all saved custom-chip references to the new name.
+     * This keeps existing higher-level chips valid after an F2 rename.
+     */
+    public void renameChip(String oldName, String newName) throws IOException {
+        String oldCanonical = requireChip(oldName);
+        String normalizedNew = validateName(newName);
+        String existingNew = canonicalChipName(normalizedNew);
+        if (existingNew != null && !existingNew.equals(oldCanonical)) {
+            throw new IllegalArgumentException("Chip already exists: " + normalizedNew);
+        }
+        if (oldCanonical.equals(normalizedNew)) {
+            return;
+        }
+
+        ChipDefinition renamed = cachedDefinitions.remove(oldCanonical);
+        Path oldPath = file(oldCanonical);
+        Path newPath = file(normalizedNew);
+        if (!oldPath.equals(newPath) && Files.exists(newPath)) {
+            cachedDefinitions.put(oldCanonical, renamed);
+            throw new IllegalArgumentException("A chip file already uses that name");
+        }
+
+        renamed.name = normalizedNew;
+        rewriteCustomChipReferences(renamed.circuit, oldCanonical, normalizedNew);
+        renamed.normalize();
+        writeDefinition(renamed);
+        if (!oldPath.equals(newPath)) {
+            Files.deleteIfExists(oldPath);
+        }
+        cachedDefinitions.put(normalizedNew, renamed);
+
+        ChipMeta meta = layout.chips.remove(oldCanonical);
+        if (meta == null) meta = new ChipMeta();
+        layout.chips.put(normalizedNew, meta);
+
+        // Keep every previously saved parent chip valid after the rename.
+        for (ChipDefinition definition : cachedDefinitions.values()) {
+            if (definition == renamed) continue;
+            if (rewriteCustomChipReferences(definition.circuit, oldCanonical, normalizedNew)) {
+                writeDefinition(definition);
+            }
+        }
+
         saveLayout();
     }
 
@@ -216,11 +282,14 @@ public final class ClientChipLibrary implements ChipLookup {
 
     private ChipDefinition copyDefinition(ChipDefinition definition) {
         ChipDefinition copy = GSON.fromJson(GSON.toJson(definition), ChipDefinition.class);
-        if (copy.circuit == null) {
-            copy.circuit = new CircuitDocument();
-        }
-        copy.circuit.normalize();
+        copy.normalize();
         return copy;
+    }
+
+    private static ChipVisualSettings copyVisual(ChipVisualSettings visual) {
+        ChipVisualSettings source = visual == null ? new ChipVisualSettings() : visual;
+        source.normalize();
+        return new ChipVisualSettings(source.width, source.minHeight, source.portSpacing);
     }
 
     private void refreshChipCache() {
@@ -238,7 +307,7 @@ public final class ClientChipLibrary implements ChipLookup {
                             if (definition == null || definition.circuit == null || definition.name == null || definition.name.isBlank()) {
                                 return;
                             }
-                            definition.circuit.normalize();
+                            definition.normalize();
                             cachedDefinitions.put(definition.name, definition);
                         } catch (Exception ignored) {
                             // A corrupt chip must not prevent the editor from opening.
@@ -278,13 +347,15 @@ public final class ClientChipLibrary implements ChipLookup {
             folder.color = normalizeColor(folder.color, DEFAULT_FOLDER_COLOR);
         }
 
-        for (String chipName : cachedDefinitions.keySet()) {
-            ChipMeta meta = layout.chips.computeIfAbsent(chipName, ignored -> new ChipMeta());
+        for (ChipDefinition definition : cachedDefinitions.values()) {
+            definition.normalize();
+            ChipMeta meta = layout.chips.computeIfAbsent(definition.name, ignored -> new ChipMeta());
             meta.color = normalizeColor(meta.color, DEFAULT_CHIP_COLOR);
             if (meta.folder == null || (!meta.folder.isBlank() && folderMeta(meta.folder) == null)) {
                 meta.folder = "";
             }
         }
+        layout.chips.keySet().removeIf(name -> canonicalChipName(name) == null);
     }
 
     private void saveLayout() throws IOException {
@@ -293,6 +364,26 @@ public final class ClientChipLibrary implements ChipLookup {
         try (Writer writer = Files.newBufferedWriter(layoutFile, StandardCharsets.UTF_8)) {
             GSON.toJson(layout, writer);
         }
+    }
+
+    private void writeDefinition(ChipDefinition definition) throws IOException {
+        definition.normalize();
+        Files.createDirectories(chipDirectory);
+        try (Writer writer = Files.newBufferedWriter(file(definition.name), StandardCharsets.UTF_8)) {
+            GSON.toJson(definition, writer);
+        }
+    }
+
+    private static boolean rewriteCustomChipReferences(CircuitDocument circuit, String oldName, String newName) {
+        if (circuit == null || circuit.nodes == null) return false;
+        boolean changed = false;
+        for (EditorNode node : circuit.nodes) {
+            if (node.kind == NodeKind.CUSTOM_CHIP && oldName.equals(node.chipName)) {
+                node.chipName = newName;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private FolderMeta folderMeta(String name) {
@@ -315,10 +406,30 @@ public final class ClientChipLibrary implements ChipLookup {
         return folder;
     }
 
-    private void requireChip(String name) {
-        if (!cachedDefinitions.containsKey(name)) {
+    private ChipMeta chipMeta(String name) {
+        String canonical = canonicalChipName(name);
+        return canonical == null ? null : layout.chips.get(canonical);
+    }
+
+    private ChipDefinition findCached(String name) {
+        String canonical = canonicalChipName(name);
+        return canonical == null ? null : cachedDefinitions.get(canonical);
+    }
+
+    private String canonicalChipName(String name) {
+        if (name == null) return null;
+        for (String candidate : cachedDefinitions.keySet()) {
+            if (candidate.equalsIgnoreCase(name)) return candidate;
+        }
+        return null;
+    }
+
+    private String requireChip(String name) {
+        String canonical = canonicalChipName(name);
+        if (canonical == null) {
             throw new IllegalArgumentException("Chip does not exist: " + name);
         }
+        return canonical;
     }
 
     private Path file(String name) {
@@ -369,7 +480,7 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     private static final class LibraryLayout {
-        int formatVersion = 1;
+        int formatVersion = 2;
         List<FolderMeta> folders = new ArrayList<>();
         Map<String, ChipMeta> chips = new LinkedHashMap<>();
     }
