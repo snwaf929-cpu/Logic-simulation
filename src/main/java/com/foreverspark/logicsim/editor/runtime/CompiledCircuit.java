@@ -4,26 +4,31 @@ import com.foreverspark.logicsim.core.CircuitSimulator;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.core.Signal;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
+/** Runtime view of one compiled circuit, including every flattened custom-chip instance scope. */
 public final class CompiledCircuit {
+    public static final String ROOT_SCOPE = "ROOT";
+
     private final CircuitSimulator simulator;
     private final Map<Integer, Signal[]> rootInputs;
-    private final Map<NodePortKey, Signal[]> nodeInputs;
-    private final Map<NodePortKey, Signal[]> nodeOutputs;
+    private final Map<String, Map<NodePortKey, Signal[]>> scopedInputs;
+    private final Map<String, Map<NodePortKey, Signal[]>> scopedOutputs;
     private final long settleBudget;
 
     CompiledCircuit(
             CircuitSimulator simulator,
             Map<Integer, Signal[]> rootInputs,
-            Map<NodePortKey, Signal[]> nodeInputs,
-            Map<NodePortKey, Signal[]> nodeOutputs,
+            Map<String, Map<NodePortKey, Signal[]>> scopedInputs,
+            Map<String, Map<NodePortKey, Signal[]>> scopedOutputs,
             long settleBudget
     ) {
         this.simulator = simulator;
         this.rootInputs = Map.copyOf(rootInputs);
-        this.nodeInputs = Map.copyOf(nodeInputs);
-        this.nodeOutputs = Map.copyOf(nodeOutputs);
+        this.scopedInputs = immutableNestedMap(scopedInputs);
+        this.scopedOutputs = immutableNestedMap(scopedOutputs);
         this.settleBudget = settleBudget;
     }
 
@@ -39,23 +44,80 @@ public final class CompiledCircuit {
     }
 
     public LogicValue[] inputValues(int nodeId, int port) {
-        return values(nodeInputs.get(new NodePortKey(nodeId, port)));
+        return inputValues(ROOT_SCOPE, nodeId, port);
     }
 
     public LogicValue[] outputValues(int nodeId, int port) {
-        return values(nodeOutputs.get(new NodePortKey(nodeId, port)));
+        return outputValues(ROOT_SCOPE, nodeId, port);
     }
 
     public long inputUnsigned(int nodeId, int port) {
-        return unsigned(nodeInputs.get(new NodePortKey(nodeId, port)));
+        return inputUnsigned(ROOT_SCOPE, nodeId, port);
     }
 
     public long outputUnsigned(int nodeId, int port) {
-        return unsigned(nodeOutputs.get(new NodePortKey(nodeId, port)));
+        return outputUnsigned(ROOT_SCOPE, nodeId, port);
+    }
+
+    public LogicValue[] inputValues(String scopePath, int nodeId, int port) {
+        return values(signals(scopedInputs, scopePath, nodeId, port));
+    }
+
+    public LogicValue[] outputValues(String scopePath, int nodeId, int port) {
+        return values(signals(scopedOutputs, scopePath, nodeId, port));
+    }
+
+    public long inputUnsigned(String scopePath, int nodeId, int port) {
+        return unsigned(signals(scopedInputs, scopePath, nodeId, port));
+    }
+
+    public long outputUnsigned(String scopePath, int nodeId, int port) {
+        return unsigned(signals(scopedOutputs, scopePath, nodeId, port));
+    }
+
+    public boolean hasScope(String scopePath) {
+        return scopedInputs.containsKey(scopePath) || scopedOutputs.containsKey(scopePath);
+    }
+
+    public Set<String> scopePaths() {
+        java.util.LinkedHashSet<String> result = new java.util.LinkedHashSet<>(scopedInputs.keySet());
+        result.addAll(scopedOutputs.keySet());
+        return Set.copyOf(result);
     }
 
     public CircuitSimulator simulator() {
         return simulator;
+    }
+
+    /** Deterministic scope path used by the compiler and the editor breadcrumb inspector. */
+    public static String childScopePath(String parentScope, int nodeId, String chipName) {
+        String parent = parentScope == null || parentScope.isBlank() ? ROOT_SCOPE : parentScope;
+        String name = chipName == null ? "" : chipName.trim();
+        return parent + "/CHIP" + nodeId + "[" + name + "]";
+    }
+
+    private static Signal[] signals(
+            Map<String, Map<NodePortKey, Signal[]>> scopes,
+            String scopePath,
+            int nodeId,
+            int port
+    ) {
+        String scope = scopePath == null || scopePath.isBlank() ? ROOT_SCOPE : scopePath;
+        Map<NodePortKey, Signal[]> ports = scopes.get(scope);
+        if (ports == null) {
+            return null;
+        }
+        return ports.get(new NodePortKey(nodeId, port));
+    }
+
+    private static Map<String, Map<NodePortKey, Signal[]>> immutableNestedMap(
+            Map<String, Map<NodePortKey, Signal[]>> source
+    ) {
+        Map<String, Map<NodePortKey, Signal[]>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<NodePortKey, Signal[]>> entry : source.entrySet()) {
+            result.put(entry.getKey(), Map.copyOf(entry.getValue()));
+        }
+        return Map.copyOf(result);
     }
 
     private static LogicValue[] values(Signal[] signals) {
