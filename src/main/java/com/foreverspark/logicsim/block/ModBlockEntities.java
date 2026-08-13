@@ -11,6 +11,7 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 
 public final class ModBlockEntities {
     public static final BlockEntityType<DisplayBlockEntity> DISPLAY = register("display", DisplayBlockEntity::new, DisplayBlocks.DISPLAY_BLOCK);
+    public static final BlockEntityType<CircuitPortBlockEntity> CIRCUIT_PORT = register("circuit_port", CircuitPortBlockEntity::new, ConnectorBlocks.IO_CONNECTOR);
 
     private ModBlockEntities() {}
 
