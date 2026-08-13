@@ -1,8 +1,8 @@
 {
   "variants": {
-    "facing=north": { "model": "logicsimulation:block/circuit_block" },
-    "facing=east":  { "model": "logicsimulation:block/circuit_block", "y": 90 },
-    "facing=south": { "model": "logicsimulation:block/circuit_block", "y": 180 },
-    "facing=west":  { "model": "logicsimulation:block/circuit_block", "y": 270 }
+    "facing=north": { "model": "logicsimulation:block/display_block" },
+    "facing=east":  { "model": "logicsimulation:block/display_block", "y": 90 },
+    "facing=south": { "model": "logicsimulation:block/display_block", "y": 180 },
+    "facing=west":  { "model": "logicsimulation:block/display_block", "y": 270 }
   }
 }
