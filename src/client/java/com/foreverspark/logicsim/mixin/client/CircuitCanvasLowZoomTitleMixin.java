@@ -30,7 +30,7 @@ public abstract class CircuitCanvasLowZoomTitleMixin {
         int accent=n.kind==NodeKind.BUS?0xFF4B5662:nodeAccent(n);
         g.fill(x,y,x+w,y+h,n.kind==NodeKind.BUS?0xFF080B0F:0xF0191F26);
         g.outline(x,y,w,h,isNodeSelected(n.id)?0xFFFFFFFF:accent);
-        String title=n.kind==NodeKind.BUS?Integer.toString(n.width):n.kind==NodeKind.CUSTOM_CHIP?n.displayName():switch(n.kind){case NAND->"NAND";case CONSTANT->"CONST";case PROBE->"PROBE";case SPLITTER->"SPLIT "+n.width;case MERGER->"MERGE "+n.width;default->n.displayName();};
+        String title=n.kind==NodeKind.BUS?Integer.toString(n.width):n.kind==NodeKind.CUSTOM_CHIP?n.displayName():switch(n.kind){case NAND->"NAND";case CONSTANT->n.clockSource?"CLK "+EditorNode.formatFrequency(n.clockFrequencyHz):"CONST";case PROBE->"PROBE";case SPLITTER->"SPLIT "+n.width;case MERGER->"MERGE "+n.width;default->n.displayName();};
         logic$text(g,title,x+w/2,y+Math.max(2,h/2-4),Math.max(4,w-4),0xFFF2F5F8);
         ci.cancel();
     }
