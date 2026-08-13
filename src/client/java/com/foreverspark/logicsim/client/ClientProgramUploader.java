@@ -33,6 +33,14 @@ public final class ClientProgramUploader {
         ClientPlayNetworking.send(new ProgramCircuitPayload(target, json));
     }
 
+    public static void toggleRedstoneClockGate(BlockPos target) {
+        if (target == null) return;
+        ClientPlayNetworking.send(new ProgramCircuitPayload(
+                target,
+                ProgramCircuitPayload.CONTROL_TOGGLE_REDSTONE_CLOCK_GATE
+        ));
+    }
+
     private static void collect(
             ChipDefinition definition,
             ClientChipLibrary library,
