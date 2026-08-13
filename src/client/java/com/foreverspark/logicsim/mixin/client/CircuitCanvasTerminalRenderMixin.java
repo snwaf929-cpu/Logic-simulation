@@ -34,6 +34,11 @@ public abstract class CircuitCanvasTerminalRenderMixin {
 
     @Inject(method = "drawNode", at = @At("HEAD"), cancellable = true)
     private void logic$terminal(GuiGraphicsExtractor graphics, EditorNode node, CallbackInfo ci) {
+        if (node.kind == NodeKind.CONSTANT && node.clockSource) {
+            logic$clock(graphics, node);
+            ci.cancel();
+            return;
+        }
         if (node.kind != NodeKind.INPUT && node.kind != NodeKind.OUTPUT) return;
         int x = screenX(node.x), y = screenY(node.y);
         int w = Math.max(8, (int)Math.round(nodeWidth(node) * zoom));
@@ -50,6 +55,25 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         for (int i = 0; i < inputs.size(); i++) logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5, portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
         for (int i = 0; i < outputs.size(); i++) logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5, portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
         ci.cancel();
+    }
+
+    @Unique private void logic$clock(GuiGraphicsExtractor graphics, EditorNode node) {
+        int x = screenX(node.x), y = screenY(node.y);
+        int w = Math.max(28, (int)Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(24, (int)Math.round(nodeHeight(node) * zoom));
+        int accent = 0xFF5FA8FF;
+        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : accent;
+        graphics.fill(x, y, x + w, y + h, 0xF0121820);
+        graphics.outline(x, y, w, h, border);
+        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(4 * zoom)), accent);
+        logic$smallText(graphics, "CLOCK", x + w / 2, y + Math.max(7, (int)Math.round(9 * zoom)), Math.max(8, w - 6), 0xFFF4F8FC);
+        logic$smallText(graphics, EditorNode.formatFrequency(node.clockFrequencyHz), x + w / 2,
+                y + h - Math.max(15, (int)Math.round(16 * zoom)), Math.max(8, w - 6), 0xFF9BCBFF);
+        List<PortSpec> outputs = safeOutputs(node);
+        for (int i = 0; i < outputs.size(); i++) {
+            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5,
+                    portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
+        }
     }
 
     @Unique private void logic$smallText(GuiGraphicsExtractor graphics, String text, int cx, int y, int maxW, int color) {
