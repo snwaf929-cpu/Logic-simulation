@@ -70,5 +70,23 @@ public final class TimingDomain {
     }
 
     private void queueElapsedTime(long elapsedNanos) {
+        long edgesPerSecond = frequencyHz * 2L;
+        long wholeSeconds = elapsedNanos / NANOS_PER_SECOND;
+        long remainingNanos = elapsedNanos % NANOS_PER_SECOND;
+        pendingEdges = saturatingAdd(pendingEdges, saturatingMultiply(wholeSeconds, edgesPerSecond));
+        long numerator = fractionalEdgeNumerator + remainingNanos * edgesPerSecond;
+        pendingEdges = saturatingAdd(pendingEdges, numerator / NANOS_PER_SECOND);
+        fractionalEdgeNumerator = numerator % NANOS_PER_SECOND;
+    }
+
+    private static long saturatingAdd(long a, long b) {
+        if (b > 0L && a > Long.MAX_VALUE - b) return Long.MAX_VALUE;
+        return a + b;
+    }
+
+    private static long saturatingMultiply(long a, long b) {
+        if (a == 0L || b == 0L) return 0L;
+        if (a > Long.MAX_VALUE / b) return Long.MAX_VALUE;
+        return a * b;
     }
 }
