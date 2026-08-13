@@ -19,8 +19,8 @@ import java.util.Set;
 import java.util.WeakHashMap;
 
 /**
- * Caches one physical cable run as one electrical net. Signal changes no longer need to BFS every cable segment.
- * Cache rebuilds happen on topology changes instead of on every virtual edge.
+ * One physical cable run becomes one cached electrical net for the current world tick.
+ * Virtual edges reuse that net; world topology is rediscovered on the next tick.
  */
 public final class CableNetworkCache {
     private static final int MAX_SEGMENTS = 8192;
@@ -61,6 +61,14 @@ public final class CableNetworkCache {
         Set<BlockPos> segments = CableRun.collect(level, start, MAX_SEGMENTS);
         if (segments.isEmpty()) return null;
 
+        // A merge can overlap other cached nets from the previous world tick. Seed all of them first.
+        Set<Network> overlapping = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (BlockPos segment : segments) {
+            Network old = state.bySegment.get(segment);
+            if (old != null) overlapping.add(old);
+        }
+        for (Network old : overlapping) invalidateNetwork(state, old);
+
         Long seed = null;
         boolean conflict = false;
         for (BlockPos segment : segments) {
@@ -78,7 +86,8 @@ public final class CableNetworkCache {
                 endpoints,
                 conflict || seed == null ? 0L : seed,
                 !conflict && seed != null,
-                true
+                true,
+                level.getGameTime()
         );
         for (BlockPos segment : segments) state.bySegment.put(segment, network);
         return network;
@@ -125,11 +134,13 @@ public final class CableNetworkCache {
         private final int width;
         private final Set<BlockPos> segments;
         private final List<Endpoint> endpoints;
+        private final long builtAtGameTime;
         private long value;
         private boolean initialized;
         private boolean fresh;
 
-        private Network(CableKind kind, int width, Set<BlockPos> segments, List<Endpoint> endpoints, long value, boolean initialized, boolean fresh) {
+        private Network(CableKind kind, int width, Set<BlockPos> segments, List<Endpoint> endpoints, long value,
+                        boolean initialized, boolean fresh, long builtAtGameTime) {
             this.kind = kind;
             this.width = width;
             this.segments = segments;
@@ -137,6 +148,7 @@ public final class CableNetworkCache {
             this.value = value;
             this.initialized = initialized;
             this.fresh = fresh;
+            this.builtAtGameTime = builtAtGameTime;
         }
 
         public CableKind kind() { return kind; }
@@ -155,6 +167,7 @@ public final class CableNetworkCache {
         public void markObserved() { fresh = false; }
 
         private boolean matches(Level level, BlockPos start) {
+            if (builtAtGameTime != level.getGameTime()) return false;
             BlockState state = level.getBlockState(start);
             return state.getBlock() instanceof CableBlock cable && cable.cableKind() == kind && cable.bitWidth() == width;
         }
