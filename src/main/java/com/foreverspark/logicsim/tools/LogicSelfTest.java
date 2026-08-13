@@ -39,11 +39,12 @@ public final class LogicSelfTest {
         testFreeformNotCompiler();
         testFreeformBusSplitMerge();
         testCustomChipFlattening();
+        testLiveHierarchicalScope();
         testWidthMismatchRejected();
         testRoutedWireDoesNotChangeLogic();
         testChipVisualSettingsBounds();
         testInterconnectValidation();
-        System.out.println("Logic core + editor + routed UX metadata + interconnect self-test: PASS");
+        System.out.println("Logic core + live hierarchy + routed UX metadata + interconnect self-test: PASS");
     }
 
     private static void testNandTruthTable() {
@@ -180,6 +181,44 @@ public final class LogicSelfTest {
         check(compiled.inputUnsigned(output.id, 0) == 1L, "custom NOT 0");
         compiled.driveInputUnsigned(input.id, 1);
         check(compiled.inputUnsigned(output.id, 0) == 0L, "custom NOT 1");
+    }
+
+    private static void testLiveHierarchicalScope() {
+        CircuitDocument notDocument = makeNotDocument();
+        EditorNode childInput = notDocument.inputNodes().getFirst();
+        EditorNode childNand = notDocument.nodes.stream()
+                .filter(node -> node.kind == NodeKind.NAND)
+                .findFirst()
+                .orElseThrow();
+        EditorNode childOutput = notDocument.outputNodes().getFirst();
+        ChipDefinition notChip = new ChipDefinition("NOT", notDocument);
+        Map<String, ChipDefinition> chips = Map.of("NOT", notChip);
+
+        CircuitDocument parent = new CircuitDocument();
+        EditorNode parentInput = parent.addNode(NodeKind.INPUT, 0, 0);
+        EditorNode custom = parent.addCustomChip("NOT", 100, 0);
+        EditorNode parentOutput = parent.addNode(NodeKind.OUTPUT, 200, 0);
+        parent.connect(parentInput.id, 0, custom.id, 0);
+        parent.connect(custom.id, 0, parentOutput.id, 0);
+
+        CompiledCircuit compiled = CircuitCompiler.compile(parent, chips::get);
+        String childScope = CompiledCircuit.childScopePath(CompiledCircuit.ROOT_SCOPE, custom.id, "NOT");
+        check(compiled.hasScope(childScope), "nested runtime scope exists");
+
+        compiled.driveInputUnsigned(parentInput.id, 0);
+        check(compiled.outputUnsigned(childScope, childInput.id, 0) == 0L, "live child input mirrors parent low");
+        check(compiled.outputUnsigned(childScope, childNand.id, 0) == 1L, "live child NAND high for input 0");
+        check(compiled.inputUnsigned(childScope, childOutput.id, 0) == 1L, "live child output high for input 0");
+        check(compiled.inputUnsigned(parentOutput.id, 0) == 1L, "parent output matches child output high");
+
+        compiled.driveInputUnsigned(parentInput.id, 1);
+        check(compiled.outputUnsigned(childScope, childInput.id, 0) == 1L, "live child input mirrors parent high");
+        check(compiled.outputUnsigned(childScope, childNand.id, 0) == 0L, "live child NAND low for input 1");
+        check(compiled.inputUnsigned(childScope, childOutput.id, 0) == 0L, "live child output low for input 1");
+        check(compiled.inputUnsigned(parentOutput.id, 0) == 0L, "parent output matches child output low");
+
+        String renamedScope = CompiledCircuit.childScopePath(CompiledCircuit.ROOT_SCOPE, custom.id, "RENAMED_NOT");
+        check(childScope.equals(renamedScope), "scope identity remains stable across chip rename");
     }
 
     private static void testWidthMismatchRejected() {
