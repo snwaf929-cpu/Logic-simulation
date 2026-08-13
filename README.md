@@ -1,6 +1,15 @@
 # Logic Simulation
 
-A NAND-first digital logic and computer simulation project intended to become a Fabric Minecraft mod.
+A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2 / Fabric**.
+
+## Current platform
+
+- Minecraft: `26.2`
+- Fabric Loader: `0.19.3`
+- Fabric API: `0.156.0+26.2`
+- Fabric Loom: `1.17.17`
+- Java: `25`
+- Gradle: `9.5.1`
 
 ## Core principles
 
@@ -12,16 +21,27 @@ A NAND-first digital logic and computer simulation project intended to become a 
 - Circuit hierarchy remains inspectable even when compiled for speed.
 - Tracing is event-based and bounded so MHz simulation does not generate unbounded logs.
 
-## First milestone
+## Current core
 
-Build and benchmark a pure-Java logic core before adding Minecraft blocks or UI:
+The repository already contains the first pure-Java simulation core:
 
 1. `0 / 1 / X` logic values.
-2. Signals and NAND nodes.
+2. NAND nodes.
 3. Event-driven propagation.
-4. Buses, splitter, and merger mapping.
-5. Hierarchical chip definitions.
-6. Ring-buffer trace recorder.
-7. Benchmarks for NAND evaluations and virtual clock throughput.
+4. 1-64 bit buses with structural split/merge mapping.
+5. Ring-buffer trace recorder.
+6. Dependency-free self-tests and an early benchmark tool.
 
-Minecraft/Fabric integration comes after the core is proven correct and fast.
+The Fabric 26.2 entrypoint is now wired around that core. Minecraft blocks, the circuit editor, custom-chip hierarchy, compiled Turbo simulation, displays, buses in-world, UIB, networking, and computer hardware are upcoming milestones.
+
+## Build
+
+Minecraft 26.2 requires Java 25 for development. GitHub Actions builds the project on Java 25 and Gradle 9.5.1 on every push to `main`.
+
+If you already have Gradle 9.5.1 installed:
+
+```bash
+gradle build selfTest
+```
+
+A standard Gradle wrapper will be added next so Windows builds can use `gradlew.bat` directly.
