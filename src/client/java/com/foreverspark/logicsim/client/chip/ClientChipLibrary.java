@@ -25,8 +25,9 @@ import java.util.Map;
 /**
  * Client-side reusable chip library.
  *
- * Circuit files stay flat on disk so existing saves remain compatible. Folder/color
- * organisation is stored separately in library.json and only affects editor UX.
+ * Circuit files stay flat on disk for backwards compatibility. Folder/color organisation
+ * is persisted both in library.json and inside each chip definition so a stale/missing
+ * library index cannot silently turn a chip gray or forget its folder assignment.
  */
 public final class ClientChipLibrary implements ChipLookup {
     public static final int DEFAULT_CHIP_COLOR = 0xFF59636E;
@@ -53,20 +54,39 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public void save(String name, CircuitDocument circuit) throws IOException {
-        save(name, circuit, DEFAULT_CHIP_COLOR, new ChipVisualSettings());
+        save(name, circuit, DEFAULT_CHIP_COLOR, new ChipVisualSettings(), null);
     }
 
     public void save(String name, CircuitDocument circuit, int color, ChipVisualSettings visual) throws IOException {
+        save(name, circuit, color, visual, null);
+    }
+
+    /**
+     * Saves a reusable chip while preserving its current folder unless a target folder is supplied.
+     * For a brand-new chip, null means OTHER/unfiled.
+     */
+    public void save(String name, CircuitDocument circuit, int color, ChipVisualSettings visual, String folderName) throws IOException {
         String normalized = validateName(name);
         Files.createDirectories(chipDirectory);
 
+        String existingCanonical = canonicalChipName(normalized);
+        String targetFolder;
+        if (folderName == null) {
+            targetFolder = existingCanonical == null ? "" : folderOf(existingCanonical);
+        } else {
+            targetFolder = canonicalFolderOrOther(folderName);
+        }
+
         ChipVisualSettings visualCopy = copyVisual(visual);
         ChipDefinition definition = new ChipDefinition(normalized, copyDocument(circuit), visualCopy);
+        definition.color = forceOpaque(color);
+        definition.folder = targetFolder;
         writeDefinition(definition);
 
         cachedDefinitions.put(normalized, copyDefinition(definition));
         ChipMeta meta = layout.chips.computeIfAbsent(normalized, ignored -> new ChipMeta());
-        meta.color = forceOpaque(color);
+        meta.color = definition.color;
+        meta.folder = targetFolder;
         saveLayout();
     }
 
@@ -134,7 +154,11 @@ public final class ClientChipLibrary implements ChipLookup {
 
     public int chipColor(String chipName) {
         ChipMeta meta = chipMeta(chipName);
-        return meta == null ? DEFAULT_CHIP_COLOR : normalizeColor(meta.color, DEFAULT_CHIP_COLOR);
+        if (meta != null) {
+            return normalizeColor(meta.color, DEFAULT_CHIP_COLOR);
+        }
+        ChipDefinition definition = findCached(chipName);
+        return definition == null ? DEFAULT_CHIP_COLOR : normalizeColor(definition.color, DEFAULT_CHIP_COLOR);
     }
 
     public ChipVisualSettings chipVisual(String chipName) {
@@ -178,9 +202,11 @@ public final class ClientChipLibrary implements ChipLookup {
         }
         String previous = folder.name;
         folder.name = normalized;
-        for (ChipMeta chip : layout.chips.values()) {
+        for (Map.Entry<String, ChipMeta> entry : layout.chips.entrySet()) {
+            ChipMeta chip = entry.getValue();
             if (previous.equals(chip.folder)) {
                 chip.folder = normalized;
+                syncDefinitionPresentation(entry.getKey(), chip);
             }
         }
         saveLayout();
@@ -189,9 +215,11 @@ public final class ClientChipLibrary implements ChipLookup {
     public void deleteFolder(String name) throws IOException {
         FolderMeta folder = requireFolder(name);
         layout.folders.remove(folder);
-        for (ChipMeta chip : layout.chips.values()) {
+        for (Map.Entry<String, ChipMeta> entry : layout.chips.entrySet()) {
+            ChipMeta chip = entry.getValue();
             if (name.equals(chip.folder)) {
                 chip.folder = "";
+                syncDefinitionPresentation(entry.getKey(), chip);
             }
         }
         saveLayout();
@@ -213,17 +241,16 @@ public final class ClientChipLibrary implements ChipLookup {
         String canonical = requireChip(chipName);
         ChipMeta meta = layout.chips.computeIfAbsent(canonical, ignored -> new ChipMeta());
         meta.color = forceOpaque(color);
+        syncDefinitionPresentation(canonical, meta);
         saveLayout();
     }
 
     public void moveChipToFolder(String chipName, String folderName) throws IOException {
         String canonical = requireChip(chipName);
-        String target = folderName == null ? "" : folderName;
-        if (!target.isBlank()) {
-            target = requireFolder(target).name;
-        }
+        String target = canonicalFolderOrOther(folderName);
         ChipMeta meta = layout.chips.computeIfAbsent(canonical, ignored -> new ChipMeta());
         meta.folder = target;
+        syncDefinitionPresentation(canonical, meta);
         saveLayout();
     }
 
@@ -250,7 +277,14 @@ public final class ClientChipLibrary implements ChipLookup {
             throw new IllegalArgumentException("A chip file already uses that name");
         }
 
+        ChipMeta meta = layout.chips.remove(oldCanonical);
+        if (meta == null) meta = new ChipMeta();
+        meta.color = normalizeColor(meta.color, renamed.color == 0 ? DEFAULT_CHIP_COLOR : renamed.color);
+        if (meta.folder == null) meta.folder = renamed.folder == null ? "" : renamed.folder;
+
         renamed.name = normalizedNew;
+        renamed.color = meta.color;
+        renamed.folder = canonicalFolderOrOther(meta.folder);
         rewriteCustomChipReferences(renamed.circuit, oldCanonical, normalizedNew);
         renamed.normalize();
         writeDefinition(renamed);
@@ -258,9 +292,6 @@ public final class ClientChipLibrary implements ChipLookup {
             Files.deleteIfExists(oldPath);
         }
         cachedDefinitions.put(normalizedNew, renamed);
-
-        ChipMeta meta = layout.chips.remove(oldCanonical);
-        if (meta == null) meta = new ChipMeta();
         layout.chips.put(normalizedNew, meta);
 
         // Keep every previously saved parent chip valid after the rename.
@@ -342,6 +373,7 @@ public final class ClientChipLibrary implements ChipLookup {
             layout.chips = new LinkedHashMap<>();
         }
 
+        layout.formatVersion = Math.max(layout.formatVersion, 3);
         layout.folders.removeIf(folder -> folder == null || folder.name == null || folder.name.isBlank());
         for (FolderMeta folder : layout.folders) {
             folder.color = normalizeColor(folder.color, DEFAULT_FOLDER_COLOR);
@@ -349,13 +381,47 @@ public final class ClientChipLibrary implements ChipLookup {
 
         for (ChipDefinition definition : cachedDefinitions.values()) {
             definition.normalize();
-            ChipMeta meta = layout.chips.computeIfAbsent(definition.name, ignored -> new ChipMeta());
-            meta.color = normalizeColor(meta.color, DEFAULT_CHIP_COLOR);
-            if (meta.folder == null || (!meta.folder.isBlank() && folderMeta(meta.folder) == null)) {
-                meta.folder = "";
+            ChipMeta meta = layout.chips.get(definition.name);
+            if (meta == null) {
+                meta = new ChipMeta();
+                meta.color = normalizeColor(definition.color, DEFAULT_CHIP_COLOR);
+                meta.folder = validDefinitionFolder(definition.folder);
+                layout.chips.put(definition.name, meta);
+            } else {
+                int definitionFallback = definition.color == 0 ? DEFAULT_CHIP_COLOR : definition.color;
+                meta.color = normalizeColor(meta.color, definitionFallback);
+                if (meta.folder == null) {
+                    meta.folder = validDefinitionFolder(definition.folder);
+                }
+                if (!meta.folder.isBlank() && folderMeta(meta.folder) == null) {
+                    String recovered = validDefinitionFolder(definition.folder);
+                    meta.folder = recovered;
+                }
             }
+
+            definition.color = meta.color;
+            definition.folder = meta.folder == null ? "" : meta.folder;
         }
         layout.chips.keySet().removeIf(name -> canonicalChipName(name) == null);
+    }
+
+    private String validDefinitionFolder(String folderName) {
+        if (folderName == null || folderName.isBlank()) return "";
+        FolderMeta folder = folderMeta(folderName);
+        return folder == null ? "" : folder.name;
+    }
+
+    private String canonicalFolderOrOther(String folderName) {
+        if (folderName == null || folderName.isBlank()) return "";
+        return requireFolder(folderName).name;
+    }
+
+    private void syncDefinitionPresentation(String chipName, ChipMeta meta) throws IOException {
+        ChipDefinition definition = findCached(chipName);
+        if (definition == null) return;
+        definition.color = normalizeColor(meta.color, DEFAULT_CHIP_COLOR);
+        definition.folder = meta.folder == null ? "" : meta.folder;
+        writeDefinition(definition);
     }
 
     private void saveLayout() throws IOException {
@@ -466,8 +532,8 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     private static int normalizeColor(int color, int fallback) {
-        if ((color & 0x00FFFFFF) == 0) {
-            return fallback;
+        if (color == 0) {
+            return forceOpaque(fallback);
         }
         return forceOpaque(color);
     }
@@ -480,7 +546,7 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     private static final class LibraryLayout {
-        int formatVersion = 2;
+        int formatVersion = 3;
         List<FolderMeta> folders = new ArrayList<>();
         Map<String, ChipMeta> chips = new LinkedHashMap<>();
     }
@@ -493,6 +559,6 @@ public final class ClientChipLibrary implements ChipLookup {
 
     private static final class ChipMeta {
         String folder = "";
-        int color = DEFAULT_CHIP_COLOR;
+        int color = 0;
     }
 }
