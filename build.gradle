@@ -73,6 +73,10 @@ tasks.register('displaySelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.tools.DisplayFramebufferSelfTest'
 }
 
+tasks.named('check') {
+    dependsOn tasks.named('displaySelfTest')
+}
+
 tasks.register('clientSelfTest', JavaExec) {
     group = 'verification'
     description = 'Runs client-side chip-library persistence regression tests without launching Minecraft.'
