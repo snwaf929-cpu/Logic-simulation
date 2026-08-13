@@ -57,6 +57,7 @@ public final class ModBlocks {
     public static void initialize() {
         ModNetworking.initialize();
         PortSelectionNetworking.initialize();
+        com.foreverspark.logicsim.network.CircuitStatsNetworking.initialize();
         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.BUILDING_BLOCKS).register(tab -> {
             tab.accept(CIRCUIT_BLOCK.asItem());
             tab.accept(SIGNAL_WIRE.asItem());
