@@ -4,6 +4,7 @@ import com.foreverspark.logicsim.block.CableBlock;
 import com.foreverspark.logicsim.block.CircuitPortBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
+import com.foreverspark.logicsim.block.DisplayPorts;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
@@ -52,7 +53,7 @@ public final class CableRuntime {
 
                 if (neighbor.getBlock() instanceof DisplayBlock) {
                     Direction displayFace = direction.getOpposite();
-                    if (displayPortWidth(displayFace) == cable.bitWidth()
+                    if (DisplayPorts.widthAt(neighbor, displayFace) == cable.bitWidth()
                             && level.getBlockEntity(neighborPos) instanceof DisplayBlockEntity display) {
                         display.acceptCableValue(displayFace, value);
                     }
@@ -64,14 +65,6 @@ public final class CableRuntime {
                 }
             }
         }
-    }
-
-    private static int displayPortWidth(Direction face) {
-        return switch (face) {
-            case SOUTH, WEST, EAST -> 16;
-            case UP, DOWN -> 1;
-            case NORTH -> 0;
-        };
     }
 
     private static long mask(int width) {
