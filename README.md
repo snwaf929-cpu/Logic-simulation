@@ -96,20 +96,22 @@ The repository contains:
 
 ## World interconnect foundation
 
-The next physical-computer layer has started with a pure typed interconnect graph that future world-space devices and cable blocks will use.
+The physical-computer layer now has both a validated typed topology model and the first placeable cable prototypes.
 
-- `SIGNAL` cable: exactly 1 bit.
-- `BUS` cable: multi-bit, 2-64 bits.
-- Output → input direction is validated.
+- `SIGNAL` / **Signal Wire**: exactly 1 bit.
+- `BUS` / **Bus Cable**: multi-bit, 2-64 bits.
+- Output → input direction is validated by the interconnect graph.
 - Widths must match exactly; there is no hidden conversion.
 - An input cannot silently acquire multiple drivers.
 - Shared tri-state buses/arbitration are intentionally not faked; they will be implemented as a later explicit layer.
 
-Self-tests currently verify 1-bit signal connections, 16-bit bus connections, wrong-cable rejection, and width-mismatch rejection.
+`Signal Wire` and `Bus Cable` now exist as separate placeable blocks/items with slim cubic models and collision shapes. They are an **early physical prototype**: they carry the correct cable identity in code, but they are not yet bound to world device ports or propagating virtual signals through adjacent blocks.
+
+Self-tests verify 1-bit signal connections, 16-bit bus connections, wrong-cable rejection, and width-mismatch rejection.
 
 ## Next hardware milestone
 
-Build actual world-space device/port and `Wire` / `Bus Cable` blocks on top of the validated interconnect graph, then connect saved custom chips and later CPU/RAM/GPU/storage devices through those typed ports. These cables will remain separate from Minecraft redstone.
+Add world-space device ports and topology discovery, bind placed cable networks to the typed `InterconnectGraph`, then expose saved custom chips as world devices. After that, CPU/RAM/GPU/storage blocks can connect through the same system. These cables remain separate from Minecraft redstone.
 
 ## Build / run
 
