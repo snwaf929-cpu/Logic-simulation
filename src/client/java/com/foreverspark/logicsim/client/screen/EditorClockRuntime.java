@@ -3,19 +3,28 @@ package com.foreverspark.logicsim.client.screen;
 import com.foreverspark.logicsim.editor.runtime.CircuitTimingController;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import com.foreverspark.logicsim.mixin.client.CanvasAccess;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 
+import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-/**
- * Client editor scheduler. Frames only batch virtual elapsed time; they do not define clock frequency.
- * If accurate simulation cannot keep up, TimingDomain backlog is preserved instead of dropping edges.
- */
+/** Client-side scheduler for accurate virtual circuit clocks. */
 public final class EditorClockRuntime {
     private static final long EDGE_BUDGET_PER_CLOCK_PER_FRAME = 5_000L;
     private static final Map<CircuitCanvasWidget, State> STATES = new WeakHashMap<>();
 
+    static {
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            for (CircuitCanvasWidget canvas : List.copyOf(STATES.keySet())) frame(canvas);
+        });
+    }
+
     private EditorClockRuntime() {}
+
+    public static synchronized void attach(CircuitCanvasWidget canvas) {
+        frame(canvas);
+    }
 
     public static synchronized void frame(CircuitCanvasWidget canvas) {
         if (canvas == null) return;
