@@ -1,0 +1,21 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "minecraft:block/copper_block",
+    "body": "minecraft:block/copper_block"
+  },
+  "elements": [
+    {
+      "from": [3, 3, 3],
+      "to": [13, 13, 13],
+      "faces": {
+        "down":  { "texture": "#body" },
+        "up":    { "texture": "#body" },
+        "north": { "texture": "#body" },
+        "south": { "texture": "#body" },
+        "west":  { "texture": "#body" },
+        "east":  { "texture": "#body" }
+      }
+    }
+  ]
+}
