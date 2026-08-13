@@ -23,6 +23,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     private CircuitProgramRuntime runtime;
     private String runtimeError = "";
     private long lastClockNanos;
+    private boolean redstoneClockGate;
 
     public CircuitBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.CIRCUIT, pos, state);
@@ -39,6 +40,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         circuit.lastClockNanos = now;
         if (circuit.runtime == null || elapsed == 0L) return;
         try {
+            circuit.runtime.setClocksRunning(!circuit.redstoneClockGate || level.hasNeighborSignal(pos));
             circuit.runtime.advanceClocksNanos(elapsed, CLOCK_EDGE_BUDGET_PER_TICK, circuit::publishOutputs);
             circuit.runtimeError = "";
         } catch (RuntimeException error) {
@@ -49,6 +51,17 @@ public final class CircuitBlockEntity extends BlockEntity {
     public boolean isProgrammed() { return runtime != null; }
     public String runtimeError() { return runtimeError; }
     public String programName() { return runtime == null ? "" : runtime.program().root.name; }
+    public boolean redstoneClockGate() { return redstoneClockGate; }
+
+    public boolean toggleRedstoneClockGate() {
+        redstoneClockGate = !redstoneClockGate;
+        lastClockNanos = System.nanoTime();
+        if (runtime != null && level != null && !level.isClientSide()) {
+            runtime.setClocksRunning(!redstoneClockGate || level.hasNeighborSignal(worldPosition));
+        }
+        setChanged();
+        return redstoneClockGate;
+    }
 
     public CircuitPortCatalog portCatalog() {
         return runtime == null
@@ -69,6 +82,9 @@ public final class CircuitBlockEntity extends BlockEntity {
         this.runtime = compiled;
         this.runtimeError = "";
         this.lastClockNanos = System.nanoTime();
+        if (level != null && !level.isClientSide()) {
+            runtime.setClocksRunning(!redstoneClockGate || level.hasNeighborSignal(worldPosition));
+        }
         setChanged();
         publishOutputs();
     }
@@ -118,6 +134,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     @Override
     protected void saveAdditional(ValueOutput output) {
         if (!programJson.isBlank()) output.putString("program", programJson);
+        if (redstoneClockGate) output.putInt("redstoneClockGate", 1);
         super.saveAdditional(output);
     }
 
@@ -125,6 +142,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
         programJson = input.getStringOr("program", "");
+        redstoneClockGate = input.getIntOr("redstoneClockGate", 0) != 0;
         runtime = null;
         runtimeError = "";
         lastClockNanos = 0L;
