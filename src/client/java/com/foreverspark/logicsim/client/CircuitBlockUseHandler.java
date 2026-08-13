@@ -18,6 +18,7 @@ public final class CircuitBlockUseHandler {
             if (hand != InteractionHand.MAIN_HAND) return InteractionResult.PASS;
             var block = level.getBlockState(hit.getBlockPos()).getBlock();
             if (block == ModBlocks.CIRCUIT_BLOCK) {
+                if (player.isShiftKeyDown()) return InteractionResult.PASS;
                 ClientEditorBridge.openEditor(hit.getBlockPos());
                 return InteractionResult.SUCCESS;
             }
