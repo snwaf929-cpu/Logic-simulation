@@ -24,6 +24,10 @@ import java.util.Set;
  * Flattens an editor document into the NAND-only event-driven core.
  * Splitters and mergers are structural aliases, not hidden logic gates.
  * Custom chips recursively flatten to the NANDs the player actually built.
+ *
+ * Every custom-chip instance also publishes a scoped signal map. That lets the editor
+ * drill into ALU -> Adder -> Full Adder while still reading the exact signals from the
+ * one flattened runtime that is actually executing the parent circuit.
  */
 public final class CircuitCompiler {
     private CircuitCompiler() {
@@ -36,27 +40,22 @@ public final class CircuitCompiler {
         document.normalize();
         LogicCircuit circuit = new LogicCircuit();
         Map<Integer, Signal[]> rootInputs = new HashMap<>();
+        Map<String, Map<NodePortKey, Signal[]>> scopedInputs = new HashMap<>();
+        Map<String, Map<NodePortKey, Signal[]>> scopedOutputs = new HashMap<>();
         BuildContext root = new BuildContext(
                 document,
                 chips == null ? ChipLookup.empty() : chips,
                 circuit,
-                "ROOT",
+                CompiledCircuit.ROOT_SCOPE,
                 Map.of(),
                 rootInputs,
-                Set.of()
+                Set.of(),
+                scopedInputs,
+                scopedOutputs
         );
 
         try {
-            for (EditorNode node : document.nodes) {
-                List<PortSpec> inputs = NodePorts.inputs(node, root.chips);
-                for (int port = 0; port < inputs.size(); port++) {
-                    root.resolveInput(node, port);
-                }
-                List<PortSpec> outputs = NodePorts.outputs(node, root.chips);
-                for (int port = 0; port < outputs.size(); port++) {
-                    root.resolveOutput(node, port);
-                }
-            }
+            root.resolveAll();
         } catch (CircuitCompileException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -67,7 +66,7 @@ public final class CircuitCompiler {
         simulator.scheduleAll();
         long settleBudget = Math.max(1_024L, circuit.gates().size() * 64L + 64L);
         simulator.runUntilStable(settleBudget);
-        return new CompiledCircuit(simulator, rootInputs, root.inputCache, root.outputCache, settleBudget);
+        return new CompiledCircuit(simulator, rootInputs, scopedInputs, scopedOutputs, settleBudget);
     }
 
     private static final class BuildContext {
@@ -78,10 +77,13 @@ public final class CircuitCompiler {
         private final Map<Integer, Signal[]> inputOverrides;
         private final Map<Integer, Signal[]> rootInputs;
         private final Set<String> chipStack;
+        private final Map<String, Map<NodePortKey, Signal[]>> scopedInputs;
+        private final Map<String, Map<NodePortKey, Signal[]>> scopedOutputs;
         private final Map<NodePortKey, Signal[]> inputCache = new HashMap<>();
         private final Map<NodePortKey, Signal[]> outputCache = new HashMap<>();
         private final Set<Integer> realizedNands = new HashSet<>();
         private final Map<Integer, List<Signal[]>> customOutputCache = new HashMap<>();
+        private boolean resolvedAll;
 
         private BuildContext(
                 CircuitDocument document,
@@ -90,7 +92,9 @@ public final class CircuitCompiler {
                 String path,
                 Map<Integer, Signal[]> inputOverrides,
                 Map<Integer, Signal[]> rootInputs,
-                Set<String> chipStack
+                Set<String> chipStack,
+                Map<String, Map<NodePortKey, Signal[]>> scopedInputs,
+                Map<String, Map<NodePortKey, Signal[]>> scopedOutputs
         ) {
             this.document = document;
             this.chips = chips;
@@ -99,6 +103,25 @@ public final class CircuitCompiler {
             this.inputOverrides = inputOverrides;
             this.rootInputs = rootInputs;
             this.chipStack = chipStack;
+            this.scopedInputs = scopedInputs;
+            this.scopedOutputs = scopedOutputs;
+        }
+
+        private void resolveAll() {
+            if (resolvedAll) return;
+            resolvedAll = true;
+            for (EditorNode node : document.nodes) {
+                List<PortSpec> inputs = NodePorts.inputs(node, chips);
+                for (int port = 0; port < inputs.size(); port++) {
+                    resolveInput(node, port);
+                }
+                List<PortSpec> outputs = NodePorts.outputs(node, chips);
+                for (int port = 0; port < outputs.size(); port++) {
+                    resolveOutput(node, port);
+                }
+            }
+            scopedInputs.put(path, new HashMap<>(inputCache));
+            scopedOutputs.put(path, new HashMap<>(outputCache));
         }
 
         private Signal[] resolveInput(EditorNode node, int port) {
@@ -236,15 +259,19 @@ public final class CircuitCompiler {
 
             Set<String> nestedStack = new HashSet<>(chipStack);
             nestedStack.add(chipName);
+            String childPath = CompiledCircuit.childScopePath(path, node.id, chipName);
             BuildContext child = new BuildContext(
                     definition.circuit,
                     chips,
                     circuit,
-                    path + "/CHIP" + node.id + "[" + chipName + "]",
+                    childPath,
                     overrides,
                     rootInputs,
-                    Set.copyOf(nestedStack)
+                    Set.copyOf(nestedStack),
+                    scopedInputs,
+                    scopedOutputs
             );
+            child.resolveAll();
 
             List<Signal[]> outputs = new ArrayList<>();
             for (EditorNode childOutput : definition.circuit.outputNodes()) {
