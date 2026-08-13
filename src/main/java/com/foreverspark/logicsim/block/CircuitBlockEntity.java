@@ -16,13 +16,17 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
 public final class CircuitBlockEntity extends BlockEntity {
-    private static final int MAX_PROGRAM_JSON = 2_000_000;
-    private static final long CLOCK_EDGE_BUDGET_PER_TICK = 5_000L;
+    private static final long CLOCK_WALL_BUDGET_NANOS = 2_000_000L;
+    private static final long CLOCK_HARD_EDGE_LIMIT_PER_TICK = 500_000L;
+    private static final long CLOCK_CHUNK_EDGES_PER_CLOCK = 256L;
 
     private String programJson = "";
     private CircuitProgramRuntime runtime;
     private String runtimeError = "";
     private long lastClockNanos;
+    private long lastClockExecutedEdges;
+    private long lastClockPendingEdges;
+    private long lastClockWallNanos;
 
     public CircuitBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.CIRCUIT, pos, state);
@@ -39,7 +43,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         circuit.lastClockNanos = now;
         if (circuit.runtime == null || elapsed == 0L) return;
         try {
-            circuit.runtime.advanceClocksNanos(elapsed, CLOCK_EDGE_BUDGET_PER_TICK, circuit::publishOutputs);
+            circuit.advanceClocksAdaptive(elapsed);
             circuit.runtimeError = "";
         } catch (RuntimeException error) {
             circuit.runtimeError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
@@ -49,6 +53,9 @@ public final class CircuitBlockEntity extends BlockEntity {
     public boolean isProgrammed() { return runtime != null; }
     public String runtimeError() { return runtimeError; }
     public String programName() { return runtime == null ? "" : runtime.program().root.name; }
+    public long lastClockExecutedEdges() { return lastClockExecutedEdges; }
+    public long lastClockPendingEdges() { return lastClockPendingEdges; }
+    public long lastClockWallNanos() { return lastClockWallNanos; }
 
     public CircuitPortCatalog portCatalog() {
         return runtime == null
@@ -69,8 +76,55 @@ public final class CircuitBlockEntity extends BlockEntity {
         this.runtime = compiled;
         this.runtimeError = "";
         this.lastClockNanos = System.nanoTime();
+        this.lastClockExecutedEdges = 0L;
+        this.lastClockPendingEdges = 0L;
+        this.lastClockWallNanos = 0L;
         setChanged();
         publishOutputs();
+    }
+
+    private static final int MAX_PROGRAM_JSON = 2_000_000;
+
+    private void advanceClocksAdaptive(long elapsedNanos) {
+        // Queue all elapsed virtual time first. A zero edge budget executes nothing yet.
+        runtime.advanceClocksNanos(elapsedNanos, 0L, this::publishOutputs);
+
+        int clockCount = runtime.timing().clocks().size();
+        if (clockCount == 0) {
+            lastClockExecutedEdges = 0L;
+            lastClockPendingEdges = 0L;
+            lastClockWallNanos = 0L;
+            return;
+        }
+
+        long started = System.nanoTime();
+        long emittedTotal = 0L;
+        while (emittedTotal < CLOCK_HARD_EDGE_LIMIT_PER_TICK) {
+            long remaining = CLOCK_HARD_EDGE_LIMIT_PER_TICK - emittedTotal;
+            long fairRemainingPerClock = Math.max(1L, remaining / clockCount);
+            long chunkPerClock = Math.min(CLOCK_CHUNK_EDGES_PER_CLOCK, fairRemainingPerClock);
+            long emitted = runtime.advanceClocksNanos(0L, chunkPerClock, this::publishOutputs);
+            if (emitted <= 0L) break;
+            emittedTotal = saturatingAdd(emittedTotal, emitted);
+            if (System.nanoTime() - started >= CLOCK_WALL_BUDGET_NANOS) break;
+        }
+
+        lastClockExecutedEdges = emittedTotal;
+        lastClockPendingEdges = pendingClockEdges();
+        lastClockWallNanos = Math.max(0L, System.nanoTime() - started);
+    }
+
+    private long pendingClockEdges() {
+        long total = 0L;
+        for (var address : runtime.timing().clocks()) {
+            total = saturatingAdd(total, runtime.timing().pendingEdges(address.scopePath(), address.nodeId()));
+        }
+        return total;
+    }
+
+    private static long saturatingAdd(long a, long b) {
+        if (b > 0L && a > Long.MAX_VALUE - b) return Long.MAX_VALUE;
+        return a + b;
     }
 
     public void acceptExternalInput(String portName, long value) {
@@ -128,6 +182,9 @@ public final class CircuitBlockEntity extends BlockEntity {
         runtime = null;
         runtimeError = "";
         lastClockNanos = 0L;
+        lastClockExecutedEdges = 0L;
+        lastClockPendingEdges = 0L;
+        lastClockWallNanos = 0L;
         if (programJson.isBlank()) return;
         try {
             runtime = new CircuitProgramRuntime(CircuitProgram.fromJson(programJson));

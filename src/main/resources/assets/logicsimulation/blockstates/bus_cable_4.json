@@ -1,7 +1,11 @@
 {
-  "variants": {
-    "": {
-      "model": "logicsimulation:block/bus_cable"
-    }
-  }
+  "multipart": [
+    { "apply": { "model": "logicsimulation:block/bus_core" } },
+    { "when": { "north": "true" }, "apply": { "model": "logicsimulation:block/bus_arm" } },
+    { "when": { "south": "true" }, "apply": { "model": "logicsimulation:block/bus_arm", "y": 180 } },
+    { "when": { "east": "true" }, "apply": { "model": "logicsimulation:block/bus_arm", "y": 90 } },
+    { "when": { "west": "true" }, "apply": { "model": "logicsimulation:block/bus_arm", "y": 270 } },
+    { "when": { "up": "true" }, "apply": { "model": "logicsimulation:block/bus_arm", "x": 90 } },
+    { "when": { "down": "true" }, "apply": { "model": "logicsimulation:block/bus_arm", "x": 270 } }
+  ]
 }

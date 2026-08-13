@@ -1,7 +1,9 @@
 package com.foreverspark.logicsim.client.render;
 
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
+import com.foreverspark.logicsim.block.DisplayPorts;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
@@ -12,7 +14,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
-public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayBlockEntityRenderState> {
+public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     private static final String PIXEL = "█";
     private final Font font;
 
@@ -21,13 +23,14 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
     }
 
     @Override
-    public DisplayBlockEntityRenderState createRenderState() {
-        return new DisplayBlockEntityRenderState();
+    public DisplayWorldRenderState createRenderState() {
+        return new DisplayWorldRenderState();
     }
 
     @Override
-    public void extractRenderState(DisplayBlockEntity blockEntity, DisplayBlockEntityRenderState state, float tickProgress, Vec3 cameraPos, @Nullable ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
+    public void extractRenderState(DisplayBlockEntity blockEntity, DisplayWorldRenderState state, float tickProgress, Vec3 cameraPos, @Nullable ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         BlockEntityRenderer.super.extractRenderState(blockEntity, state, tickProgress, cameraPos, crumblingOverlay);
+        state.facing = DisplayPorts.front(blockEntity.getBlockState());
         int index = 0;
         for (int y = 0; y < DisplayBlockEntity.HEIGHT; y++) {
             for (int x = 0; x < DisplayBlockEntity.WIDTH; x++) {
@@ -37,9 +40,13 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
     }
 
     @Override
-    public void submit(DisplayBlockEntityRenderState state, PoseStack matrices, SubmitNodeCollector queue, CameraRenderState cameraState) {
+    public void submit(DisplayWorldRenderState state, PoseStack matrices, SubmitNodeCollector queue, CameraRenderState cameraState) {
         matrices.pushPose();
-        // Debug panel on the north/front face. 32x18 cells fit inside a 16:9 area on one block face.
+        matrices.translate(0.5, 0.5, 0.5);
+        matrices.mulPose(Axis.YP.rotationDegrees(rotationDegrees(state.facing)));
+        matrices.translate(-0.5, -0.5, -0.5);
+
+        // The canonical panel is on NORTH; the pose above rotates it onto the placed block's FACING side.
         matrices.translate(0.07, 0.755, -0.002);
         matrices.scale(0.0045f, -0.0030f, 0.0045f);
 
@@ -63,5 +70,15 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
             }
         }
         matrices.popPose();
+    }
+
+    private static float rotationDegrees(net.minecraft.core.Direction facing) {
+        return switch (facing) {
+            case NORTH -> 0.0f;
+            case EAST -> -90.0f;
+            case SOUTH -> 180.0f;
+            case WEST -> 90.0f;
+            default -> 0.0f;
+        };
     }
 }
