@@ -9,7 +9,7 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 - Fabric API: `0.156.0+26.2`
 - Fabric Loom: `1.17.17`
 - Java: `25`
-- Gradle: `9.5.1`
+- Gradle Wrapper: `9.5.1`
 
 ## Core principles
 
@@ -32,16 +32,22 @@ The repository already contains the first pure-Java simulation core:
 5. Ring-buffer trace recorder.
 6. Dependency-free self-tests and an early benchmark tool.
 
-The Fabric 26.2 entrypoint is now wired around that core. Minecraft blocks, the circuit editor, custom-chip hierarchy, compiled Turbo simulation, displays, buses in-world, UIB, networking, and computer hardware are upcoming milestones.
+The Fabric 26.2 entrypoint is wired around that core. Minecraft blocks, the circuit editor, custom-chip hierarchy, compiled Turbo simulation, displays, buses in-world, UIB, networking, and computer hardware are upcoming milestones.
 
 ## Build
 
 Minecraft 26.2 requires Java 25 for development. GitHub Actions builds the project on Java 25 and Gradle 9.5.1 on every push to `main`.
 
-If you already have Gradle 9.5.1 installed:
+Windows:
 
-```bash
-gradle build selfTest
+```powershell
+.\gradlew.bat build selfTest
 ```
 
-A standard Gradle wrapper will be added next so Windows builds can use `gradlew.bat` directly.
+Linux/macOS:
+
+```bash
+./gradlew build selfTest
+```
+
+The produced mod JAR is placed in `build/libs/`.
