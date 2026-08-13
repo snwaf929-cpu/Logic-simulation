@@ -3,6 +3,7 @@ package com.foreverspark.logicsim.interconnect;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
+import com.foreverspark.logicsim.editor.runtime.CircuitTimingController;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 
 import java.util.LinkedHashMap;
@@ -14,6 +15,7 @@ import java.util.Map;
 public final class CircuitProgramRuntime {
     private final CircuitProgram program;
     private final CompiledCircuit compiled;
+    private final CircuitTimingController timing;
     private final Map<String, BoundaryPort> inputs = new LinkedHashMap<>();
     private final Map<String, BoundaryPort> outputs = new LinkedHashMap<>();
 
@@ -22,11 +24,23 @@ public final class CircuitProgramRuntime {
         program.normalize();
         this.program = program;
         this.compiled = program.compile();
+        this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
         indexBoundary();
     }
 
     public CircuitProgram program() { return program; }
     public CompiledCircuit compiled() { return compiled; }
+    public CircuitTimingController timing() { return timing; }
+
+    public long advanceClocksNanos(long elapsedNanos, long edgeBudgetPerClock) {
+        return timing.advanceNanos(elapsedNanos, edgeBudgetPerClock);
+    }
+
+    public void setClocksRunning(boolean running) {
+        for (CircuitTimingController.ClockAddress address : timing.clocks()) {
+            timing.setRunning(address.scopePath(), address.nodeId(), running);
+        }
+    }
 
     public List<PortSpec> inputPorts() {
         return inputs.values().stream().map(BoundaryPort::spec).toList();
