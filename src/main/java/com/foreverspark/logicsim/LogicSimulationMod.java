@@ -1,5 +1,7 @@
 package com.foreverspark.logicsim;
 
+import com.foreverspark.logicsim.block.DisplayBlocks;
+import com.foreverspark.logicsim.block.ModBlockEntities;
 import com.foreverspark.logicsim.block.ModBlocks;
 import net.fabricmc.api.ModInitializer;
 import org.slf4j.Logger;
@@ -12,6 +14,8 @@ public final class LogicSimulationMod implements ModInitializer {
     @Override
     public void onInitialize() {
         ModBlocks.initialize();
-        LOGGER.info("Logic Simulation initialized. Circuit Block and NAND core ready on Minecraft 26.2.");
+        DisplayBlocks.initialize();
+        ModBlockEntities.initialize();
+        LOGGER.info("Logic Simulation initialized. Typed cables and physical display hardware ready on Minecraft 26.2.");
     }
 }
