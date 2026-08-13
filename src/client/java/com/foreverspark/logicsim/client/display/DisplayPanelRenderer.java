@@ -10,10 +10,10 @@ import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
-import org.jspecify.annotations.Nullable;
+import org.jetbrains.annotations.Nullable;
 
 public final class DisplayPanelRenderer implements BlockEntityRenderer<DisplayPanelBlockEntity, DisplayPanelRenderState> {
-    private static final String PIXEL = "█";
+    private static final String PIXEL = "#";
     private final Font font;
 
     public DisplayPanelRenderer(BlockEntityRendererProvider.Context context) {
@@ -41,7 +41,6 @@ public final class DisplayPanelRenderer implements BlockEntityRenderer<DisplayPa
         float scaleX = 0.90f / (state.width * glyphW);
         float scaleY = 0.90f / (state.height * glyphH);
         var glyph = Component.literal(PIXEL).getVisualOrderText();
-
         matrices.pushPose();
         matrices.translate(0.05, 0.95, -0.002);
         matrices.scale(scaleX, -scaleY, scaleX);
