@@ -35,15 +35,23 @@ public final class ClientChipLibrary implements ChipLookup {
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    private final Path rootDirectory = FabricLoader.getInstance().getConfigDir()
-            .resolve("logic-simulation");
-    private final Path chipDirectory = rootDirectory.resolve("chips");
-    private final Path layoutFile = rootDirectory.resolve("library.json");
+    private final Path rootDirectory;
+    private final Path chipDirectory;
+    private final Path layoutFile;
 
     private final Map<String, ChipDefinition> cachedDefinitions = new LinkedHashMap<>();
     private LibraryLayout layout = new LibraryLayout();
 
     public ClientChipLibrary() {
+        this(FabricLoader.getInstance().getConfigDir().resolve("logic-simulation"));
+    }
+
+    /** Package-private storage-root injection used by the persistence regression test. */
+    ClientChipLibrary(Path rootDirectory) {
+        if (rootDirectory == null) throw new IllegalArgumentException("Library root is required");
+        this.rootDirectory = rootDirectory;
+        this.chipDirectory = rootDirectory.resolve("chips");
+        this.layoutFile = rootDirectory.resolve("library.json");
         reload();
     }
 
@@ -97,6 +105,7 @@ public final class ClientChipLibrary implements ChipLookup {
         ChipDefinition cached = findCached(normalized);
         if (cached == null) {
             refreshChipCache();
+            normalizeLayout();
             cached = findCached(normalized);
         }
         if (cached == null) {
@@ -296,7 +305,6 @@ public final class ClientChipLibrary implements ChipLookup {
         cachedDefinitions.put(normalizedNew, renamed);
         layout.chips.put(normalizedNew, meta);
 
-        // Keep every previously saved parent chip valid after the rename.
         for (ChipDefinition definition : cachedDefinitions.values()) {
             if (definition == renamed) continue;
             if (rewriteCustomChipReferences(definition.circuit, oldCanonical, normalizedNew)) {
@@ -382,8 +390,20 @@ public final class ClientChipLibrary implements ChipLookup {
             folder.color = normalizeColor(folder.color, DEFAULT_FOLDER_COLOR);
         }
 
+        // If library.json disappeared but chip files still carry folder names, reconstruct those
+        // folders (with the default folder color) before assigning chip membership.
         for (ChipDefinition definition : cachedDefinitions.values()) {
             definition.normalize();
+            if (definition.folder != null && !definition.folder.isBlank() && folderMeta(definition.folder) == null) {
+                FolderMeta recovered = new FolderMeta();
+                recovered.name = definition.folder.trim();
+                recovered.color = DEFAULT_FOLDER_COLOR;
+                recovered.expanded = true;
+                layout.folders.add(recovered);
+            }
+        }
+
+        for (ChipDefinition definition : cachedDefinitions.values()) {
             ChipMeta meta = layout.chips.get(definition.name);
             if (meta == null) {
                 meta = new ChipMeta();
