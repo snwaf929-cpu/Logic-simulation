@@ -21,7 +21,6 @@ public final class LogicSimulationClient implements ClientModInitializer {
         BlockEntityRenderers.register(ModBlockEntities.DISPLAY, DisplayBlockEntityRenderer::new);
         ClientEditorBridge.installEditorOpener(() -> Minecraft.getInstance().gui.setScreen(new CircuitEditorScreen()));
         CircuitBlockUseHandler.register();
-        CircuitModeHotkey.register();
     }
 
     private static void ensureBuiltInDevices() {
