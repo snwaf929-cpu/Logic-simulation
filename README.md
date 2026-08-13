@@ -21,7 +21,7 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 
 ### Navigation and keyboard workflow
 
-The editor now separates navigation from editing so panning cannot accidentally drag a chip.
+Navigation is separated from editing so panning cannot accidentally drag a chip.
 
 - **Right-drag** — pan the circuit canvas.
 - **Middle-drag** — alternate pan control.
@@ -30,19 +30,52 @@ The editor now separates navigation from editing so panning cannot accidentally 
 - A small movement threshold prevents hand jitter from moving a selected node.
 - Node placement/movement snaps to a light grid for cleaner layouts.
 - **Ctrl+S** — open the Save Chip modal.
+- **Ctrl+D** — duplicate the selected component with a small offset.
+- **Ctrl+C / Ctrl+V** — copy and paste the selected component.
+- Duplicate/copy-paste intentionally copy the component itself, not its attached wires.
 - **Del / Backspace** — delete the selected node or wire.
 - Deleting a node that has attached wires opens a confirmation modal showing how many connections will also be removed.
 - **F2** — rename/recolor the selected saved chip or folder in the library.
 - **E** — enter/leave route-edit mode for the selected wire.
+- **+** — add a route point to the selected wire; use keypad `+` or `Shift+=`.
+- **Alt+Left** or the toolbar Back icon — leave one nested chip level.
 - **Esc** — cancel placement/wiring/route-edit mode before closing the screen.
 
-The top toolbar uses compact drawn icons for save, new, delete, width down/up, fit, and home. Hovering an icon shows its meaning. Action/error feedback lives in a dedicated **bottom status bar**, not crammed into the top toolbar.
+The top toolbar uses compact drawn icons. Action/error feedback lives in a dedicated **bottom status bar**.
+
+### Live hierarchical chip inspection
+
+Custom chips can now be drilled into like a real hierarchical digital-logic debugger.
+
+Example:
+
+```text
+CPU
+  > ALU
+    > ADD16
+      > FULL_ADDER
+        > NAND
+```
+
+- **Double-click a placed custom-chip instance** to open its internals.
+- Keep double-clicking nested custom chips to drill deeper.
+- The top breadcrumb shows the current hierarchy path.
+- Nested views show a **LIVE** indicator when their signals are attached to the running parent instance.
+- The wire, port, NAND, input and output colors/values inside the child come from the **same flattened runtime** that is executing the parent circuit. The inspector does not launch a fake second simulation.
+- Child `INPUT` nodes are read-only while live-inspecting because their values are driven by the parent instance.
+- Use the Back toolbar icon or **Alt+Left** to move back out one level.
+- **Ctrl+S while inside a nested chip** saves that reusable chip definition, then rebuilds the parent runtime so the open instance uses the new circuit.
+- Unsaved nested structural edits are validated, but are not injected into the running parent until they are saved. This prevents half-edited circuits from corrupting the live simulation.
+
+A saved chip in the left library can also be **double-clicked** (or right-clicked) to open its definition directly for editing.
+
+The self-test suite verifies that nested scope signals track the exact parent instance when its input changes, and that hierarchy scope identity remains stable across chip renames.
 
 ### Direct circuit testing
 
 `INPUT` nodes contain a visible rectangular switch.
 
-- Click it to change `OFF 0` ↔ `ON 1`.
+- Click it to change `OFF 0` ↔ `ON 1` at the top/root circuit.
 - Multi-bit inputs toggle between zero and all-one bits.
 - Wire/node colors update from the live simulator state.
 - While creating a wire, compatible target ports are highlighted green and width-mismatched ports red.
@@ -50,15 +83,16 @@ The top toolbar uses compact drawn icons for save, new, delete, width down/up, f
 
 ### Organized wire routing
 
-Wire geometry is now editable separately from wire logic.
+Wire geometry is editable separately from wire logic.
 
 1. Click a wire to select it.
 2. Press **E** to enter wire-route edit mode.
 3. Square route handles appear.
 4. Drag a corner to reposition the route.
 5. Drag an **interior horizontal/vertical segment** perpendicular to itself; both end corners move together.
-6. Double-click a segment to add a pair of route corners, then drag the new interior segment to create a clean detour.
-7. Press **E** again to finish.
+6. Press **+** to add one route point to the selected/clicked wire segment. If no specific segment was clicked, it chooses the longest segment.
+7. Double-click a segment to add a pair of route corners for a clean dogleg.
+8. Press **E** again to finish.
 
 Manual route points are saved with the circuit but are **presentation-only**. They do not alter which ports are electrically connected and do not add hidden logic. The self-test suite explicitly verifies that changing a wire route cannot change circuit behavior.
 
@@ -80,13 +114,14 @@ Controls:
 - Select a chip/folder and press **F2** to rename/recolor it.
 - Renaming a chip also rewrites references inside already-saved parent chips so a renamed lower-level chip does not silently break higher-level designs.
 - Deleting a folder moves its chips to OTHER; it does not delete their circuit files.
-- Left-click a saved chip to place it; right-click it to open it for editing.
+- Left-click a saved chip once to place an instance.
+- Double-click/right-click a saved chip to open its definition for editing.
 
 Folder/color organization is stored in `config/logic-simulation/library.json`. Circuit files remain under `config/logic-simulation/chips/` as `.logicchip.json` files.
 
 ### Save Chip modal and reusable body layout
 
-**Ctrl+S** opens a proper save modal instead of relying on fields in the toolbar. It configures:
+**Ctrl+S** opens a save modal for:
 
 - chip name,
 - chip color,
@@ -96,7 +131,7 @@ Folder/color organization is stored in `config/logic-simulation/library.json`. C
 
 This means a chip with two inputs can intentionally be made taller so the two pins have more visual separation. Saved dimensions are used when that custom chip is placed inside another circuit.
 
-Safe ranges are enforced so corrupted/accidental values cannot create unusable UI geometry:
+Safe ranges:
 
 - width: `72–260`,
 - minimum height: `42–300`,
@@ -123,7 +158,7 @@ Custom chips remain NAND-authentic. At runtime they are recursively flattened in
 - Buses, splitters, mergers, probes, clocks, and I/O are infrastructure rather than hidden logic shortcuts.
 - The simulation engine is independent from Minecraft's 20 TPS.
 - Accurate NAND-level simulation and optimized/turbo execution are separate modes.
-- Circuit hierarchy remains inspectable even when compiled for speed.
+- Circuit hierarchy remains inspectable even when compiled/flattened for speed.
 - Tracing is event-based and bounded so MHz simulation does not generate unbounded logs.
 
 ## Core engine
@@ -136,10 +171,11 @@ The repository currently contains:
 4. Typed 1–64-bit buses with structural split/merge mapping.
 5. Freeform circuit compiler with width validation.
 6. Recursive custom-chip flattening to NAND.
-7. Persistent presentation-only orthogonal wire routes.
-8. Persistent custom-chip visual dimensions/pin spacing.
-9. Ring-buffer trace recorder.
-10. Self-tests for NAND logic, buses, Split/Merge, custom chips, width mismatches, route/logic separation, chip visual bounds, and world interconnect validation.
+7. Per-instance hierarchical runtime scopes for live internal inspection.
+8. Persistent presentation-only orthogonal wire routes.
+9. Persistent custom-chip visual dimensions/pin spacing.
+10. Ring-buffer trace recorder.
+11. Self-tests for NAND logic, buses, Split/Merge, custom chips, live hierarchy scopes, width mismatches, route/logic separation, chip visual bounds, and world interconnect validation.
 
 ## World interconnect foundation
 
