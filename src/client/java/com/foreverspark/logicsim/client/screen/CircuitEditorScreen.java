@@ -22,6 +22,7 @@ public final class CircuitEditorScreen extends Screen {
     private static final int STATUS_BAR_HEIGHT = 24;
     private static final int SIDEBAR_WIDTH = 186;
     private static final int MODAL_WIDTH = 330;
+    private static final int MODAL_HEIGHT = 214;
 
     private final ClientChipLibrary library = new ClientChipLibrary();
     private final List<EditorIconButton> toolbarButtons = new ArrayList<>();
@@ -437,10 +438,9 @@ public final class CircuitEditorScreen extends Screen {
 
         int modalX = (this.width - MODAL_WIDTH) / 2;
         int modalY = Math.max(44, (this.height - 220) / 2);
-        int modalHeight = modalMode == ModalMode.CONFIRM_DELETE ? 130 : modalMode == ModalMode.SAVE_CHIP ? 214 : 176;
-        graphics.fill(modalX, modalY, modalX + MODAL_WIDTH, modalY + modalHeight, 0xFF151A20);
-        graphics.outline(modalX, modalY, MODAL_WIDTH, modalHeight, 0xFF4A5663);
-        graphics.fill(modalX, modalY, modalX + 4, modalY + modalHeight, modalAccent());
+        graphics.fill(modalX, modalY, modalX + MODAL_WIDTH, modalY + MODAL_HEIGHT, 0xFF151A20);
+        graphics.outline(modalX, modalY, MODAL_WIDTH, MODAL_HEIGHT, 0xFF4A5663);
+        graphics.fill(modalX, modalY, modalX + 4, modalY + MODAL_HEIGHT, modalAccent());
 
         graphics.text(this.font, modalTitle(), modalX + 18, modalY + 15, 0xFFF1F4F7, true);
         graphics.text(this.font, modalSubtitle(), modalX + 18, modalY + 30, 0xFF7F8B98, false);
@@ -453,7 +453,6 @@ public final class CircuitEditorScreen extends Screen {
             graphics.text(this.font, "CHIP COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
             graphics.text(this.font, "Height + pin gap control how much space appears between exposed inputs/outputs.", modalX + 20, modalY + 158, 0xFF65717E, false);
         } else if (modalMode == ModalMode.ADD_FOLDER) {
-            graphics.text(this.font, "TYPE  /  FOLDER", modalX + 20, modalY + 44, 0xFF6FA9DF, false);
             graphics.text(this.font, "NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
             graphics.text(this.font, "FOLDER COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
         } else if (modalMode == ModalMode.EDIT_LIBRARY_ITEM) {
@@ -462,14 +461,14 @@ public final class CircuitEditorScreen extends Screen {
         } else if (modalMode == ModalMode.CONFIRM_DELETE) {
             String text = pendingDeletion == null ? "Delete selected item?" : pendingDeletion.description();
             graphics.text(this.font, text, modalX + 20, modalY + 56, 0xFFE6CDD0, false);
-            graphics.text(this.font, "This cannot be undone.", modalX + 20, modalY + 75, 0xFFB36A72, false);
+            graphics.text(this.font, "This removes the attached wire connections too.", modalX + 20, modalY + 75, 0xFFB36A72, false);
         }
 
         if (!modalError.isBlank()) {
-            graphics.text(this.font, "! " + truncate(modalError, 50), modalX + 20, modalY + modalHeight - 34, 0xFFFF7878, false);
+            graphics.text(this.font, "! " + truncate(modalError, 50), modalX + 20, modalY + MODAL_HEIGHT - 34, 0xFFFF7878, false);
         }
 
-        // These widgets were rendered once by Screen before the dim overlay; render the active modal controls again on top.
+        // Screen rendered these once below the dim layer; render active modal controls again on top.
         if (modalNameBox.visible) modalNameBox.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalWidthBox.visible) modalWidthBox.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalHeightBox.visible) modalHeightBox.extractRenderState(graphics, mouseX, mouseY, delta);
@@ -492,7 +491,7 @@ public final class CircuitEditorScreen extends Screen {
     private String modalTitle() {
         return switch (modalMode) {
             case SAVE_CHIP -> "SAVE CHIP";
-            case ADD_FOLDER -> "ADD";
+            case ADD_FOLDER -> "ADD FOLDER";
             case EDIT_LIBRARY_ITEM -> libraryEditKind == LibraryEditKind.CHIP ? "EDIT CHIP" : "EDIT FOLDER";
             case CONFIRM_DELETE -> "CONFIRM DELETE";
             case NONE -> "";
@@ -502,7 +501,7 @@ public final class CircuitEditorScreen extends Screen {
     private String modalSubtitle() {
         return switch (modalMode) {
             case SAVE_CHIP -> "Name, color, and reusable body layout";
-            case ADD_FOLDER -> "Create an organized colored folder";
+            case ADD_FOLDER -> "Name and color for the new folder";
             case EDIT_LIBRARY_ITEM -> "F2 quick edit";
             case CONFIRM_DELETE -> "Connected nodes require confirmation";
             case NONE -> "";
