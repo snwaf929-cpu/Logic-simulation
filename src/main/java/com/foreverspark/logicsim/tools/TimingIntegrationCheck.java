@@ -13,8 +13,15 @@ public final class TimingIntegrationCheck {
 
     public static void main(String[] args) {
         CircuitDocument document = inverterClockDocument();
+        EditorNode clock = document.nodes.getFirst();
+        EditorNode output = document.outputNodes().getFirst();
         CompiledCircuit compiled = CircuitCompiler.compile(document, ChipLookup.empty());
-        new CircuitTimingController(compiled, document, ChipLookup.empty());
+        CircuitTimingController timing = new CircuitTimingController(compiled, document, ChipLookup.empty());
+        TimingIntegrationAssertions.require(timing.hasClock(CompiledCircuit.ROOT_SCOPE, clock.id), "root clock discovered");
+        TimingIntegrationAssertions.require(timing.frequencyHz(CompiledCircuit.ROOT_SCOPE, clock.id) == 5_000_000L, "5 MHz preserved");
+        TimingIntegrationAssertions.require(compiled.inputUnsigned(output.id, 0) == 1L, "clock starts low");
+        timing.stepEdges(CompiledCircuit.ROOT_SCOPE, clock.id, 1L);
+        TimingIntegrationAssertions.require(compiled.inputUnsigned(output.id, 0) == 0L, "rising edge settles NAND");
         System.out.println("Timing integration check: PASS");
     }
 
