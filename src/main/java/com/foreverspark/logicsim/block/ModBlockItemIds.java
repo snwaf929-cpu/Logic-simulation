@@ -8,6 +8,7 @@ public final class ModBlockItemIds {
     public static final BlockItemId CIRCUIT_BLOCK = create("circuit_block");
     public static final BlockItemId SIGNAL_WIRE = create("signal_wire");
     public static final BlockItemId BUS_CABLE = create("bus_cable");
+    public static final BlockItemId DISPLAY_PANEL = create("display_panel");
 
     private ModBlockItemIds() {
     }
