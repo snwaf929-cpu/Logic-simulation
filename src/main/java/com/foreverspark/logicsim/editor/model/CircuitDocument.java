@@ -5,6 +5,8 @@ import java.util.Comparator;
 import java.util.List;
 
 public final class CircuitDocument {
+    private static final String CLOCK_METADATA_PREFIX = "__LOGICSIM_CLOCK__:";
+
     public int formatVersion = 2;
     public int nextNodeId = 1;
     public List<EditorNode> nodes = new ArrayList<>();
@@ -101,6 +103,30 @@ public final class CircuitDocument {
             if (node.chipName == null) {
                 node.chipName = "";
             }
+            normalizeClockMetadata(node);
         }
+    }
+
+    private static void normalizeClockMetadata(EditorNode node) {
+        if (node.kind != NodeKind.CONSTANT) {
+            node.clockSource = false;
+            return;
+        }
+
+        if (!node.clockSource && node.label.startsWith(CLOCK_METADATA_PREFIX)) {
+            String encoded = node.label.substring(CLOCK_METADATA_PREFIX.length());
+            try {
+                node.clockFrequencyHz = Long.parseLong(encoded);
+                node.clockSource = true;
+            } catch (NumberFormatException ignored) {
+                node.label = "";
+            }
+        }
+
+        if (!node.clockSource) return;
+        node.width = 1;
+        node.constantValue = 0L;
+        node.clockFrequencyHz = Math.max(1L, Math.min(1_000_000_000L, node.clockFrequencyHz));
+        node.label = CLOCK_METADATA_PREFIX + node.clockFrequencyHz;
     }
 }
