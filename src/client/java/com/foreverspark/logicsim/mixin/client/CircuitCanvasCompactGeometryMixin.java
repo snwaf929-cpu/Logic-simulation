@@ -20,12 +20,12 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeWidth", at = @At("HEAD"), cancellable = true)
     private void logic$compactWidth(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            case INPUT, OUTPUT -> cir.setReturnValue(72.0);
-            case NAND -> cir.setReturnValue(78.0);
-            case CONSTANT -> cir.setReturnValue(78.0);
-            case PROBE -> cir.setReturnValue(84.0);
-            case BUS -> cir.setReturnValue(node.width <= 1 ? 24.0 : 36.0);
-            case SPLITTER, MERGER -> cir.setReturnValue(78.0);
+            case INPUT, OUTPUT -> cir.setReturnValue(36.0);
+            case NAND -> cir.setReturnValue(66.0);
+            case CONSTANT -> cir.setReturnValue(66.0);
+            case PROBE -> cir.setReturnValue(66.0);
+            case BUS -> cir.setReturnValue(node.width <= 1 ? 20.0 : 30.0);
+            case SPLITTER, MERGER -> cir.setReturnValue(72.0);
             case CUSTOM_CHIP -> { }
         }
     }
@@ -33,12 +33,13 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeHeight", at = @At("HEAD"), cancellable = true)
     private void logic$compactHeight(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            case INPUT, OUTPUT, CONSTANT, PROBE -> cir.setReturnValue(48.0);
-            case NAND -> cir.setReturnValue(54.0);
-            case BUS -> cir.setReturnValue(24.0);
+            case INPUT, OUTPUT -> cir.setReturnValue(36.0);
+            case CONSTANT, PROBE -> cir.setReturnValue(42.0);
+            case NAND -> cir.setReturnValue(48.0);
+            case BUS -> cir.setReturnValue(20.0);
             case SPLITTER, MERGER -> {
                 int ports = Math.max(safeInputs(node).size(), safeOutputs(node).size());
-                double height = Math.max(48.0, 38.0 + Math.max(0, ports - 1) * 12.0);
+                double height = Math.max(42.0, 34.0 + Math.max(0, ports - 1) * 12.0);
                 cir.setReturnValue(Math.ceil(height / 6.0) * 6.0);
             }
             case CUSTOM_CHIP -> { }
