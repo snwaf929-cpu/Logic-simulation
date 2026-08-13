@@ -1,0 +1,1 @@
+Final implementation will use persisted wire tap points rather than visible junction components.
