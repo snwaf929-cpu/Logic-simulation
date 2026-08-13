@@ -16,22 +16,44 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 1. Find **Circuit Block** in the Building Blocks creative tab.
 2. Place it and right-click it with an empty hand.
 3. The editor opens on an empty freeform canvas.
-4. Place `INPUT`, `NAND`, `OUTPUT`, `SPLITTER`, `MERGER`, or a previously saved `CUSTOM CHIP`.
-5. Click an output port and then a compatible input port to create a wire.
-6. The circuit recompiles into the real NAND event-driven simulator after structural changes.
+4. Pick `INPUT`, `OUTPUT`, `NAND`, `SPLITTER`, `MERGER`, or a saved custom chip from the left component library.
+5. Click an output port and then a compatible input port to create a wire/bus.
+6. The document recompiles into the real NAND event-driven simulator after structural changes.
 
-### Editor controls
+### Editor navigation and testing
 
-- **Left click a tool, then the canvas** — place that node.
-- **Left drag a node** — move it.
+- **Left-drag empty canvas** — pan around the circuit naturally.
+- **Middle-drag** — alternate pan control.
+- **Mouse wheel** — zoom around the cursor from 35% to 250%.
+- **FIT** — frame all nodes automatically.
+- **HOME** — reset pan/zoom.
+- **Left-drag a node** — move it.
+- **Click the visible switch inside an INPUT** — toggle it between `OFF 0` and `ON 1`; multi-bit inputs toggle between zero and all-one bits.
 - **Click OUT port → IN port** — connect a wire/bus.
-- **Right-click an INPUT** — toggle it between zero and all-one bits.
-- **Left-click a node/wire + DELETE SELECTED** — delete it.
 - **Right-click a wire** — delete that wire immediately.
-- **Middle-drag** — pan the canvas.
-- **Mouse wheel** — zoom from 35% to 250% around the cursor.
-- **WIDTH - / WIDTH +** — change selected Input/Output/Splitter/Merger width through `1/2/4/8/16/32/64` bits. Attached wires are cleared when the width changes.
-- **RESET VIEW** — reset pan/zoom.
+- **Select node/wire + DELETE** — delete the selection.
+- **W- / W+** — change selected Input/Output/Splitter/Merger width through `1/2/4/8/16/32/64` bits. Attached wires are cleared when width changes.
+
+Input, Output, and NAND nodes use a compact cubic layout instead of the original oversized cards. Ports stay square rather than circular.
+
+### Component library, folders, and colors
+
+The old vertical wall of vanilla buttons has been replaced by a compact mixed component library:
+
+- Built-in **PRIMITIVES**: Input, Output, NAND.
+- Built-in **ROUTING**: Splitter, Merger.
+- User-created folders with saved chips nested beneath them.
+- An **OTHER** section for unfiled chips.
+
+Library organization is persisted in `config/logic-simulation/library.json` separately from the circuit files, so old `.logicchip.json` chips remain compatible.
+
+- Enter a folder name and press **+ FOLDER** to create a collection.
+- Click a folder to expand/collapse it.
+- Drag a chip row onto a folder to move it there.
+- Select a folder and use **RENAME** or **DELETE**. Deleting a folder moves its chips to OTHER; it does not delete the chip circuits.
+- Select a folder or chip and click a color swatch to assign a color.
+- Custom chip colors are also shown on instances placed on the circuit canvas.
+- Click a saved chip to place an instance. Right-click a saved chip to open it for editing.
 
 ### Buses, splitter, and merger
 
@@ -45,15 +67,9 @@ Splitter and Merger are structural wiring primitives; they do not add hidden log
 
 ### Reusable custom chips
 
-Enter a name in **CIRCUIT NAME / SAVE** and press **SAVE CHIP**. Saved circuits are stored in the client config folder under `logic-simulation/chips/` as `.logicchip.json` files.
+Enter a name in the top **CHIP** field and press **SAVE**. Saved circuits are stored under `config/logic-simulation/chips/` as `.logicchip.json` files and immediately appear in the component library.
 
-To reuse one:
-
-1. Enter its name under **CHIP TO INSERT**.
-2. Press **+ CUSTOM CHIP**.
-3. Place it on the canvas and wire its exposed input/output ports.
-
-At runtime custom chips are recursively flattened into the NANDs the player actually built; they are not magic prebuilt gates. **LOAD** opens a saved chip for editing.
+At runtime custom chips are recursively flattened into the NANDs the player actually built; they are not magic prebuilt gates.
 
 ## Core principles
 
@@ -78,9 +94,22 @@ The repository contains:
 7. Ring-buffer trace recorder.
 8. Self-tests covering NAND logic, buses, Split/Merge, custom chips, and width mismatch rejection.
 
+## World interconnect foundation
+
+The next physical-computer layer has started with a pure typed interconnect graph that future world-space devices and cable blocks will use.
+
+- `SIGNAL` cable: exactly 1 bit.
+- `BUS` cable: multi-bit, 2-64 bits.
+- Output → input direction is validated.
+- Widths must match exactly; there is no hidden conversion.
+- An input cannot silently acquire multiple drivers.
+- Shared tri-state buses/arbitration are intentionally not faked; they will be implemented as a later explicit layer.
+
+Self-tests currently verify 1-bit signal connections, 16-bit bus connections, wrong-cable rejection, and width-mismatch rejection.
+
 ## Next hardware milestone
 
-The next major layer is **world-space interconnect**: place saved chips/computer components as blocks and connect their exposed typed ports using mod `Wire` and `Bus Cable` blocks. This will be separate from Minecraft redstone and will reuse the same width/type validation as the editor.
+Build actual world-space device/port and `Wire` / `Bus Cable` blocks on top of the validated interconnect graph, then connect saved custom chips and later CPU/RAM/GPU/storage devices through those typed ports. These cables will remain separate from Minecraft redstone.
 
 ## Build / run
 
@@ -92,7 +121,7 @@ Windows:
 .\gradlew.bat runClient
 ```
 
-Build + core/editor self-test:
+Build + all current self-tests:
 
 ```powershell
 .\gradlew.bat build selfTest
