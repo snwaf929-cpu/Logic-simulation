@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.editor.runtime;
 
+import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TimingSignalDriver;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
@@ -37,6 +38,19 @@ public final class CircuitTimingController {
     public void setFrequencyHz(String scopePath, int nodeId, long frequencyHz) { require(scopePath, nodeId).timing().setFrequencyHz(frequencyHz); }
     public boolean running(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().running(); }
     public void setRunning(String scopePath, int nodeId, boolean running) { require(scopePath, nodeId).timing().setRunning(running); }
+
+    public boolean enabled(String scopePath, int nodeId) {
+        ClockAddress address = address(scopePath, nodeId);
+        require(scopePath, nodeId);
+        if (!wiredEnableInputs.contains(address)) return true;
+        LogicValue[] values = compiled.inputValues(address.scopePath(), address.nodeId(), 0);
+        return values.length == 1 && values[0] == LogicValue.HIGH;
+    }
+
+    public boolean active(String scopePath, int nodeId) {
+        return running(scopePath, nodeId) && enabled(scopePath, nodeId);
+    }
+
     public long pendingEdges(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().pendingEdges(); }
 
     public long stepEdges(String scopePath, int nodeId, long edges) {
@@ -52,8 +66,13 @@ public final class CircuitTimingController {
     }
 
     public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock, Runnable afterSettledEdge) {
+        if (elapsedNanos < 0L) throw new IllegalArgumentException("elapsedNanos must be >= 0");
+        if (edgeBudgetPerClock < 0L) throw new IllegalArgumentException("edgeBudgetPerClock must be >= 0");
         long emitted = 0L;
-        for (TimingSignalDriver clock : clocks.values()) {
+        for (Map.Entry<ClockAddress, TimingSignalDriver> entry : clocks.entrySet()) {
+            ClockAddress address = entry.getKey();
+            TimingSignalDriver clock = entry.getValue();
+            if (!clock.timing().running() || !enabled(address.scopePath(), address.nodeId())) continue;
             long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, afterSettledEdge);
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
