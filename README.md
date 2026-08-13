@@ -231,10 +231,10 @@ Windows:
 .\gradlew.bat runClient
 ```
 
-Build + all current self-tests:
+Build + all current self-tests, including the fresh-library color/folder persistence regression test:
 
 ```powershell
-.\gradlew.bat build selfTest
+.\gradlew.bat build selfTest clientSelfTest
 ```
 
 The produced mod JAR is placed in `build/libs/`.
