@@ -40,9 +40,9 @@ public final class DisplayBlockEntity extends BlockEntity {
     /** Fallback sampling keeps the display correct after chunks/cables load. Normal changes arrive event-driven. */
     public static void tick(Level level, BlockPos pos, BlockState state, DisplayBlockEntity display) {
         if (level.isClientSide()) return;
-        display.busX = (int)(CableRuntime.value(level, pos.relative(Direction.WEST)) & 0xFFFFL);
-        display.busY = (int)(CableRuntime.value(level, pos.relative(Direction.EAST)) & 0xFFFFL);
-        display.busColor = (int)(CableRuntime.value(level, pos.relative(Direction.SOUTH)) & 0xFFFFL);
+        display.busX = (int)(CableRuntime.value(level, pos.relative(DisplayPorts.left(state))) & 0xFFFFL);
+        display.busY = (int)(CableRuntime.value(level, pos.relative(DisplayPorts.right(state))) & 0xFFFFL);
+        display.busColor = (int)(CableRuntime.value(level, pos.relative(DisplayPorts.back(state))) & 0xFFFFL);
         display.busWrite = (CableRuntime.value(level, pos.relative(Direction.UP)) & 1L) != 0L;
         display.busClear = (CableRuntime.value(level, pos.relative(Direction.DOWN)) & 1L) != 0L;
         display.sampleSignals(display.busX, display.busY, display.busColor, display.busWrite, display.busClear);
@@ -50,13 +50,13 @@ public final class DisplayBlockEntity extends BlockEntity {
     }
 
     public void acceptCableValue(Direction face, long value) {
-        switch (face) {
-            case WEST -> busX = (int)(value & 0xFFFFL);
-            case EAST -> busY = (int)(value & 0xFFFFL);
-            case SOUTH -> busColor = (int)(value & 0xFFFFL);
-            case UP -> busWrite = (value & 1L) != 0L;
-            case DOWN -> busClear = (value & 1L) != 0L;
-            case NORTH -> { return; }
+        switch (DisplayPorts.portAt(getBlockState(), face)) {
+            case X -> busX = (int)(value & 0xFFFFL);
+            case Y -> busY = (int)(value & 0xFFFFL);
+            case COLOR -> busColor = (int)(value & 0xFFFFL);
+            case WRITE -> busWrite = (value & 1L) != 0L;
+            case CLEAR -> busClear = (value & 1L) != 0L;
+            case NONE -> { return; }
         }
         sampleSignals(busX, busY, busColor, busWrite, busClear);
     }
