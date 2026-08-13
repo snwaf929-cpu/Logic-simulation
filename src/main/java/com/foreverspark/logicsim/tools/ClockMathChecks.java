@@ -2,8 +2,13 @@ package com.foreverspark.logicsim.tools;
 
 import com.foreverspark.logicsim.core.TimingDomain;
 
-final class ClockMathChecks {
+public final class ClockMathChecks {
     private ClockMathChecks() {}
+
+    public static void main(String[] args) {
+        run();
+        System.out.println("Virtual clock math self-test: PASS");
+    }
 
     static void run() {
         TimingDomain timing = new TimingDomain(5000000L);
