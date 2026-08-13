@@ -9,7 +9,10 @@
   "license": "All-Rights-Reserved",
   "environment": "*",
   "entrypoints": {
-    "main": ["com.foreverspark.logicsim.LogicSimulationMod"],
+    "main": [
+      "com.foreverspark.logicsim.LogicSimulationMod",
+      "com.foreverspark.logicsim.block.CircuitBlockControlsInitializer"
+    ],
     "client": ["com.foreverspark.logicsim.client.LogicSimulationClient"]
   },
   "mixins": ["logicsimulation.client.mixins.json"],
