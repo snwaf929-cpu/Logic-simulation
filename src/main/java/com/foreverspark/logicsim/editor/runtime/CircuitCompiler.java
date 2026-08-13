@@ -52,6 +52,8 @@ public final class CircuitCompiler {
         private final Map<String, Map<NodePortKey, Signal[]>> scopedOutputs;
         private final Map<NodePortKey, Signal[]> inputCache = new HashMap<>();
         private final Map<NodePortKey, Signal[]> outputCache = new HashMap<>();
+        private final Set<NodePortKey> resolvingInputs = new HashSet<>();
+        private final Set<NodePortKey> resolvingOutputs = new HashSet<>();
         private final Set<Integer> realizedNands = new HashSet<>();
         private final Map<Integer, List<Signal[]>> customOutputCache = new HashMap<>();
         private boolean resolvedAll;
@@ -77,46 +79,69 @@ public final class CircuitCompiler {
             NodePortKey key = new NodePortKey(node.id, port);
             Signal[] cached = inputCache.get(key);
             if (cached != null) return cached;
-            List<PortSpec> inputPorts = NodePorts.inputs(node, chips);
-            if (port < 0 || port >= inputPorts.size()) throw new CircuitCompileException("Invalid input port " + port + " on node " + node.id);
-            int width = inputPorts.get(port).width();
-            WireConnection matching = null;
-            for (WireConnection wire : document.wires) if (wire.targetNodeId() == node.id && wire.targetPort() == port) {
-                if (matching != null) throw new CircuitCompileException("Multiple wires drive node " + node.id + " input " + port);
-                matching = wire;
+            if (!resolvingInputs.add(key)) {
+                throw structuralLoop(node, port, true);
             }
-            Signal[] signals;
-            if (matching == null) signals = createSignals(path + "/NODE" + node.id + "/IN" + port + "/FLOAT", width);
-            else {
-                EditorNode sourceNode = document.node(matching.sourceNodeId());
-                List<PortSpec> sourcePorts = NodePorts.outputs(sourceNode, chips);
-                if (matching.sourcePort() < 0 || matching.sourcePort() >= sourcePorts.size()) throw new CircuitCompileException("Invalid source port on node " + sourceNode.id);
-                int sourceWidth = sourcePorts.get(matching.sourcePort()).width();
-                if (sourceWidth != width) throw new CircuitCompileException("Width mismatch: node " + sourceNode.id + " output is " + sourceWidth + "-bit but node " + node.id + " input is " + width + "-bit");
-                signals = resolveOutput(sourceNode, matching.sourcePort());
+            try {
+                List<PortSpec> inputPorts = NodePorts.inputs(node, chips);
+                if (port < 0 || port >= inputPorts.size()) throw new CircuitCompileException("Invalid input port " + port + " on node " + node.id);
+                int width = inputPorts.get(port).width();
+                WireConnection matching = null;
+                for (WireConnection wire : document.wires) if (wire.targetNodeId() == node.id && wire.targetPort() == port) {
+                    if (matching != null) throw new CircuitCompileException("Multiple wires drive node " + node.id + " input " + port);
+                    matching = wire;
+                }
+                Signal[] signals;
+                if (matching == null) signals = createSignals(path + "/NODE" + node.id + "/IN" + port + "/FLOAT", width);
+                else {
+                    EditorNode sourceNode = document.node(matching.sourceNodeId());
+                    List<PortSpec> sourcePorts = NodePorts.outputs(sourceNode, chips);
+                    if (matching.sourcePort() < 0 || matching.sourcePort() >= sourcePorts.size()) throw new CircuitCompileException("Invalid source port on node " + sourceNode.id);
+                    int sourceWidth = sourcePorts.get(matching.sourcePort()).width();
+                    if (sourceWidth != width) throw new CircuitCompileException("Width mismatch: node " + sourceNode.id + " output is " + sourceWidth + "-bit but node " + node.id + " input is " + width + "-bit");
+                    signals = resolveOutput(sourceNode, matching.sourcePort());
+                }
+                inputCache.put(key, signals);
+                return signals;
+            } finally {
+                resolvingInputs.remove(key);
             }
-            inputCache.put(key, signals);
-            return signals;
         }
 
         private Signal[] resolveOutput(EditorNode node, int port) {
             NodePortKey key = new NodePortKey(node.id, port);
             Signal[] cached = outputCache.get(key);
             if (cached != null) return cached;
-            List<PortSpec> outputPorts = NodePorts.outputs(node, chips);
-            if (port < 0 || port >= outputPorts.size()) throw new CircuitCompileException("Invalid output port " + port + " on node " + node.id);
-            Signal[] result = switch (node.kind) {
-                case INPUT -> resolveRootOrOverriddenInput(node);
-                case NAND -> resolveNand(node, key);
-                case CONSTANT -> resolveConstant(node, key);
-                case BUS -> resolveInput(node, 0);
-                case SPLITTER -> { Signal[] bus = resolveInput(node, 0); yield new Signal[]{bus[port]}; }
-                case MERGER -> { Signal[] merged = new Signal[node.width]; for (int bit = 0; bit < node.width; bit++) merged[bit] = resolveInput(node, bit)[0]; yield merged; }
-                case CUSTOM_CHIP -> resolveCustomOutputs(node).get(port);
-                case OUTPUT, PROBE -> throw new CircuitCompileException(node.kind + " node " + node.id + " has no output ports");
-            };
-            outputCache.putIfAbsent(key, result);
-            return outputCache.get(key);
+            if (!resolvingOutputs.add(key)) {
+                throw structuralLoop(node, port, false);
+            }
+            try {
+                List<PortSpec> outputPorts = NodePorts.outputs(node, chips);
+                if (port < 0 || port >= outputPorts.size()) throw new CircuitCompileException("Invalid output port " + port + " on node " + node.id);
+                Signal[] result = switch (node.kind) {
+                    case INPUT -> resolveRootOrOverriddenInput(node);
+                    case NAND -> resolveNand(node, key);
+                    case CONSTANT -> resolveConstant(node, key);
+                    case BUS -> resolveInput(node, 0);
+                    case SPLITTER -> { Signal[] bus = resolveInput(node, 0); yield new Signal[]{bus[port]}; }
+                    case MERGER -> { Signal[] merged = new Signal[node.width]; for (int bit = 0; bit < node.width; bit++) merged[bit] = resolveInput(node, bit)[0]; yield merged; }
+                    case CUSTOM_CHIP -> resolveCustomOutputs(node).get(port);
+                    case OUTPUT, PROBE -> throw new CircuitCompileException(node.kind + " node " + node.id + " has no output ports");
+                };
+                outputCache.putIfAbsent(key, result);
+                return outputCache.get(key);
+            } finally {
+                resolvingOutputs.remove(key);
+            }
+        }
+
+        private CircuitCompileException structuralLoop(EditorNode node, int port, boolean input) {
+            String side = input ? "input" : "output";
+            return new CircuitCompileException(
+                    "Structural wiring loop detected at " + node.displayName() + " " + side + " " + port
+                            + ". BUS/SPLITTER/MERGER routing cannot feed back into itself. "
+                            + "Feedback used for latches must pass through NAND logic/storage."
+            );
         }
 
         private Signal[] resolveRootOrOverriddenInput(EditorNode node) {
@@ -128,6 +153,9 @@ public final class CircuitCompiler {
         }
 
         private Signal[] resolveNand(EditorNode node, NodePortKey key) {
+            // The NAND output is cached before its inputs are resolved on purpose. This is what
+            // allows legitimate sequential feedback (SR latches, flip-flops, registers) while
+            // the structural cycle guard above rejects routing-only BUS loops.
             Signal[] out = outputCache.computeIfAbsent(key, ignored -> createSignals(path + "/NAND" + node.id + "/OUT", 1));
             if (realizedNands.add(node.id)) circuit.nand(path + "/NAND" + node.id, resolveInput(node, 0)[0], resolveInput(node, 1)[0], out[0]);
             return out;

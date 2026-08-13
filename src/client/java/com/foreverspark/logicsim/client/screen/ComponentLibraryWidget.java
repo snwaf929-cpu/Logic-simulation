@@ -79,9 +79,9 @@ public final class ComponentLibraryWidget extends AbstractWidget {
 
         y += 3;
         y = drawSection(graphics, "ROUTING", y, contentTop, footerTop);
-        y = drawComponent(graphics, "BUS", NodeKind.BUS, 0xFF4FA6A0, y, contentTop, footerTop);
-        y = drawComponent(graphics, "SPLITTER", NodeKind.SPLITTER, 0xFF4FA6A0, y, contentTop, footerTop);
-        y = drawComponent(graphics, "MERGER", NodeKind.MERGER, 0xFF4FA6A0, y, contentTop, footerTop);
+        y = drawComponent(graphics, "BUS LINE", NodeKind.BUS, 0xFF4FA6A0, y, contentTop, footerTop);
+        y = drawComponent(graphics, "BUS -> BITS", NodeKind.SPLITTER, 0xFF4FA6A0, y, contentTop, footerTop);
+        y = drawComponent(graphics, "BITS -> BUS", NodeKind.MERGER, 0xFF4FA6A0, y, contentTop, footerTop);
 
         y += 5;
         y = drawSection(graphics, "MY CHIPS", y, contentTop, footerTop);
