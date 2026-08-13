@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, ux-overhaul ]
   pull_request:
 
 permissions:
