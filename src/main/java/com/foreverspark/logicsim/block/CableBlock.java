@@ -10,10 +10,6 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
-/**
- * Early physical cable block. The block already knows whether it represents a one-bit SIGNAL
- * or a multi-bit BUS; device-port binding and automatic topology discovery are the next layer.
- */
 public final class CableBlock extends Block {
     private static final VoxelShape SIGNAL_SHAPE = Shapes.or(
             Block.box(6, 6, 6, 10, 10, 10),
@@ -21,7 +17,6 @@ public final class CableBlock extends Block {
             Block.box(7, 0, 7, 9, 16, 9),
             Block.box(7, 7, 0, 9, 9, 16)
     );
-
     private static final VoxelShape BUS_SHAPE = Shapes.or(
             Block.box(5, 5, 5, 11, 11, 11),
             Block.box(0, 6, 6, 16, 10, 10),
@@ -30,14 +25,19 @@ public final class CableBlock extends Block {
     );
 
     private final CableKind cableKind;
+    private final int bitWidth;
 
-    public CableBlock(CableKind cableKind, BlockBehaviour.Properties properties) {
+    public CableBlock(CableKind cableKind, int bitWidth, BlockBehaviour.Properties properties) {
         super(properties);
+        cableKind.validateWidth(bitWidth);
         this.cableKind = cableKind;
+        this.bitWidth = bitWidth;
     }
 
-    public CableKind cableKind() {
-        return cableKind;
+    public CableKind cableKind() { return cableKind; }
+    public int bitWidth() { return bitWidth; }
+    public boolean compatibleWith(CableBlock other) {
+        return other != null && cableKind == other.cableKind && bitWidth == other.bitWidth;
     }
 
     @Override

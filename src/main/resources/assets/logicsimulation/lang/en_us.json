@@ -1,6 +1,12 @@
 {
   "block.logicsimulation.circuit_block": "Circuit Block",
-  "block.logicsimulation.signal_wire": "Signal Wire",
-  "block.logicsimulation.bus_cable": "Bus Cable",
+  "block.logicsimulation.signal_wire": "Signal Wire [1]",
+  "block.logicsimulation.bus_cable_2": "Bus Cable [2]",
+  "block.logicsimulation.bus_cable_4": "Bus Cable [4]",
+  "block.logicsimulation.bus_cable": "Bus Cable [8]",
+  "block.logicsimulation.bus_cable_16": "Bus Cable [16]",
+  "block.logicsimulation.bus_cable_32": "Bus Cable [32]",
+  "block.logicsimulation.display_block": "Pixel Display",
+  "block.logicsimulation.io_connector": "Circuit I/O Connector",
   "screen.logicsimulation.circuit_editor": "Circuit Editor"
 }

@@ -1,19 +1,32 @@
 package com.foreverspark.logicsim.interconnect;
 
-/** Physical interconnect type used by future world-space cable blocks. */
+import java.util.Set;
+
+/** Physical interconnect type used by world-space cable blocks. */
 public enum CableKind {
     SIGNAL,
     BUS;
 
+    private static final Set<Integer> PHYSICAL_BUS_WIDTHS = Set.of(2, 4, 8, 16, 32);
+
     public void validateWidth(int width) {
-        if (width <= 0 || width > 64) {
-            throw new IllegalArgumentException("Cable width must be between 1 and 64 bits");
+        if (this == SIGNAL) {
+            if (width != 1) {
+                throw new IllegalArgumentException("Signal wire requires a 1-bit port, got " + width + " bits");
+            }
+            return;
         }
-        if (this == SIGNAL && width != 1) {
-            throw new IllegalArgumentException("Signal wire requires a 1-bit port, got " + width + " bits");
+        if (!PHYSICAL_BUS_WIDTHS.contains(width)) {
+            throw new IllegalArgumentException("Physical bus cable width must be one of 2, 4, 8, 16, or 32 bits; got " + width);
         }
-        if (this == BUS && width == 1) {
-            throw new IllegalArgumentException("Bus cable requires a multi-bit port; use a signal wire for 1 bit");
+    }
+
+    public boolean supportsWidth(int width) {
+        try {
+            validateWidth(width);
+            return true;
+        } catch (IllegalArgumentException ignored) {
+            return false;
         }
     }
 }

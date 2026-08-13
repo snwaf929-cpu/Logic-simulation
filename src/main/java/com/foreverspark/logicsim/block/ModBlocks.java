@@ -24,17 +24,26 @@ public final class ModBlocks {
 
     public static final CableBlock SIGNAL_WIRE = (CableBlock) register(
             ModBlockItemIds.SIGNAL_WIRE,
-            properties -> new CableBlock(CableKind.SIGNAL, properties),
+            properties -> new CableBlock(CableKind.SIGNAL, 1, properties),
             BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
     );
 
-    public static final CableBlock BUS_CABLE = (CableBlock) register(
-            ModBlockItemIds.BUS_CABLE,
-            properties -> new CableBlock(CableKind.BUS, properties),
-            BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
-    );
+    public static final CableBlock BUS_CABLE_2 = registerBus(ModBlockItemIds.BUS_CABLE_2, 2);
+    public static final CableBlock BUS_CABLE_4 = registerBus(ModBlockItemIds.BUS_CABLE_4, 4);
+    /** Existing id retained as the 8-bit bus cable for compatibility with worlds/items already created. */
+    public static final CableBlock BUS_CABLE = registerBus(ModBlockItemIds.BUS_CABLE, 8);
+    public static final CableBlock BUS_CABLE_16 = registerBus(ModBlockItemIds.BUS_CABLE_16, 16);
+    public static final CableBlock BUS_CABLE_32 = registerBus(ModBlockItemIds.BUS_CABLE_32, 32);
 
     private ModBlocks() {
+    }
+
+    private static CableBlock registerBus(BlockItemId id, int width) {
+        return (CableBlock) register(
+                id,
+                properties -> new CableBlock(CableKind.BUS, width, properties),
+                BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
+        );
     }
 
     private static Block register(
@@ -64,7 +73,11 @@ public final class ModBlocks {
         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.BUILDING_BLOCKS).register(tab -> {
             tab.accept(CIRCUIT_BLOCK.asItem());
             tab.accept(SIGNAL_WIRE.asItem());
+            tab.accept(BUS_CABLE_2.asItem());
+            tab.accept(BUS_CABLE_4.asItem());
             tab.accept(BUS_CABLE.asItem());
+            tab.accept(BUS_CABLE_16.asItem());
+            tab.accept(BUS_CABLE_32.asItem());
         });
     }
 }

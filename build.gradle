@@ -73,8 +73,17 @@ tasks.register('displaySelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.tools.DisplayFramebufferSelfTest'
 }
 
+tasks.register('physicalCableSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates 1/2/4/8/16/32-bit physical cable width rules.'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.tools.PhysicalCableSelfTest'
+}
+
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
+    dependsOn tasks.named('physicalCableSelfTest')
 }
 
 tasks.register('clientSelfTest', JavaExec) {
