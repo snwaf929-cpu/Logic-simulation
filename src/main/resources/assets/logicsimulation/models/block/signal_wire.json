@@ -1,0 +1,13 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "minecraft:block/iron_block",
+    "cable": "minecraft:block/iron_block"
+  },
+  "elements": [
+    {"from":[6,6,6],"to":[10,10,10],"faces":{"down":{"texture":"#cable"},"up":{"texture":"#cable"},"north":{"texture":"#cable"},"south":{"texture":"#cable"},"west":{"texture":"#cable"},"east":{"texture":"#cable"}}},
+    {"from":[0,7,7],"to":[16,9,9],"faces":{"down":{"texture":"#cable"},"up":{"texture":"#cable"},"north":{"texture":"#cable"},"south":{"texture":"#cable"},"west":{"texture":"#cable"},"east":{"texture":"#cable"}}},
+    {"from":[7,0,7],"to":[9,16,9],"faces":{"down":{"texture":"#cable"},"up":{"texture":"#cable"},"north":{"texture":"#cable"},"south":{"texture":"#cable"},"west":{"texture":"#cable"},"east":{"texture":"#cable"}}},
+    {"from":[7,7,0],"to":[9,9,16],"faces":{"down":{"texture":"#cable"},"up":{"texture":"#cable"},"north":{"texture":"#cable"},"south":{"texture":"#cable"},"west":{"texture":"#cable"},"east":{"texture":"#cable"}}}
+  ]
+}

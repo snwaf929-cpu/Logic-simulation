@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.interconnect.CableKind;
 import java.util.function.Function;
 
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
@@ -19,6 +20,18 @@ public final class ModBlocks {
             ModBlockItemIds.CIRCUIT_BLOCK,
             CircuitBlock::new,
             BlockBehaviour.Properties.of().sound(SoundType.METAL)
+    );
+
+    public static final CableBlock SIGNAL_WIRE = (CableBlock) register(
+            ModBlockItemIds.SIGNAL_WIRE,
+            properties -> new CableBlock(CableKind.SIGNAL, properties),
+            BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
+    );
+
+    public static final CableBlock BUS_CABLE = (CableBlock) register(
+            ModBlockItemIds.BUS_CABLE,
+            properties -> new CableBlock(CableKind.BUS, properties),
+            BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
     );
 
     private ModBlocks() {
@@ -50,6 +63,8 @@ public final class ModBlocks {
     public static void initialize() {
         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.BUILDING_BLOCKS).register(tab -> {
             tab.accept(CIRCUIT_BLOCK.asItem());
+            tab.accept(SIGNAL_WIRE.asItem());
+            tab.accept(BUS_CABLE.asItem());
         });
     }
 }
