@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.foreverspark.logicsim.mixin.client",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "CircuitCanvasBranchMixin",
+    "CircuitCanvasCompactGeometryMixin",
+    "CircuitCanvasCompactRenderMixin"
+  ],
+  "injectors": {"defaultRequire": 1}
+}
