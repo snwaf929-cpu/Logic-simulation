@@ -48,6 +48,8 @@ public final class ClientChipLibrary implements ChipLookup {
     }
 
     public void reload() {
+        // Load raw metadata first, then discover chip files, and only then reconcile the two.
+        // Normalizing before refreshChipCache() would see an empty cache and erase chip metadata.
         loadLayout();
         refreshChipCache();
         normalizeLayout();
@@ -362,7 +364,8 @@ public final class ClientChipLibrary implements ChipLookup {
         } catch (Exception ignored) {
             layout = new LibraryLayout();
         }
-        normalizeLayout();
+        // Do not normalize here. reload() must load the chip cache first so valid metadata
+        // is not mistaken for stale metadata and removed while cachedDefinitions is empty.
     }
 
     private void normalizeLayout() {
@@ -394,8 +397,7 @@ public final class ClientChipLibrary implements ChipLookup {
                     meta.folder = validDefinitionFolder(definition.folder);
                 }
                 if (!meta.folder.isBlank() && folderMeta(meta.folder) == null) {
-                    String recovered = validDefinitionFolder(definition.folder);
-                    meta.folder = recovered;
+                    meta.folder = validDefinitionFolder(definition.folder);
                 }
             }
 
