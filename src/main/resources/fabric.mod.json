@@ -15,6 +15,9 @@
   "entrypoints": {
     "main": [
       "com.foreverspark.logicsim.LogicSimulationMod"
+    ],
+    "client": [
+      "com.foreverspark.logicsim.client.LogicSimulationClient"
     ]
   },
   "depends": {

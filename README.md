@@ -11,6 +11,18 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 - Java: `25`
 - Gradle Wrapper: `9.5.1`
 
+## Current playable milestone
+
+The first in-game circuit test is implemented:
+
+1. Find **Circuit Block** in the Building Blocks creative tab.
+2. Place it in the world.
+3. Right-click it with an empty hand.
+4. The Circuit Editor opens with two inputs driving one real NAND gate.
+5. Toggle A and B and watch the output and wire states update through the event-driven simulation core.
+
+This is intentionally a small vertical slice. The next editor milestone will add freely placeable nodes, wire creation, delete/move tools, and saving a circuit as a reusable custom chip.
+
 ## Core principles
 
 - NAND is the only primitive logic gate.
@@ -21,9 +33,9 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 - Circuit hierarchy remains inspectable even when compiled for speed.
 - Tracing is event-based and bounded so MHz simulation does not generate unbounded logs.
 
-## Current core
+## Core engine
 
-The repository already contains the first pure-Java simulation core:
+The repository contains:
 
 1. `0 / 1 / X` logic values.
 2. NAND nodes.
@@ -32,22 +44,20 @@ The repository already contains the first pure-Java simulation core:
 5. Ring-buffer trace recorder.
 6. Dependency-free self-tests and an early benchmark tool.
 
-The Fabric 26.2 entrypoint is wired around that core. Minecraft blocks, the circuit editor, custom-chip hierarchy, compiled Turbo simulation, displays, buses in-world, UIB, networking, and computer hardware are upcoming milestones.
+## Build / run
 
-## Build
-
-Minecraft 26.2 requires Java 25 for development. GitHub Actions builds the project on Java 25 and Gradle 9.5.1 on every push to `main`.
+Minecraft 26.2 requires Java 25 for development.
 
 Windows:
 
 ```powershell
-.\gradlew.bat build selfTest
+.\gradlew.bat runClient
 ```
 
-Linux/macOS:
+Build + core self-test:
 
-```bash
-./gradlew build selfTest
+```powershell
+.\gradlew.bat build selfTest
 ```
 
 The produced mod JAR is placed in `build/libs/`.

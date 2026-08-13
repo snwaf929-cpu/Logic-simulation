@@ -9,6 +9,17 @@ base {
     archivesName = project.archives_base_name
 }
 
+loom {
+    splitEnvironmentSourceSets()
+
+    mods {
+        "logicsimulation" {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
+}
+
 repositories {
     // Loom automatically adds the Minecraft/Fabric repositories we need.
 }
