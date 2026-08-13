@@ -40,11 +40,13 @@ public final class LogicSelfTest {
         testFreeformBusSplitMerge();
         testCustomChipFlattening();
         testLiveHierarchicalScope();
+        testNamedChipPorts();
+        testChipPresentationMetadata();
         testWidthMismatchRejected();
         testRoutedWireDoesNotChangeLogic();
         testChipVisualSettingsBounds();
         testInterconnectValidation();
-        System.out.println("Logic core + live hierarchy + routed UX metadata + interconnect self-test: PASS");
+        System.out.println("Logic core + live hierarchy + named ports + persistent UX metadata + interconnect self-test: PASS");
     }
 
     private static void testNandTruthTable() {
@@ -219,6 +221,43 @@ public final class LogicSelfTest {
 
         String renamedScope = CompiledCircuit.childScopePath(CompiledCircuit.ROOT_SCOPE, custom.id, "RENAMED_NOT");
         check(childScope.equals(renamedScope), "scope identity remains stable across chip rename");
+    }
+
+    private static void testNamedChipPorts() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode data = document.addNode(NodeKind.INPUT, 0, 0);
+        data.width = 16;
+        data.label = "DATA_A";
+        EditorNode carry = document.addNode(NodeKind.INPUT, 0, 60);
+        carry.label = "CARRY_IN";
+        EditorNode result = document.addNode(NodeKind.OUTPUT, 180, 0);
+        result.width = 16;
+        result.label = "RESULT";
+        EditorNode flag = document.addNode(NodeKind.OUTPUT, 180, 60);
+        flag.label = "CARRY_OUT";
+
+        ChipDefinition definition = new ChipDefinition("NAMED_PORTS", document);
+        List<PortSpec> inputs = definition.inputPorts();
+        List<PortSpec> outputs = definition.outputPorts();
+
+        check(inputs.size() == 2, "named chip input count");
+        check(inputs.get(0).name().equals("DATA_A") && inputs.get(0).width() == 16, "first named input exposed");
+        check(inputs.get(1).name().equals("CARRY_IN") && inputs.get(1).width() == 1, "second named input exposed");
+        check(outputs.size() == 2, "named chip output count");
+        check(outputs.get(0).name().equals("RESULT") && outputs.get(0).width() == 16, "first named output exposed");
+        check(outputs.get(1).name().equals("CARRY_OUT") && outputs.get(1).width() == 1, "second named output exposed");
+    }
+
+    private static void testChipPresentationMetadata() {
+        ChipDefinition definition = new ChipDefinition("META", makeNotDocument());
+        definition.formatVersion = 1;
+        definition.color = 0xFF000000;
+        definition.folder = "Arithmetic";
+        definition.normalize();
+
+        check(definition.formatVersion >= 3, "chip metadata format upgraded");
+        check(definition.color == 0xFF000000, "opaque black is a valid saved chip color");
+        check(definition.folder.equals("Arithmetic"), "chip folder metadata preserved");
     }
 
     private static void testWidthMismatchRejected() {
