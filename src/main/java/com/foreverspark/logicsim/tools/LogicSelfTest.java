@@ -7,11 +7,14 @@ import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TraceRecorder;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
+import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
+import com.foreverspark.logicsim.editor.model.RoutePoint;
+import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompileException;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
@@ -37,8 +40,10 @@ public final class LogicSelfTest {
         testFreeformBusSplitMerge();
         testCustomChipFlattening();
         testWidthMismatchRejected();
+        testRoutedWireDoesNotChangeLogic();
+        testChipVisualSettingsBounds();
         testInterconnectValidation();
-        System.out.println("Logic core + editor + interconnect self-test: PASS");
+        System.out.println("Logic core + editor + routed UX metadata + interconnect self-test: PASS");
     }
 
     private static void testNandTruthTable() {
@@ -192,6 +197,40 @@ public final class LogicSelfTest {
             rejected = expected.getMessage().contains("Width mismatch");
         }
         check(rejected, "width mismatch must be rejected");
+    }
+
+    private static void testRoutedWireDoesNotChangeLogic() {
+        CircuitDocument document = makeNotDocument();
+        WireConnection routed = document.wires.getFirst();
+        routed.setRoutePoints(List.of(
+                new RoutePoint(30, 40),
+                new RoutePoint(65, 40),
+                new RoutePoint(65, -25),
+                new RoutePoint(90, -25)
+        ));
+        document.normalize();
+
+        check(routed.routePoints().size() == 4, "manual route points persisted in document model");
+
+        EditorNode input = document.inputNodes().getFirst();
+        EditorNode output = document.outputNodes().getFirst();
+        CompiledCircuit compiled = CircuitCompiler.compile(document, name -> null);
+        compiled.driveInputUnsigned(input.id, 0);
+        check(compiled.inputUnsigned(output.id, 0) == 1L, "wire route must not affect NOT 0");
+        compiled.driveInputUnsigned(input.id, 1);
+        check(compiled.inputUnsigned(output.id, 0) == 0L, "wire route must not affect NOT 1");
+    }
+
+    private static void testChipVisualSettingsBounds() {
+        ChipVisualSettings tooSmall = new ChipVisualSettings(-500, 1, 2);
+        check(tooSmall.width == 72.0, "chip width lower bound");
+        check(tooSmall.minHeight == 42.0, "chip height lower bound");
+        check(tooSmall.portSpacing == 10.0, "chip pin spacing lower bound");
+
+        ChipVisualSettings tooLarge = new ChipVisualSettings(9999, 9999, 9999);
+        check(tooLarge.width == 260.0, "chip width upper bound");
+        check(tooLarge.minHeight == 300.0, "chip height upper bound");
+        check(tooLarge.portSpacing == 48.0, "chip pin spacing upper bound");
     }
 
     private static void testInterconnectValidation() {
