@@ -18,12 +18,16 @@ public abstract class CircuitCanvasTerminalInteractionMixin {
     @Shadow private double nodeHeight(EditorNode node) { throw new AssertionError(); }
 
     @Inject(method = "inputToggleHit", at = @At("HEAD"), cancellable = true)
-    private void logic$wholeInputTerminal(EditorNode node, double mouseX, double mouseY, CallbackInfoReturnable<Boolean> cir) {
+    private void logic$centerInputSwitch(EditorNode node, double mouseX, double mouseY, CallbackInfoReturnable<Boolean> cir) {
         if (node.kind != NodeKind.INPUT) return;
         int x = screenX(node.x);
         int y = screenY(node.y);
         double w = nodeWidth(node) * zoom;
         double h = nodeHeight(node) * zoom;
-        cir.setReturnValue(mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h);
+        double size = Math.max(8.0, 12.0 * zoom);
+        double cx = x + w * 0.5;
+        double cy = y + h * 0.5;
+        cir.setReturnValue(mouseX >= cx - size * 0.5 && mouseX <= cx + size * 0.5
+                && mouseY >= cy - size * 0.5 && mouseY <= cy + size * 0.5);
     }
 }
