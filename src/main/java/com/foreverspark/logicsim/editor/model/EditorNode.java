@@ -8,6 +8,7 @@ public final class EditorNode {
     public int width = 1;
     public String label = "";
     public String chipName = "";
+    public long constantValue = 0L;
 
     public EditorNode() {
     }
@@ -17,7 +18,7 @@ public final class EditorNode {
         this.kind = kind;
         this.x = x;
         this.y = y;
-        if (kind == NodeKind.SPLITTER || kind == NodeKind.MERGER) {
+        if (kind == NodeKind.SPLITTER || kind == NodeKind.MERGER || kind == NodeKind.BUS || kind == NodeKind.PROBE) {
             this.width = 8;
         }
     }
@@ -33,6 +34,9 @@ public final class EditorNode {
             case INPUT -> "INPUT " + id;
             case OUTPUT -> "OUTPUT " + id;
             case NAND -> "NAND";
+            case CONSTANT -> "CONSTANT " + width;
+            case PROBE -> "PROBE " + width;
+            case BUS -> "BUS " + width;
             case SPLITTER -> "SPLITTER " + width;
             case MERGER -> "MERGER " + width;
             case CUSTOM_CHIP -> "CUSTOM CHIP";
