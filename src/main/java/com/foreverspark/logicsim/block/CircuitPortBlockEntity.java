@@ -2,8 +2,10 @@ package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
+import com.foreverspark.logicsim.interconnect.CircuitPortLinks;
 import com.foreverspark.logicsim.interconnect.PhysicalPortBinding;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
@@ -19,12 +21,23 @@ public final class CircuitPortBlockEntity extends BlockEntity {
         super(ModBlockEntities.CIRCUIT_PORT, pos, state);
     }
 
+    public static void tick(Level level, BlockPos pos, BlockState state, CircuitPortBlockEntity socket) {
+        if (level.isClientSide() || !socket.isBound()) return;
+        CircuitPortLinks.register(level, socket.circuitPos, pos);
+        if (socket.direction == PortDirection.OUTPUT
+                && level.getBlockEntity(socket.circuitPos) instanceof CircuitBlockEntity circuit) {
+            circuit.publishSocket(socket);
+        }
+    }
+
     public void bind(BlockPos circuitPos, PortSpec port) {
+        if (level != null && this.circuitPos != null) CircuitPortLinks.unregister(level, this.circuitPos, worldPosition);
         PhysicalPortBinding checked = new PhysicalPortBinding(port);
         this.circuitPos = circuitPos.immutable();
         this.portName = checked.portName();
         this.direction = checked.direction();
         this.width = checked.width();
+        if (level != null) CircuitPortLinks.register(level, this.circuitPos, worldPosition);
         setChanged();
     }
 
@@ -41,6 +54,19 @@ public final class CircuitPortBlockEntity extends BlockEntity {
     public boolean accepts(CableBlock cable) {
         PhysicalPortBinding binding = binding();
         return binding != null && cable != null && binding.accepts(cable.cableKind(), cable.bitWidth());
+    }
+
+    public void acceptCableValue(long value) {
+        if (direction != PortDirection.INPUT || level == null || level.isClientSide() || circuitPos == null) return;
+        if (level.getBlockEntity(circuitPos) instanceof CircuitBlockEntity circuit) {
+            circuit.acceptExternalInput(portName, value);
+        }
+    }
+
+    @Override
+    public void setRemoved() {
+        if (level != null && circuitPos != null) CircuitPortLinks.unregister(level, circuitPos, worldPosition);
+        super.setRemoved();
     }
 
     @Override
@@ -79,6 +105,7 @@ public final class CircuitPortBlockEntity extends BlockEntity {
     }
 
     private void clearBinding() {
+        if (level != null && circuitPos != null) CircuitPortLinks.unregister(level, circuitPos, worldPosition);
         circuitPos = null;
         portName = "";
         direction = PortDirection.INPUT;
