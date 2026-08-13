@@ -1,151 +1,136 @@
 package com.foreverspark.logicsim.client.screen;
 
-import com.foreverspark.logicsim.core.CircuitSimulator;
-import com.foreverspark.logicsim.core.LogicCircuit;
-import com.foreverspark.logicsim.core.LogicValue;
-import com.foreverspark.logicsim.core.Signal;
+import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
+import com.foreverspark.logicsim.editor.model.ChipDefinition;
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
-/**
- * First playable circuit editor milestone.
- * Two input nodes drive one real NAND gate from the simulation core.
- */
-public final class CircuitEditorScreen extends Screen {
-    private final LogicCircuit circuit = new LogicCircuit();
-    private final Signal inputA = circuit.signal("Demo/InputA", LogicValue.LOW);
-    private final Signal inputB = circuit.signal("Demo/InputB", LogicValue.LOW);
-    private final Signal output = circuit.signal("Demo/NAND/OUT", LogicValue.UNKNOWN);
-    private final CircuitSimulator simulator;
+import java.io.IOException;
+import java.util.List;
 
-    private boolean inputAHigh;
-    private boolean inputBHigh;
+/** Main freeform editor screen for Milestone 1. */
+public final class CircuitEditorScreen extends Screen {
+    private final ClientChipLibrary library = new ClientChipLibrary();
+
+    private CircuitCanvasWidget canvas;
+    private EditBox circuitNameBox;
+    private EditBox insertChipBox;
+    private String status = "Click a tool, place nodes, then click OUT port → IN port to wire.";
 
     public CircuitEditorScreen() {
         super(Component.translatable("screen.logicsimulation.circuit_editor"));
-        circuit.nand("Demo/NAND", inputA, inputB, output);
-        simulator = new CircuitSimulator(circuit);
-        simulator.scheduleAll();
-        simulator.runUntilStable(64);
     }
 
     @Override
     protected void init() {
-        int centerX = this.width / 2;
-        int buttonY = this.height / 2 + 100;
+        CircuitDocument previousDocument = canvas == null ? new CircuitDocument() : canvas.document();
+        String previousCircuitName = circuitNameBox == null ? "" : circuitNameBox.getValue();
+        String previousInsertName = insertChipBox == null ? "" : insertChipBox.getValue();
 
-        this.addRenderableWidget(Button.builder(Component.literal("Toggle A"), button -> {
-            inputAHigh = !inputAHigh;
-            simulator.drive(inputA, LogicValue.fromBoolean(inputAHigh));
-            simulator.runUntilStable(64);
-        }).bounds(centerX - 140, buttonY, 90, 20).build());
+        circuitNameBox = new EditBox(this.font, 8, 18, 118, 18, Component.literal("Circuit name"));
+        circuitNameBox.setMaxLength(48);
+        circuitNameBox.setValue(previousCircuitName);
+        this.addRenderableWidget(circuitNameBox);
 
-        this.addRenderableWidget(Button.builder(Component.literal("Toggle B"), button -> {
-            inputBHigh = !inputBHigh;
-            simulator.drive(inputB, LogicValue.fromBoolean(inputBHigh));
-            simulator.runUntilStable(64);
-        }).bounds(centerX - 40, buttonY, 90, 20).build());
+        insertChipBox = new EditBox(this.font, 8, 54, 118, 18, Component.literal("Saved chip name"));
+        insertChipBox.setMaxLength(48);
+        insertChipBox.setValue(previousInsertName);
+        this.addRenderableWidget(insertChipBox);
 
-        this.addRenderableWidget(Button.builder(Component.literal("Close"), button -> this.onClose())
-                .bounds(centerX + 60, buttonY, 80, 20)
-                .build());
+        int buttonWidth = 118;
+        int y = 82;
+        this.addRenderableWidget(button("+ INPUT", y, () -> canvas.setPlacement(NodeKind.INPUT))); y += 22;
+        this.addRenderableWidget(button("+ NAND", y, () -> canvas.setPlacement(NodeKind.NAND))); y += 22;
+        this.addRenderableWidget(button("+ OUTPUT", y, () -> canvas.setPlacement(NodeKind.OUTPUT))); y += 22;
+        this.addRenderableWidget(button("+ SPLITTER", y, () -> canvas.setPlacement(NodeKind.SPLITTER))); y += 22;
+        this.addRenderableWidget(button("+ MERGER", y, () -> canvas.setPlacement(NodeKind.MERGER))); y += 22;
+        this.addRenderableWidget(Button.builder(Component.literal("+ CUSTOM CHIP"), button -> canvas.setCustomChipPlacement(insertChipBox.getValue()))
+                .bounds(8, y, buttonWidth, 20).build()); y += 25;
+
+        this.addRenderableWidget(button("DELETE SELECTED", y, () -> canvas.deleteSelection())); y += 22;
+        this.addRenderableWidget(button("WIDTH -", y, () -> canvas.changeSelectedWidth(-1))); y += 22;
+        this.addRenderableWidget(button("WIDTH +", y, () -> canvas.changeSelectedWidth(1))); y += 22;
+        this.addRenderableWidget(button("RESET VIEW", y, () -> canvas.resetView())); y += 25;
+
+        this.addRenderableWidget(Button.builder(Component.literal("SAVE CHIP"), button -> saveChip())
+                .bounds(8, y, 57, 20).build());
+        this.addRenderableWidget(Button.builder(Component.literal("LOAD"), button -> loadChip())
+                .bounds(69, y, 57, 20).build()); y += 22;
+        this.addRenderableWidget(button("NEW CIRCUIT", y, () -> canvas.newDocument()));
+
+        int canvasX = 136;
+        int canvasY = 8;
+        int canvasWidth = Math.max(120, this.width - canvasX - 8);
+        int canvasHeight = Math.max(100, this.height - 16);
+        canvas = new CircuitCanvasWidget(canvasX, canvasY, canvasWidth, canvasHeight, previousDocument, library, this::setStatus);
+        this.addRenderableWidget(canvas);
+    }
+
+    private Button button(String text, int y, Runnable action) {
+        return Button.builder(Component.literal(text), button -> action.run())
+                .bounds(8, y, 118, 20)
+                .build();
+    }
+
+    private void saveChip() {
+        String name = circuitNameBox.getValue().trim();
+        try {
+            if (name.isEmpty()) {
+                setStatus("Enter a circuit name first");
+                return;
+            }
+            CircuitCompiler.compile(canvas.document(), library);
+            library.save(name, canvas.document());
+            setStatus("Saved reusable chip: " + name);
+            if (insertChipBox.getValue().isBlank()) {
+                insertChipBox.setValue(name);
+            }
+        } catch (RuntimeException | IOException exception) {
+            setStatus("SAVE FAILED: " + message(exception));
+        }
+    }
+
+    private void loadChip() {
+        String name = circuitNameBox.getValue().trim();
+        try {
+            ChipDefinition definition = library.load(name);
+            canvas.setDocument(library.copyDocument(definition.circuit));
+            circuitNameBox.setValue(definition.name);
+            setStatus("Loaded chip for editing: " + definition.name);
+        } catch (RuntimeException | IOException exception) {
+            setStatus("LOAD FAILED: " + message(exception));
+        }
+    }
+
+    private void setStatus(String status) {
+        this.status = status == null ? "" : status;
     }
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
+        graphics.text(this.font, "CIRCUIT NAME / SAVE", 8, 7, 0xFFAAB3C0, true);
+        graphics.text(this.font, "CHIP TO INSERT", 8, 43, 0xFFAAB3C0, true);
 
-        int centerX = this.width / 2;
-        int centerY = this.height / 2 - 10;
+        int statusY = Math.max(4, this.height - 13);
+        String shown = status.length() > 96 ? status.substring(0, 95) + "…" : status;
+        graphics.text(this.font, shown, 138, statusY, status.startsWith("ERROR") || status.contains("FAILED") || status.contains("MISMATCH") ? 0xFFFF6B6B : 0xFFD7DEE8, true);
 
-        int panelLeft = centerX - 250;
-        int panelTop = centerY - 120;
-        int panelRight = centerX + 250;
-        int panelBottom = centerY + 145;
-        graphics.fill(panelLeft, panelTop, panelRight, panelBottom, 0xE0181818);
-        graphics.outline(panelLeft, panelTop, panelRight - panelLeft, panelBottom - panelTop, 0xFF555555);
-
-        centeredText(graphics, "Circuit Editor — first live NAND test", centerX, panelTop + 14, 0xFFFFFFFF);
-        centeredText(graphics, "Both inputs are connected to the real event-driven simulation core.", centerX, panelTop + 32, 0xFFAAAAAA);
-
-        int inputX = centerX - 190;
-        int gateX = centerX - 35;
-        int outputX = centerX + 135;
-        int nodeWidth = 110;
-        int nodeHeight = 54;
-
-        int inputAY = centerY - 55;
-        int inputBY = centerY + 25;
-        int gateY = centerY - 15;
-        int outputY = gateY;
-
-        drawWire(graphics, inputX + nodeWidth, inputAY + nodeHeight / 2, gateX, gateY + 16, inputA.value());
-        drawWire(graphics, inputX + nodeWidth, inputBY + nodeHeight / 2, gateX, gateY + nodeHeight - 16, inputB.value());
-        drawWire(graphics, gateX + nodeWidth, gateY + nodeHeight / 2, outputX, outputY + nodeHeight / 2, output.value());
-
-        drawNode(graphics, inputX, inputAY, nodeWidth, nodeHeight, "INPUT A", inputA.value());
-        drawNode(graphics, inputX, inputBY, nodeWidth, nodeHeight, "INPUT B", inputB.value());
-        drawNode(graphics, gateX, gateY, nodeWidth, nodeHeight, "NAND", output.value());
-        drawNode(graphics, outputX, outputY, nodeWidth, nodeHeight, "OUTPUT", output.value());
-
-        centeredText(
-                graphics,
-                "NAND(" + bit(inputA.value()) + ", " + bit(inputB.value()) + ") = " + bit(output.value()),
-                centerX,
-                centerY + 82,
-                0xFFFFFFFF
-        );
+        List<String> names = library.names();
+        if (!names.isEmpty()) {
+            String saved = "Saved: " + String.join(", ", names);
+            if (saved.length() > 23) saved = saved.substring(0, 22) + "…";
+            graphics.text(this.font, saved, 8, Math.max(4, this.height - 13), 0xFF7F8A99, true);
+        }
     }
 
-    private void drawNode(
-            GuiGraphicsExtractor graphics,
-            int x,
-            int y,
-            int width,
-            int height,
-            String label,
-            LogicValue value
-    ) {
-        graphics.fill(x, y, x + width, y + height, 0xFF242424);
-        graphics.outline(x, y, width, height, valueColor(value));
-        centeredText(graphics, label, x + width / 2, y + 12, 0xFFFFFFFF);
-        centeredText(graphics, "VALUE: " + bit(value), x + width / 2, y + 31, valueColor(value));
-    }
-
-    private void drawWire(
-            GuiGraphicsExtractor graphics,
-            int x1,
-            int y1,
-            int x2,
-            int y2,
-            LogicValue value
-    ) {
-        int color = valueColor(value);
-        int midX = (x1 + x2) / 2;
-        graphics.fill(x1, y1 - 1, midX, y1 + 2, color);
-        graphics.fill(midX - 1, Math.min(y1, y2), midX + 2, Math.max(y1, y2) + 1, color);
-        graphics.fill(midX, y2 - 1, x2, y2 + 2, color);
-    }
-
-    private void centeredText(GuiGraphicsExtractor graphics, String text, int centerX, int y, int color) {
-        graphics.text(this.font, text, centerX - this.font.width(text) / 2, y, color, true);
-    }
-
-    private static int valueColor(LogicValue value) {
-        return switch (value) {
-            case LOW -> 0xFFE05252;
-            case HIGH -> 0xFF55D96B;
-            case UNKNOWN -> 0xFFFFC857;
-        };
-    }
-
-    private static String bit(LogicValue value) {
-        return switch (value) {
-            case LOW -> "0";
-            case HIGH -> "1";
-            case UNKNOWN -> "X";
-        };
+    private static String message(Exception exception) {
+        return exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
     }
 }
