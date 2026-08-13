@@ -1,0 +1,30 @@
+name: Apply width IO fix
+
+on:
+  push:
+    branches:
+      - fix/width-cable-io-rendering-v3
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply fix
+        shell: bash
+        run: |
+          base64 -d width-io-fix.patch.b64 > /tmp/width-io-fix.patch
+          git apply --check /tmp/width-io-fix.patch
+          git apply /tmp/width-io-fix.patch
+          rm -f width-io-fix.b64 width-io-fix.patch.b64 .github/workflows/apply-width-io-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix routing widths and I/O connector rendering"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
