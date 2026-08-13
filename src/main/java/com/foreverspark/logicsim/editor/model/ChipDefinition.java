@@ -4,16 +4,31 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class ChipDefinition {
-    public int formatVersion = 1;
+    public int formatVersion = 2;
     public String name = "";
     public CircuitDocument circuit = new CircuitDocument();
+    public ChipVisualSettings visual = new ChipVisualSettings();
 
     public ChipDefinition() {
     }
 
     public ChipDefinition(String name, CircuitDocument circuit) {
+        this(name, circuit, new ChipVisualSettings());
+    }
+
+    public ChipDefinition(String name, CircuitDocument circuit, ChipVisualSettings visual) {
         this.name = name;
         this.circuit = circuit;
+        this.visual = visual == null ? new ChipVisualSettings() : visual;
+        this.visual.normalize();
+    }
+
+    public void normalize() {
+        if (name == null) name = "";
+        if (circuit == null) circuit = new CircuitDocument();
+        circuit.normalize();
+        if (visual == null) visual = new ChipVisualSettings();
+        visual.normalize();
     }
 
     public List<PortSpec> inputPorts() {
