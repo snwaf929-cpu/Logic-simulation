@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim;
 
+import com.foreverspark.logicsim.block.ConnectorBlocks;
 import com.foreverspark.logicsim.block.DisplayBlocks;
 import com.foreverspark.logicsim.block.ModBlockEntities;
 import com.foreverspark.logicsim.block.ModBlocks;
@@ -15,6 +16,7 @@ public final class LogicSimulationMod implements ModInitializer {
     public void onInitialize() {
         ModBlocks.initialize();
         DisplayBlocks.initialize();
+        ConnectorBlocks.initialize();
         ModBlockEntities.initialize();
         LOGGER.info("Logic Simulation initialized. Typed cables and physical display hardware ready on Minecraft 26.2.");
     }
