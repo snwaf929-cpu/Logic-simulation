@@ -15,11 +15,10 @@ public final class PhysicalCableSelfTest {
     public static void main(String[] args) {
         check(CableKind.SIGNAL.supportsWidth(1), "1-bit signal wire supported");
         check(!CableKind.SIGNAL.supportsWidth(2), "signal wire rejects 2-bit");
-        for (int width : new int[]{2, 4, 8, 16, 32}) {
+        for (int width : new int[]{2, 4, 8, 16, 32, 64}) {
             check(CableKind.BUS.supportsWidth(width), width + "-bit bus cable supported");
         }
         check(!CableKind.BUS.supportsWidth(1), "bus rejects 1-bit; use signal wire");
-        check(!CableKind.BUS.supportsWidth(64), "physical bus currently stops at 32-bit");
         testNamedCircuitPortsBecomeWorldPorts();
         CircuitProgramSelfTest.main(args);
         System.out.println("Physical cable widths + circuit world-port binding self-test: PASS");
@@ -35,7 +34,7 @@ public final class PhysicalCableSelfTest {
         reset.width = 1;
         EditorNode data = document.addNode(NodeKind.OUTPUT, 200, 0);
         data.label = "DATA";
-        data.width = 32;
+        data.width = 64;
 
         InterconnectDevice device = CircuitDeviceProfile.fromChip("cpu", new ChipDefinition("CPU", document));
         check(device.inputs().size() == 2, "world CPU exposes its two named inputs");
@@ -48,7 +47,7 @@ public final class PhysicalCableSelfTest {
         check(addressSocket.accepts(CableKind.BUS, 16), "ADDRESS accepts 16-bit bus cable");
         check(!addressSocket.accepts(CableKind.BUS, 8), "ADDRESS rejects wrong bus width");
         check(resetSocket.accepts(CableKind.SIGNAL, 1), "RESET accepts normal 1-bit signal wire");
-        check(dataSocket.accepts(CableKind.BUS, 32), "DATA accepts 32-bit bus cable");
+        check(dataSocket.accepts(CableKind.BUS, 64), "DATA accepts 64-bit bus cable");
     }
 
     private static void check(boolean condition, String message) {
