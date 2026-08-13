@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.editor.runtime;
 
+import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TimingSignalDriver;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
@@ -7,6 +8,7 @@ import com.foreverspark.logicsim.editor.model.ChipLookup;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.model.WireConnection;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -21,6 +23,8 @@ public final class CircuitTimingController {
 
     private final CompiledCircuit compiled;
     private final Map<ClockAddress, TimingSignalDriver> clocks = new LinkedHashMap<>();
+    /** A clock with no wire on ENABLE is intentionally pulled high for backwards compatibility. */
+    private final Set<ClockAddress> wiredEnableInputs = new LinkedHashSet<>();
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
@@ -33,14 +37,32 @@ public final class CircuitTimingController {
     public boolean hasClock(String scopePath, int nodeId) { return clocks.containsKey(address(scopePath, nodeId)); }
     public long frequencyHz(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().frequencyHz(); }
     public void setFrequencyHz(String scopePath, int nodeId, long frequencyHz) { require(scopePath, nodeId).timing().setFrequencyHz(frequencyHz); }
+
+    /** Manual RUN/PAUSE state. ENABLE is a separate circuit input and does not overwrite this state. */
     public boolean running(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().running(); }
     public void setRunning(String scopePath, int nodeId, boolean running) { require(scopePath, nodeId).timing().setRunning(running); }
+
+    /** True when the clock's ENABLE pin currently permits virtual time to advance. */
+    public boolean enabled(String scopePath, int nodeId) {
+        ClockAddress address = address(scopePath, nodeId);
+        require(scopePath, nodeId);
+        if (!wiredEnableInputs.contains(address)) return true;
+        LogicValue[] enable = compiled.inputValues(address.scopePath(), address.nodeId(), 0);
+        return enable.length == 1 && enable[0] == LogicValue.HIGH;
+    }
+
+    /** Effective state used by automatic clock execution. */
+    public boolean active(String scopePath, int nodeId) {
+        return running(scopePath, nodeId) && enabled(scopePath, nodeId);
+    }
+
     public long pendingEdges(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().pendingEdges(); }
 
     public long stepEdges(String scopePath, int nodeId, long edges) {
         return stepEdges(scopePath, nodeId, edges, () -> {});
     }
 
+    /** Manual single-step deliberately ignores ENABLE and RUN so debugging always works. */
     public long stepEdges(String scopePath, int nodeId, long edges, Runnable afterSettledEdge) {
         return require(scopePath, nodeId).stepEdges(edges, afterSettledEdge);
     }
@@ -50,8 +72,15 @@ public final class CircuitTimingController {
     }
 
     public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock, Runnable afterSettledEdge) {
+        if (elapsedNanos < 0L) throw new IllegalArgumentException("elapsedNanos must be >= 0");
+        if (edgeBudgetPerClock < 0L) throw new IllegalArgumentException("edgeBudgetPerClock must be >= 0");
         long emitted = 0L;
-        for (TimingSignalDriver clock : clocks.values()) {
+        for (Map.Entry<ClockAddress, TimingSignalDriver> entry : clocks.entrySet()) {
+            ClockAddress address = entry.getKey();
+            TimingSignalDriver clock = entry.getValue();
+            // Skipping the driver entirely is intentional: disabled/paused time must not become future backlog,
+            // and an existing backlog must remain frozen until this clock becomes active again.
+            if (!clock.timing().running() || !enabled(address.scopePath(), address.nodeId())) continue;
             long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, afterSettledEdge);
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
@@ -68,7 +97,9 @@ public final class CircuitTimingController {
                 node.clockFrequencyHz = frequency;
                 Signal signal = compiled.simulator().signalByPath(constantSignalPath(scope, node.id));
                 if (signal == null) throw new IllegalStateException("Compiled CLOCK signal not found: " + scope + "/" + node.id);
-                clocks.put(new ClockAddress(scope, node.id), new TimingSignalDriver(frequency, compiled.simulator(), signal, EDGE_SETTLE_BUDGET));
+                ClockAddress clockAddress = new ClockAddress(scope, node.id);
+                clocks.put(clockAddress, new TimingSignalDriver(frequency, compiled.simulator(), signal, EDGE_SETTLE_BUDGET));
+                if (hasEnableWire(document, node.id)) wiredEnableInputs.add(clockAddress);
             }
 
             if (node.kind != NodeKind.CUSTOM_CHIP) continue;
@@ -80,6 +111,13 @@ public final class CircuitTimingController {
             nestedStack.add(chipName);
             collect(definition.circuit, chips, CompiledCircuit.childScopePath(scope, node.id, chipName), Set.copyOf(nestedStack));
         }
+    }
+
+    private static boolean hasEnableWire(CircuitDocument document, int clockNodeId) {
+        for (WireConnection wire : document.wires) {
+            if (wire.targetNodeId() == clockNodeId && wire.targetPort() == 0) return true;
+        }
+        return false;
     }
 
     private TimingSignalDriver require(String scopePath, int nodeId) {
