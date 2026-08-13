@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import net.minecraft.client.gui.Font;
@@ -14,6 +15,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = CircuitCanvasWidget.class, priority = 1550)
 public abstract class CircuitCanvasLowZoomTitleMixin {
+    @Shadow private CircuitDocument document;
     @Shadow private double zoom;
     @Shadow private int screenX(double x){throw new AssertionError();}
     @Shadow private int screenY(double y){throw new AssertionError();}
@@ -30,9 +32,23 @@ public abstract class CircuitCanvasLowZoomTitleMixin {
         int accent=n.kind==NodeKind.BUS?0xFF4B5662:nodeAccent(n);
         g.fill(x,y,x+w,y+h,n.kind==NodeKind.BUS?0xFF080B0F:0xF0191F26);
         g.outline(x,y,w,h,isNodeSelected(n.id)?0xFFFFFFFF:accent);
-        String title=n.kind==NodeKind.BUS?Integer.toString(n.width):n.kind==NodeKind.CUSTOM_CHIP?n.displayName():switch(n.kind){case NAND->"NAND";case CONSTANT->"CONST";case PROBE->"PROBE";case SPLITTER->"SPLIT "+n.width;case MERGER->"MERGE "+n.width;default->n.displayName();};
+        String title=n.kind==NodeKind.BUS?Integer.toString(n.width):n.kind==NodeKind.CUSTOM_CHIP?n.displayName():switch(n.kind){case NAND->"NAND";case CONSTANT->n.clockSource?"CLK "+EditorNode.formatFrequency(n.clockFrequencyHz):"CONST";case PROBE->"PROBE";case SPLITTER->"SPLIT "+n.width;case MERGER->"MERGE "+n.width;default->n.displayName();};
         logic$text(g,title,x+w/2,y+Math.max(2,h/2-4),Math.max(4,w-4),0xFFF2F5F8);
         ci.cancel();
+    }
+
+    @Inject(method="extractWidgetRenderState",at=@At("TAIL"))
+    private void logic$clockTitleAtNormalZoom(GuiGraphicsExtractor g,int mouseX,int mouseY,float delta,CallbackInfo ci){
+        if(zoom<.70)return;
+        for(EditorNode n:document.nodes){
+            if(n.kind!=NodeKind.CONSTANT||!n.clockSource)continue;
+            int x=screenX(n.x),y=screenY(n.y),w=Math.max(18,(int)Math.round(nodeWidth(n)*zoom));
+            int top=y+Math.max(6,(int)Math.round(7*zoom));
+            int bottom=y+Math.max(18,(int)Math.round(20*zoom));
+            g.fill(x+3,top,x+w-3,bottom,0xFF191F26);
+            String title="CLK "+EditorNode.formatFrequency(n.clockFrequencyHz);
+            logic$text(g,title,x+w/2,top+Math.max(1,(bottom-top-8)/2),Math.max(6,w-8),0xFFF2F5F8);
+        }
     }
 
     @Unique private void logic$text(GuiGraphicsExtractor g,String t,int cx,int y,int max,int color){
