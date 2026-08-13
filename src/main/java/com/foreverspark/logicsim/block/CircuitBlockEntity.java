@@ -1,7 +1,9 @@
 package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.editor.model.PortDirection;
+import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.interconnect.CableRuntime;
+import com.foreverspark.logicsim.interconnect.CircuitPortCatalog;
 import com.foreverspark.logicsim.interconnect.CircuitPortLinks;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
@@ -26,6 +28,16 @@ public final class CircuitBlockEntity extends BlockEntity {
     public boolean isProgrammed() { return runtime != null; }
     public String runtimeError() { return runtimeError; }
     public String programName() { return runtime == null ? "" : runtime.program().root.name; }
+
+    public CircuitPortCatalog portCatalog() {
+        return runtime == null
+                ? new CircuitPortCatalog("", java.util.List.of(), java.util.List.of())
+                : new CircuitPortCatalog(programName(), runtime.inputPorts(), runtime.outputPorts());
+    }
+
+    public PortSpec portSpec(String name, PortDirection direction) {
+        return runtime == null ? null : runtime.port(name, direction);
+    }
 
     public void installProgramJson(String json) {
         if (json == null || json.isBlank()) throw new IllegalArgumentException("Circuit program is empty");
