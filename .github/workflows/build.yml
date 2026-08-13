@@ -26,7 +26,7 @@ jobs:
           gradle-version: '9.5.1'
 
       - name: Build Fabric 26.2 mod
-        run: gradle build selfTest --stacktrace
+        run: gradle build selfTest clientSelfTest --stacktrace
 
       - name: Upload mod jar
         if: success()
