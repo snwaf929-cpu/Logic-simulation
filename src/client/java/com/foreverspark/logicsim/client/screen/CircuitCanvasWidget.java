@@ -1,7 +1,7 @@
 package com.foreverspark.logicsim.client.screen;
 
+import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.core.LogicValue;
-import com.foreverspark.logicsim.editor.model.ChipLookup;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
@@ -11,6 +11,7 @@ import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import com.foreverspark.logicsim.editor.runtime.NodePortKey;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
@@ -22,14 +23,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-/** Freeform circuit canvas. The editor is only a view/controller over the NAND compiler. */
+/** Freeform cubic circuit canvas backed by the real NAND compiler/simulator. */
 public final class CircuitCanvasWidget extends AbstractWidget {
-    private static final double NODE_WIDTH = 126.0;
-    private static final double PORT_START_Y = 31.0;
-    private static final double PORT_STEP = 17.0;
+    private static final double PORT_START_Y = 29.0;
+    private static final double PORT_STEP = 15.0;
     private static final int[] WIDTHS = {1, 2, 4, 8, 16, 32, 64};
 
-    private final ChipLookup chips;
+    private final ClientChipLibrary chips;
     private final Consumer<String> status;
     private final Map<Integer, Long> inputStates = new HashMap<>();
 
@@ -43,8 +43,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     private WireConnection selectedWire;
     private NodePortKey wireStart;
     private Integer draggingNodeId;
-    private boolean panning;
 
+    private boolean panning;
+    private int panButton = -1;
     private double panX = 36.0;
     private double panY = 34.0;
     private double zoom = 1.0;
@@ -55,7 +56,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             int width,
             int height,
             CircuitDocument document,
-            ChipLookup chips,
+            ClientChipLibrary chips,
             Consumer<String> status
     ) {
         super(x, y, width, height, Component.literal("Circuit canvas"));
@@ -79,12 +80,14 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         this.document.normalize();
         inputStates.clear();
         clearSelection();
+        cancelPlacement();
         recompile();
-        resetView();
+        fitView();
     }
 
     public void newDocument() {
         setDocument(new CircuitDocument());
+        resetView();
         status.accept("New empty circuit");
     }
 
@@ -92,7 +95,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         placementKind = kind;
         placementChipName = null;
         wireStart = null;
-        status.accept("Place " + kind.name());
+        status.accept("Place " + kind.name() + " — click anywhere on the canvas");
     }
 
     public void setCustomChipPlacement(String chipName) {
@@ -103,7 +106,13 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         placementKind = NodeKind.CUSTOM_CHIP;
         placementChipName = chipName.trim();
         wireStart = null;
-        status.accept("Place custom chip: " + placementChipName);
+        status.accept("Place " + placementChipName + " — drag its library row onto a folder to organize it");
+    }
+
+    public void cancelPlacement() {
+        placementKind = null;
+        placementChipName = null;
+        wireStart = null;
     }
 
     public void deleteSelection() {
@@ -122,7 +131,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             wireStart = null;
             recompile();
             status.accept("Node " + id + " deleted");
+            return;
         }
+        status.accept("Select a node or wire first");
     }
 
     public void changeSelectedWidth(int direction) {
@@ -143,16 +154,15 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             }
         }
         int next = Math.max(0, Math.min(WIDTHS.length - 1, index + direction));
-        if (WIDTHS[next] == node.width) {
-            return;
-        }
+        if (WIDTHS[next] == node.width) return;
+
         node.width = WIDTHS[next];
         document.removeWiresForNode(node.id);
         inputStates.put(node.id, 0L);
         wireStart = null;
         selectedWire = null;
         recompile();
-        status.accept(node.displayName() + " width = " + node.width + " bit (attached wires cleared)");
+        status.accept(node.displayName() + " width = " + node.width + " bit; attached wires were cleared");
     }
 
     public void resetView() {
@@ -161,38 +171,63 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         zoom = 1.0;
     }
 
+    public void fitView() {
+        if (document.nodes.isEmpty()) {
+            resetView();
+            return;
+        }
+
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        for (EditorNode node : document.nodes) {
+            minX = Math.min(minX, node.x);
+            minY = Math.min(minY, node.y);
+            maxX = Math.max(maxX, node.x + nodeWidth(node));
+            maxY = Math.max(maxY, node.y + nodeHeight(node));
+        }
+
+        double contentW = Math.max(40, maxX - minX);
+        double contentH = Math.max(40, maxY - minY);
+        double zx = Math.max(0.35, (width - 70.0) / contentW);
+        double zy = Math.max(0.35, (height - 70.0) / contentH);
+        zoom = clamp(Math.min(zx, zy), 0.35, 2.1);
+
+        double centerX = (minX + maxX) * 0.5;
+        double centerY = (minY + maxY) * 0.5;
+        panX = width * 0.5 - centerX * zoom;
+        panY = height * 0.5 - centerY * zoom;
+    }
+
     @Override
     protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         int left = getX();
         int top = getY();
-        graphics.fill(left, top, left + width, top + height, 0xF0101114);
-        graphics.outline(left, top, width, height, 0xFF3F444D);
+        graphics.fill(left, top, left + width, top + height, 0xF00D1014);
+        graphics.outline(left, top, width, height, 0xFF343C46);
         drawGrid(graphics);
 
-        for (WireConnection wire : document.wires) {
-            drawWire(graphics, wire);
-        }
+        for (WireConnection wire : document.wires) drawWire(graphics, wire);
         if (wireStart != null) {
-            Point start = outputPortPoint(document.node(wireStart.nodeId()), wireStart.port());
+            EditorNode source = document.node(wireStart.nodeId());
+            Point start = outputPortPoint(source, wireStart.port());
             int sx = screenX(start.x);
             int sy = screenY(start.y);
-            graphics.fill(sx - 5, sy - 5, sx + 6, sy + 6, 0xFFFFFFFF);
+            graphics.outline(sx - 5, sy - 5, 11, 11, 0xFFFFFFFF);
         }
-        for (EditorNode node : document.nodes) {
-            drawNode(graphics, node);
-        }
+        for (EditorNode node : document.nodes) drawNode(graphics, node);
 
-        String mode = placementKind == null ? "SELECT" : "PLACE " + placementKind;
-        graphics.text(nullSafeFont(), mode + "  |  zoom " + Math.round(zoom * 100) + "%", left + 7, top + 7, 0xFF9AA4B2, true);
+        String mode = placementKind == null
+                ? wireStart == null ? "SELECT" : "WIRE"
+                : placementKind == NodeKind.CUSTOM_CHIP ? "PLACE " + placementChipName : "PLACE " + placementKind;
+        graphics.text(font(), mode + "   " + Math.round(zoom * 100) + "%", left + 7, top + 7, 0xFF84909E, false);
+
         if (compileError != null) {
-            graphics.text(nullSafeFont(), "ERROR: " + truncate(compileError, 72), left + 7, top + height - 15, 0xFFFF6B6B, true);
+            graphics.text(font(), "ERROR: " + truncate(compileError, 80), left + 7, top + height - 15, 0xFFFF6B6B, false);
         } else {
-            graphics.text(nullSafeFont(), "Right-click INPUT = toggle 0/all-1 • middle-drag = pan • wheel = zoom", left + 7, top + height - 15, 0xFF7F8A99, true);
+            graphics.text(font(), "Drag empty space = pan  •  wheel = zoom  •  click INPUT switch = 0/1  •  OUT -> IN = wire", left + 7, top + height - 15, 0xFF697583, false);
         }
-    }
-
-    private net.minecraft.client.gui.Font nullSafeFont() {
-        return net.minecraft.client.Minecraft.getInstance().font;
     }
 
     @Override
@@ -200,9 +235,10 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         double mouseX = event.x();
         double mouseY = event.y();
         int button = event.button();
+        if (!contains(mouseX, mouseY)) return;
 
         if (button == 2) {
-            panning = true;
+            beginPan(2);
             return;
         }
 
@@ -215,30 +251,21 @@ public final class CircuitCanvasWidget extends AbstractWidget {
                 status.accept("Wire deleted");
                 return;
             }
-            EditorNode node = nodeAt(mouseX, mouseY);
-            if (node != null && node.kind == NodeKind.INPUT) {
-                toggleInput(node);
+            if (nodeAt(mouseX, mouseY) == null) {
+                beginPan(1);
                 return;
             }
-            wireStart = null;
-            placementKind = null;
-            status.accept("Wire/placement cancelled");
+            cancelPlacement();
+            status.accept("Placement/wire cancelled");
             return;
         }
 
-        if (button != 0) {
-            return;
-        }
+        if (button != 0) return;
 
         if (placementKind != null) {
-            double wx = worldX(mouseX);
-            double wy = worldY(mouseY);
-            EditorNode node;
-            if (placementKind == NodeKind.CUSTOM_CHIP) {
-                node = document.addCustomChip(placementChipName, wx, wy);
-            } else {
-                node = document.addNode(placementKind, wx, wy);
-            }
+            EditorNode node = placementKind == NodeKind.CUSTOM_CHIP
+                    ? document.addCustomChip(placementChipName, worldX(mouseX), worldY(mouseY))
+                    : document.addNode(placementKind, worldX(mouseX), worldY(mouseY));
             selectedNodeId = node.id;
             selectedWire = null;
             placementKind = null;
@@ -253,7 +280,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             wireStart = new NodePortKey(outputHit.node.id, outputHit.port);
             selectedNodeId = outputHit.node.id;
             selectedWire = null;
-            status.accept("Wire started from " + outputHit.node.displayName() + "." + outputHit.spec.name());
+            status.accept("Wire: " + outputHit.spec.width() + "-bit " + outputHit.node.displayName() + "." + outputHit.spec.name() + " -> choose an input");
             return;
         }
 
@@ -264,6 +291,13 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
 
         EditorNode node = nodeAt(mouseX, mouseY);
+        if (node != null && node.kind == NodeKind.INPUT && inputToggleHit(node, mouseX, mouseY)) {
+            selectedNodeId = node.id;
+            selectedWire = null;
+            toggleInput(node);
+            return;
+        }
+
         if (node != null) {
             selectedNodeId = node.id;
             selectedWire = null;
@@ -279,11 +313,12 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
 
         clearSelection();
+        beginPan(0);
     }
 
     @Override
     protected void onDrag(MouseButtonEvent event, double dx, double dy) {
-        if (event.button() == 2 && panning) {
+        if (panning && event.button() == panButton) {
             panX += dx;
             panY += dy;
             return;
@@ -297,22 +332,20 @@ public final class CircuitCanvasWidget extends AbstractWidget {
 
     @Override
     public void onRelease(MouseButtonEvent event) {
-        if (event.button() == 2) {
+        if (panning && event.button() == panButton) {
             panning = false;
+            panButton = -1;
         }
-        if (event.button() == 0) {
-            draggingNodeId = null;
-        }
+        if (event.button() == 0) draggingNodeId = null;
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (!contains(mouseX, mouseY)) {
-            return false;
-        }
+        if (!contains(mouseX, mouseY)) return false;
         double worldXBefore = worldX(mouseX);
         double worldYBefore = worldY(mouseY);
         double amount = scrollY != 0.0 ? scrollY : scrollX;
+        if (amount == 0) return true;
         zoom = clamp(zoom * (amount > 0 ? 1.12 : 1.0 / 1.12), 0.35, 2.5);
         panX = mouseX - getX() - worldXBefore * zoom;
         panY = mouseY - getY() - worldYBefore * zoom;
@@ -321,6 +354,12 @@ public final class CircuitCanvasWidget extends AbstractWidget {
 
     @Override
     protected void updateWidgetNarration(NarrationElementOutput builder) {
+    }
+
+    private void beginPan(int button) {
+        panning = true;
+        panButton = button;
+        draggingNodeId = null;
     }
 
     private void connectWire(PortHit target) {
@@ -334,15 +373,15 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             }
             int sourceWidth = sourcePorts.get(wireStart.port()).width();
             if (sourceWidth != target.spec.width()) {
-                status.accept("WIDTH MISMATCH: " + sourceWidth + "-bit → " + target.spec.width() + "-bit");
+                status.accept("WIDTH MISMATCH: " + sourceWidth + "-bit -> " + target.spec.width() + "-bit. Use Splitter/Merger.");
                 return;
             }
             document.connect(wireStart.nodeId(), wireStart.port(), target.node.id, target.port);
             selectedWire = document.wires.getLast();
             selectedNodeId = null;
-            status.accept("Connected " + sourceWidth + "-bit wire");
             wireStart = null;
             recompile();
+            status.accept("Connected " + sourceWidth + "-bit " + (sourceWidth == 1 ? "wire" : "bus"));
         } catch (RuntimeException exception) {
             status.accept("Cannot connect: " + exception.getMessage());
         }
@@ -385,65 +424,95 @@ public final class CircuitCanvasWidget extends AbstractWidget {
 
     private void drawGrid(GuiGraphicsExtractor graphics) {
         double spacing = 24.0 * zoom;
-        if (spacing < 9.0) {
-            spacing *= 4.0;
-        }
+        if (spacing < 9.0) spacing *= 4.0;
         double startX = getX() + mod(panX, spacing);
         for (double x = startX; x < getX() + width; x += spacing) {
-            graphics.fill((int) x, getY(), (int) x + 1, getY() + height, 0xFF191D22);
+            graphics.fill((int) x, getY(), (int) x + 1, getY() + height, 0xFF171B20);
         }
         double startY = getY() + mod(panY, spacing);
         for (double y = startY; y < getY() + height; y += spacing) {
-            graphics.fill(getX(), (int) y, getX() + width, (int) y + 1, 0xFF191D22);
+            graphics.fill(getX(), (int) y, getX() + width, (int) y + 1, 0xFF171B20);
         }
     }
 
     private void drawNode(GuiGraphicsExtractor graphics, EditorNode node) {
         List<PortSpec> inputs = safeInputs(node);
         List<PortSpec> outputs = safeOutputs(node);
-        double nodeHeight = nodeHeight(node);
         int x = screenX(node.x);
         int y = screenY(node.y);
-        int w = Math.max(48, (int) Math.round(NODE_WIDTH * zoom));
-        int h = Math.max(30, (int) Math.round(nodeHeight * zoom));
-        if (x > getX() + width || y > getY() + height || x + w < getX() || y + h < getY()) {
-            return;
-        }
+        int w = Math.max(34, (int) Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(24, (int) Math.round(nodeHeight(node) * zoom));
+        if (x > getX() + width || y > getY() + height || x + w < getX() || y + h < getY()) return;
 
-        int border = selectedNodeId != null && selectedNodeId == node.id ? 0xFFFFFFFF : valueColor(valueForNode(node));
-        graphics.fill(x, y, x + w, y + h, 0xF0252930);
+        int accent = nodeAccent(node);
+        int border = selectedNodeId != null && selectedNodeId == node.id ? 0xFFFFFFFF : darken(accent, 0.82);
+        graphics.fill(x, y, x + w, y + h, 0xF01B2026);
         graphics.outline(x, y, w, h, border);
-        graphics.fill(x, y, x + w, Math.min(y + h, y + Math.max(13, (int) (22 * zoom))), 0xFF303641);
+        graphics.fill(x, y, x + w, y + Math.max(4, (int) Math.round(5 * zoom)), accent);
 
-        graphics.text(nullSafeFont(), truncate(node.displayName(), 18), x + 5, y + 5, 0xFFFFFFFF, true);
-        String valueText = node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER
-                ? node.width + "-bit"
-                : formatValues(valueForNode(node));
-        graphics.text(nullSafeFont(), valueText, x + 5, y + Math.max(18, (int) (23 * zoom)), valueColor(valueForNode(node)), true);
+        String title = compactTitle(node);
+        graphics.text(font(), truncate(title, node.kind == NodeKind.CUSTOM_CHIP ? 16 : 11), x + 5, y + 8, 0xFFF1F4F7, false);
+
+        if (node.kind == NodeKind.INPUT) {
+            drawInputSwitch(graphics, node, x, y, w, h);
+        } else if (node.kind == NodeKind.OUTPUT) {
+            drawValueBox(graphics, valueForNode(node), x + 5, y + h - Math.max(18, (int) (19 * zoom)), Math.max(30, w - 10), Math.max(13, (int) (14 * zoom)), false);
+        } else if (node.kind == NodeKind.NAND) {
+            String value = formatValues(valueForNode(node));
+            graphics.text(font(), value, x + 5, y + h - 14, valueColor(valueForNode(node)), false);
+        } else if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) {
+            graphics.text(font(), node.width + " bit", x + 5, y + 21, 0xFF8DA0B5, false);
+        } else {
+            graphics.text(font(), formatValues(valueForNode(node)), x + 5, y + 21, valueColor(valueForNode(node)), false);
+        }
 
         for (int port = 0; port < inputs.size(); port++) {
             Point point = inputPortPoint(node, port);
             drawPort(graphics, point, portColor(node, port, true));
-            if (zoom >= 0.72) {
-                graphics.text(nullSafeFont(), truncate(inputs.get(port).name(), 7), screenX(point.x) + 7, screenY(point.y) - 4, 0xFFC5CBD3, false);
+            if (zoom >= 0.78 && shouldShowPortLabel(node, inputs.size())) {
+                graphics.text(font(), truncate(inputs.get(port).name(), 6), screenX(point.x) + 7, screenY(point.y) - 4, 0xFFAAB4C0, false);
             }
         }
         for (int port = 0; port < outputs.size(); port++) {
             Point point = outputPortPoint(node, port);
             drawPort(graphics, point, portColor(node, port, false));
-            if (zoom >= 0.72) {
-                String label = truncate(outputs.get(port).name(), 7);
-                graphics.text(nullSafeFont(), label, screenX(point.x) - 7 - nullSafeFont().width(label), screenY(point.y) - 4, 0xFFC5CBD3, false);
+            if (zoom >= 0.78 && shouldShowPortLabel(node, outputs.size())) {
+                String label = truncate(outputs.get(port).name(), 6);
+                graphics.text(font(), label, screenX(point.x) - 7 - font().width(label), screenY(point.y) - 4, 0xFFAAB4C0, false);
             }
         }
+    }
+
+    private void drawInputSwitch(GuiGraphicsExtractor graphics, EditorNode node, int x, int y, int w, int h) {
+        long value = inputStates.getOrDefault(node.id, 0L);
+        int boxX = x + 5;
+        int boxY = y + h - Math.max(18, (int) Math.round(19 * zoom));
+        int boxW = Math.max(30, w - 10);
+        int boxH = Math.max(13, (int) Math.round(14 * zoom));
+        int col = value == 0L ? 0xFF7D3539 : 0xFF2F8B48;
+        graphics.fill(boxX, boxY, boxX + boxW, boxY + boxH, col);
+        graphics.outline(boxX, boxY, boxW, boxH, value == 0L ? 0xFFB85A5E : 0xFF58C56F);
+        String text = node.width == 1 ? (value == 0L ? "OFF 0" : "ON 1") : formatUnsigned(value, node.width);
+        graphics.text(font(), text, boxX + 4, boxY + 3, 0xFFFFFFFF, false);
+    }
+
+    private void drawValueBox(GuiGraphicsExtractor graphics, LogicValue[] values, int x, int y, int w, int h, boolean interactive) {
+        int col = darken(valueColor(values), 0.55);
+        graphics.fill(x, y, x + w, y + h, col);
+        graphics.outline(x, y, w, h, valueColor(values));
+        graphics.text(font(), formatValues(values), x + 4, y + 3, 0xFFFFFFFF, false);
+    }
+
+    private boolean shouldShowPortLabel(EditorNode node, int portCount) {
+        return portCount <= 16 && node.kind != NodeKind.INPUT && node.kind != NodeKind.OUTPUT;
     }
 
     private void drawPort(GuiGraphicsExtractor graphics, Point point, int color) {
         int x = screenX(point.x);
         int y = screenY(point.y);
-        int r = Math.max(3, (int) Math.round(4 * zoom));
+        int r = Math.max(3, (int) Math.round(3.5 * zoom));
         graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
-        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF111111);
+        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
     }
 
     private void drawWire(GuiGraphicsExtractor graphics, WireConnection wire) {
@@ -455,9 +524,8 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         } catch (RuntimeException ignored) {
             return;
         }
-        if (wire.sourcePort() >= safeOutputs(source).size() || wire.targetPort() >= safeInputs(target).size()) {
-            return;
-        }
+        if (wire.sourcePort() >= safeOutputs(source).size() || wire.targetPort() >= safeInputs(target).size()) return;
+
         Point start = outputPortPoint(source, wire.sourcePort());
         Point end = inputPortPoint(target, wire.targetPort());
         int x1 = screenX(start.x);
@@ -473,14 +541,30 @@ public final class CircuitCanvasWidget extends AbstractWidget {
 
         int busWidth = safeOutputs(source).get(wire.sourcePort()).width();
         if (busWidth > 1) {
-            graphics.text(nullSafeFont(), "[" + busWidth + "]", midX + 3, (y1 + y2) / 2 - 5, 0xFF8DB7FF, true);
+            graphics.fill(midX + 2, (y1 + y2) / 2 - 7, midX + 25, (y1 + y2) / 2 + 5, 0xFF11161C);
+            graphics.text(font(), "[" + busWidth + "]", midX + 4, (y1 + y2) / 2 - 5, 0xFF8DB7FF, false);
         }
     }
 
+    private int nodeAccent(EditorNode node) {
+        return switch (node.kind) {
+            case INPUT -> 0xFF4C86D9;
+            case OUTPUT -> 0xFF7B68D9;
+            case NAND -> 0xFF65717F;
+            case SPLITTER, MERGER -> 0xFF4FA6A0;
+            case CUSTOM_CHIP -> chips.chipColor(node.chipName);
+        };
+    }
+
+    private String compactTitle(EditorNode node) {
+        if (node.kind == NodeKind.INPUT) return node.label == null || node.label.isBlank() ? "INPUT" : node.label;
+        if (node.kind == NodeKind.OUTPUT) return node.label == null || node.label.isBlank() ? "OUTPUT" : node.label;
+        if (node.kind == NodeKind.NAND) return "NAND";
+        return node.displayName();
+    }
+
     private int portColor(EditorNode node, int port, boolean input) {
-        if (runtime == null) {
-            return 0xFF777777;
-        }
+        if (runtime == null) return 0xFF777777;
         try {
             LogicValue[] values = input ? runtime.inputValues(node.id, port) : runtime.outputValues(node.id, port);
             return valueColor(values);
@@ -490,9 +574,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     }
 
     private int wireColor(WireConnection wire) {
-        if (runtime == null) {
-            return 0xFF6B7280;
-        }
+        if (runtime == null) return 0xFF6B7280;
         try {
             return valueColor(runtime.outputValues(wire.sourceNodeId(), wire.sourcePort()));
         } catch (RuntimeException ignored) {
@@ -501,9 +583,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     }
 
     private LogicValue[] valueForNode(EditorNode node) {
-        if (runtime == null) {
-            return new LogicValue[]{LogicValue.UNKNOWN};
-        }
+        if (runtime == null) return new LogicValue[]{LogicValue.UNKNOWN};
         try {
             return switch (node.kind) {
                 case INPUT, NAND, MERGER -> runtime.outputValues(node.id, 0);
@@ -517,14 +597,21 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
     }
 
+    private boolean inputToggleHit(EditorNode node, double mouseX, double mouseY) {
+        int x = screenX(node.x);
+        int y = screenY(node.y);
+        int w = Math.max(34, (int) Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(24, (int) Math.round(nodeHeight(node) * zoom));
+        int boxY = y + h - Math.max(18, (int) Math.round(19 * zoom));
+        return mouseX >= x + 4 && mouseX <= x + w - 4 && mouseY >= boxY - 2 && mouseY <= y + h - 2;
+    }
+
     private PortHit outputPortAt(double mouseX, double mouseY) {
         for (int n = document.nodes.size() - 1; n >= 0; n--) {
             EditorNode node = document.nodes.get(n);
             List<PortSpec> ports = safeOutputs(node);
             for (int port = 0; port < ports.size(); port++) {
-                if (near(mouseX, mouseY, outputPortPoint(node, port), 8.0)) {
-                    return new PortHit(node, port, ports.get(port));
-                }
+                if (near(mouseX, mouseY, outputPortPoint(node, port), 8.0)) return new PortHit(node, port, ports.get(port));
             }
         }
         return null;
@@ -535,9 +622,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             EditorNode node = document.nodes.get(n);
             List<PortSpec> ports = safeInputs(node);
             for (int port = 0; port < ports.size(); port++) {
-                if (near(mouseX, mouseY, inputPortPoint(node, port), 8.0)) {
-                    return new PortHit(node, port, ports.get(port));
-                }
+                if (near(mouseX, mouseY, inputPortPoint(node, port), 8.0)) return new PortHit(node, port, ports.get(port));
             }
         }
         return null;
@@ -548,11 +633,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             EditorNode node = document.nodes.get(n);
             double x = screenX(node.x);
             double y = screenY(node.y);
-            double w = NODE_WIDTH * zoom;
+            double w = nodeWidth(node) * zoom;
             double h = nodeHeight(node) * zoom;
-            if (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h) {
-                return node;
-            }
+            if (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h) return node;
         }
         return null;
     }
@@ -563,9 +646,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             try {
                 EditorNode source = document.node(wire.sourceNodeId());
                 EditorNode target = document.node(wire.targetNodeId());
-                if (wire.sourcePort() >= safeOutputs(source).size() || wire.targetPort() >= safeInputs(target).size()) {
-                    continue;
-                }
+                if (wire.sourcePort() >= safeOutputs(source).size() || wire.targetPort() >= safeInputs(target).size()) continue;
                 Point start = outputPortPoint(source, wire.sourcePort());
                 Point end = inputPortPoint(target, wire.targetPort());
                 double x1 = screenX(start.x);
@@ -575,9 +656,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
                 double midX = (x1 + x2) / 2.0;
                 if (distanceToSegment(mouseX, mouseY, x1, y1, midX, y1) <= 6.0
                         || distanceToSegment(mouseX, mouseY, midX, y1, midX, y2) <= 6.0
-                        || distanceToSegment(mouseX, mouseY, midX, y2, x2, y2) <= 6.0) {
-                    return wire;
-                }
+                        || distanceToSegment(mouseX, mouseY, midX, y2, x2, y2) <= 6.0) return wire;
             } catch (RuntimeException ignored) {
             }
         }
@@ -600,17 +679,36 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
     }
 
+    private double nodeWidth(EditorNode node) {
+        return switch (node.kind) {
+            case INPUT, OUTPUT -> 72.0;
+            case NAND -> 78.0;
+            case SPLITTER, MERGER -> 102.0;
+            case CUSTOM_CHIP -> 108.0;
+        };
+    }
+
     private double nodeHeight(EditorNode node) {
+        if (node.kind == NodeKind.INPUT || node.kind == NodeKind.OUTPUT) return 43.0;
         int count = Math.max(safeInputs(node).size(), safeOutputs(node).size());
-        return Math.max(58.0, PORT_START_Y + Math.max(1, count) * PORT_STEP + 8.0);
+        if (node.kind == NodeKind.NAND) return 55.0;
+        return Math.max(48.0, PORT_START_Y + Math.max(1, count) * PORT_STEP + 8.0);
     }
 
     private Point inputPortPoint(EditorNode node, int port) {
-        return new Point(node.x, node.y + PORT_START_Y + port * PORT_STEP);
+        double y = switch (node.kind) {
+            case OUTPUT, SPLITTER -> node.y + nodeHeight(node) * 0.5;
+            default -> node.y + PORT_START_Y + port * PORT_STEP;
+        };
+        return new Point(node.x, y);
     }
 
     private Point outputPortPoint(EditorNode node, int port) {
-        return new Point(node.x + NODE_WIDTH, node.y + PORT_START_Y + port * PORT_STEP);
+        double y = switch (node.kind) {
+            case INPUT, NAND, MERGER -> node.y + nodeHeight(node) * 0.5;
+            default -> node.y + PORT_START_Y + port * PORT_STEP;
+        };
+        return new Point(node.x + nodeWidth(node), y);
     }
 
     private boolean near(double screenMouseX, double screenMouseY, Point worldPoint, double radius) {
@@ -639,26 +737,35 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         return (screenY - getY() - panY) / zoom;
     }
 
+    private net.minecraft.client.gui.Font font() {
+        return Minecraft.getInstance().font;
+    }
+
     private static int valueColor(LogicValue[] values) {
-        if (values == null || values.length == 0) {
-            return 0xFF777777;
-        }
-        boolean anyUnknown = false;
-        boolean anyHigh = false;
-        boolean anyLow = false;
+        if (values == null || values.length == 0) return 0xFF777777;
+        boolean unknown = false;
+        boolean high = false;
+        boolean low = false;
         for (LogicValue value : values) {
-            if (value == LogicValue.UNKNOWN) anyUnknown = true;
-            if (value == LogicValue.HIGH) anyHigh = true;
-            if (value == LogicValue.LOW) anyLow = true;
+            if (value == LogicValue.UNKNOWN) unknown = true;
+            if (value == LogicValue.HIGH) high = true;
+            if (value == LogicValue.LOW) low = true;
         }
-        if (anyUnknown) return 0xFFFFC857;
-        if (anyHigh && anyLow) return 0xFF5AA9FF;
-        if (anyHigh) return 0xFF55D96B;
+        if (unknown) return 0xFFFFC857;
+        if (high && low) return 0xFF5AA9FF;
+        if (high) return 0xFF55D96B;
         return 0xFFE05252;
     }
 
+    private static int darken(int color, double factor) {
+        int r = (int) (((color >>> 16) & 0xFF) * factor);
+        int g = (int) (((color >>> 8) & 0xFF) * factor);
+        int b = (int) ((color & 0xFF) * factor);
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
     private static String formatValues(LogicValue[] values) {
-        if (values == null || values.length == 0) return "—";
+        if (values == null || values.length == 0) return "-";
         for (LogicValue value : values) {
             if (value == LogicValue.UNKNOWN) return values.length == 1 ? "X" : "X[" + values.length + "]";
         }
@@ -709,8 +816,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
 
     private static String truncate(String value, int max) {
         if (value == null) return "";
-        if (value.length() <= max) return value;
-        return value.substring(0, Math.max(0, max - 1)) + "…";
+        return value.length() <= max ? value : value.substring(0, Math.max(0, max - 1)) + "…";
     }
 
     private record Point(double x, double y) {
