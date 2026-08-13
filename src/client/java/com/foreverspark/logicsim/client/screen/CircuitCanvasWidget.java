@@ -129,6 +129,40 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         return runtimeScopePath;
     }
 
+    /** Metadata for F2 when an exposed INPUT/OUTPUT node is selected. */
+    public IoSelection selectedIoSelection() {
+        if (selectedNodeId == null) return null;
+        try {
+            EditorNode node = document.node(selectedNodeId);
+            if (node.kind != NodeKind.INPUT && node.kind != NodeKind.OUTPUT) return null;
+            return new IoSelection(
+                    node.id,
+                    node.kind,
+                    node.label == null ? "" : node.label,
+                    node.width
+            );
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /** Rename an exposed reusable chip pin. Logic is still connected by node/port index, not by this label. */
+    public boolean renameSelectedIo(String newLabel) {
+        IoSelection selection = selectedIoSelection();
+        if (selection == null) return false;
+        String normalized = newLabel == null ? "" : newLabel.trim();
+        if (normalized.length() > 32) {
+            throw new IllegalArgumentException("Port name is too long (max 32)");
+        }
+        EditorNode node = document.node(selection.nodeId());
+        node.label = normalized;
+        recompile();
+        String fallback = node.kind == NodeKind.INPUT ? "automatic IN#" : "automatic OUT#";
+        status.accept((node.kind == NodeKind.INPUT ? "Input" : "Output") + " pin name = "
+                + (normalized.isBlank() ? fallback : normalized) + " — Ctrl+S saves it into the chip");
+        return true;
+    }
+
     public boolean isNestedView() {
         return !navigationStack.isEmpty();
     }
@@ -514,12 +548,13 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         if (wireEditMode && selectedWire != null) {
             drawRouteHandles(graphics, selectedWire);
         }
+        drawPortHoverTooltip(graphics, mouseX, mouseY);
 
         String mode = placementKind == null
                 ? wireStart == null ? wireEditMode ? "WIRE EDIT" : isNestedView() ? "LIVE INSPECT" : "SELECT" : "WIRE"
                 : placementKind == NodeKind.CUSTOM_CHIP ? "PLACE " + placementChipName : "PLACE " + placementKind;
         graphics.text(font(), mode + "   " + Math.round(zoom * 100) + "%", left + 8, top + 8, isNestedView() ? 0xFF63C8FF : wireEditMode ? 0xFF79C4FF : 0xFF84909E, false);
-        graphics.text(font(), "RMB/MMB drag: pan   DblClick chip: inspect   Ctrl+D/C/V   +: wire point", left + 8, top + height - 15, 0xFF5F6B78, false);
+        graphics.text(font(), "RMB/MMB drag: pan   F2: name I/O   DblClick chip: inspect   Ctrl+D/C/V", left + 8, top + height - 15, 0xFF5F6B78, false);
     }
 
     @Override
@@ -535,7 +570,6 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         int button = event.button();
         if (!contains(mouseX, mouseY)) return;
 
-        // Right and middle mouse navigation now work because isValidClickButton accepts them.
         if (button == 1 || button == 2) {
             beginPan(button);
             return;
@@ -623,6 +657,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             draggingNodeId = node.id;
             nodeDragDistance = 0.0;
             nodeActuallyMoved = false;
+            if (node.kind == NodeKind.INPUT || node.kind == NodeKind.OUTPUT) {
+                status.accept("Selected " + node.displayName() + " — press F2 to name this reusable chip pin");
+            }
             return;
         }
 
@@ -944,6 +981,30 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         int r = Math.max(3, (int) Math.round((wiringTarget ? 4.2 : 3.5) * zoom));
         graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
         graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
+    }
+
+    /** Show the full saved pin name on hover, even when the inline label is truncated/hidden. */
+    private void drawPortHoverTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        PortHit hit = inputPortAt(mouseX, mouseY);
+        boolean input = true;
+        if (hit == null) {
+            hit = outputPortAt(mouseX, mouseY);
+            input = false;
+        }
+        if (hit == null) return;
+
+        String name = hit.spec.name() == null || hit.spec.name().isBlank() ? (input ? "INPUT" : "OUTPUT") : hit.spec.name();
+        String text = name + "   " + (input ? "IN" : "OUT") + "   [" + hit.spec.width() + " bit]";
+        int padding = 5;
+        int boxW = font().width(text) + padding * 2;
+        int boxH = 17;
+        int x = Math.min(mouseX + 12, getX() + width - boxW - 3);
+        int y = Math.min(mouseY + 10, getY() + height - boxH - 3);
+        x = Math.max(getX() + 3, x);
+        y = Math.max(getY() + 3, y);
+        graphics.fill(x, y, x + boxW, y + boxH, 0xF0181D23);
+        graphics.outline(x, y, boxW, boxH, 0xFF586879);
+        graphics.text(font(), text, x + padding, y + 5, 0xFFE8EDF3, false);
     }
 
     private void drawWire(GuiGraphicsExtractor graphics, WireConnection wire) {
@@ -1562,6 +1623,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     }
 
     public record NavigationState(String currentChipName, String breadcrumb, int depth, boolean liveRuntime) {
+    }
+
+    public record IoSelection(int nodeId, NodeKind kind, String label, int width) {
     }
 
     private record ViewFrame(
