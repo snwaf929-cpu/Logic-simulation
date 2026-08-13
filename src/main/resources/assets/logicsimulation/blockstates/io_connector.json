@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "logicsimulation:block/io_connector"
+    }
+  }
+}

@@ -76,7 +76,7 @@ public abstract class CircuitCanvasRoutingWidthMixin {
         logic$beforePlacement = placementKind;
     }
 
-    @Inject(method = "onClick", at = @At("TAIL"))
+    @Inject(method = "onClick", at = @At("RETURN"))
     private void logic$afterClick(MouseButtonEvent event, boolean doubleClick, CallbackInfo ci) {
         NodeKind before = logic$beforePlacement;
         logic$beforePlacement = null;
