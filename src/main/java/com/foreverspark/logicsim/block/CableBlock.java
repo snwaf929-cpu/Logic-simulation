@@ -59,8 +59,7 @@ public final class CableBlock extends Block {
         return state;
     }
 
-    @Override
-    protected BlockState updateShape(BlockState state, Direction direction, BlockState neighborState, LevelAccessor level, BlockPos pos, BlockPos neighborPos) {
+    protected BlockState updateShapeLegacy(BlockState state, Direction direction, BlockState neighborState, LevelAccessor level, BlockPos pos, BlockPos neighborPos) {
         return state.setValue(property(direction), connectsTo(level, pos, direction, neighborState));
     }
 
@@ -77,6 +76,14 @@ public final class CableBlock extends Block {
     @Override
     protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
         return getShape(state, level, pos, context);
+    }
+
+    public boolean connectsVisually(BlockGetter level, BlockPos pos, Direction direction, BlockState neighborState) {
+        return connectsTo(level, pos, direction, neighborState);
+    }
+
+    public static Property<Boolean> connectionProperty(Direction direction) {
+        return property(direction);
     }
 
     private boolean connectsTo(BlockGetter level, BlockPos pos, Direction direction) {
