@@ -6,7 +6,13 @@
   "client": [
     "CircuitCanvasBranchMixin",
     "CircuitCanvasCompactGeometryMixin",
-    "CircuitCanvasCompactRenderMixin"
+    "CircuitCanvasCompactRenderMixin",
+    "CircuitCanvasRoutingWidthMixin",
+    "CircuitCanvasTerminalInteractionMixin",
+    "CircuitCanvasTerminalRenderMixin",
+    "CircuitCanvasCustomChipTextMixin",
+    "CircuitCanvasLowZoomTitleMixin",
+    "CircuitCanvasBusWireTextMixin"
   ],
   "injectors": {"defaultRequire": 1}
 }
