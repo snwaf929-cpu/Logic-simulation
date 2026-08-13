@@ -26,6 +26,7 @@ public final class ClockSignalChecks {
         driver.stepEdges(1L);
         require(clock.value() == LogicValue.LOW, "second edge drives clock low");
         require(inverted.value() == LogicValue.HIGH, "NAND settles after falling edge");
+        TimingIntegrationCheck.main(args);
         System.out.println("Virtual clock signal self-test: PASS");
     }
 

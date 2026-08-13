@@ -22,11 +22,27 @@ public final class TimingSignalDriver {
     public Signal signal() { return signal; }
 
     public long advanceNanos(long elapsedNanos, long edgeBudget) {
-        return timing.advanceNanos(elapsedNanos, edgeBudget, this::driveLevel);
+        return advanceNanos(elapsedNanos, edgeBudget, () -> {});
+    }
+
+    public long advanceNanos(long elapsedNanos, long edgeBudget, Runnable afterSettledEdge) {
+        Runnable callback = afterSettledEdge == null ? () -> {} : afterSettledEdge;
+        return timing.advanceNanos(elapsedNanos, edgeBudget, high -> {
+            driveLevel(high);
+            callback.run();
+        });
     }
 
     public long stepEdges(long edges) {
-        return timing.stepEdges(edges, this::driveLevel);
+        return stepEdges(edges, () -> {});
+    }
+
+    public long stepEdges(long edges, Runnable afterSettledEdge) {
+        Runnable callback = afterSettledEdge == null ? () -> {} : afterSettledEdge;
+        return timing.stepEdges(edges, high -> {
+            driveLevel(high);
+            callback.run();
+        });
     }
 
     private void driveLevel(boolean high) {

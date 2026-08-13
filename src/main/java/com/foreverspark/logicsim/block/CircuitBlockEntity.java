@@ -9,6 +9,7 @@ import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
@@ -16,13 +17,33 @@ import net.minecraft.world.level.storage.ValueOutput;
 
 public final class CircuitBlockEntity extends BlockEntity {
     private static final int MAX_PROGRAM_JSON = 2_000_000;
+    private static final long CLOCK_EDGE_BUDGET_PER_TICK = 5_000L;
 
     private String programJson = "";
     private CircuitProgramRuntime runtime;
     private String runtimeError = "";
+    private long lastClockNanos;
 
     public CircuitBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.CIRCUIT, pos, state);
+    }
+
+    public static void tick(Level level, BlockPos pos, BlockState state, CircuitBlockEntity circuit) {
+        if (level.isClientSide()) return;
+        long now = System.nanoTime();
+        if (circuit.lastClockNanos == 0L) {
+            circuit.lastClockNanos = now;
+            return;
+        }
+        long elapsed = Math.max(0L, now - circuit.lastClockNanos);
+        circuit.lastClockNanos = now;
+        if (circuit.runtime == null || elapsed == 0L) return;
+        try {
+            circuit.runtime.advanceClocksNanos(elapsed, CLOCK_EDGE_BUDGET_PER_TICK, circuit::publishOutputs);
+            circuit.runtimeError = "";
+        } catch (RuntimeException error) {
+            circuit.runtimeError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        }
     }
 
     public boolean isProgrammed() { return runtime != null; }
@@ -47,6 +68,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         this.programJson = parsed.toJson();
         this.runtime = compiled;
         this.runtimeError = "";
+        this.lastClockNanos = System.nanoTime();
         setChanged();
         publishOutputs();
     }
@@ -80,7 +102,8 @@ public final class CircuitBlockEntity extends BlockEntity {
             BlockPos cablePos = socket.getBlockPos().relative(direction);
             BlockState state = level.getBlockState(cablePos);
             if (state.getBlock() instanceof CableBlock cable && socket.accepts(cable)) {
-                CableRuntime.setValue(level, cablePos, value);
+                long normalized = cable.bitWidth() >= 64 ? value : value & ((1L << cable.bitWidth()) - 1L);
+                if (CableRuntime.value(level, cablePos) != normalized) CableRuntime.setValue(level, cablePos, normalized);
             }
         }
     }
@@ -104,6 +127,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         programJson = input.getStringOr("program", "");
         runtime = null;
         runtimeError = "";
+        lastClockNanos = 0L;
         if (programJson.isBlank()) return;
         try {
             runtime = new CircuitProgramRuntime(CircuitProgram.fromJson(programJson));

@@ -37,6 +37,15 @@ public final class CircuitSimulator {
         return updateSignal(signal, value);
     }
 
+    /** Finds a compiled signal by its stable hierarchy path. */
+    public Signal signalByPath(String path) {
+        if (path == null) return null;
+        for (Signal signal : circuit.signals()) {
+            if (path.equals(signal.path())) return signal;
+        }
+        return null;
+    }
+
     public long runUntilStable(long maxGateEvaluations) {
         if (maxGateEvaluations <= 0) {
             throw new IllegalArgumentException("maxGateEvaluations must be > 0");

@@ -13,7 +13,9 @@
     "CircuitCanvasCustomChipTextMixin",
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
-    "CircuitEditorProgramMixin"
+    "CircuitEditorProgramMixin",
+    "ComponentLibraryClockMixin",
+    "CanvasAccess"
   ],
   "injectors": {"defaultRequire": 1}
 }

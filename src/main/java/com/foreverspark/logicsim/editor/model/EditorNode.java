@@ -9,6 +9,9 @@ public final class EditorNode {
     public String label = "";
     public String chipName = "";
     public long constantValue = 0L;
+    /** Infrastructure source subtype: CONSTANT=false, virtual CLOCK=true. */
+    public boolean clockSource = false;
+    public long clockFrequencyHz = 1_000_000L;
 
     public EditorNode() {}
 
@@ -22,6 +25,7 @@ public final class EditorNode {
 
     public String displayName() {
         if (kind == NodeKind.CUSTOM_CHIP && chipName != null && !chipName.isBlank()) return chipName;
+        if (clockSource && kind == NodeKind.CONSTANT) return "CLOCK " + formatFrequency(clockFrequencyHz);
         if (label != null && !label.isBlank()) return label;
         return switch (kind) {
             case INPUT -> "INPUT " + id;
@@ -34,5 +38,11 @@ public final class EditorNode {
             case MERGER -> "MERGER " + width;
             case CUSTOM_CHIP -> "CUSTOM CHIP";
         };
+    }
+
+    public static String formatFrequency(long hz) {
+        if (hz >= 1_000_000L && hz % 1_000_000L == 0L) return (hz / 1_000_000L) + " MHz";
+        if (hz >= 1_000L && hz % 1_000L == 0L) return (hz / 1_000L) + " kHz";
+        return hz + " Hz";
     }
 }
