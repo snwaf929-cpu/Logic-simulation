@@ -7,6 +7,7 @@ import com.foreverspark.logicsim.editor.model.ChipLookup;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.model.WireConnection;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -21,6 +22,7 @@ public final class CircuitTimingController {
 
     private final CompiledCircuit compiled;
     private final Map<ClockAddress, TimingSignalDriver> clocks = new LinkedHashMap<>();
+    private final Set<ClockAddress> wiredEnableInputs = new LinkedHashSet<>();
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
@@ -68,7 +70,9 @@ public final class CircuitTimingController {
                 node.clockFrequencyHz = frequency;
                 Signal signal = compiled.simulator().signalByPath(constantSignalPath(scope, node.id));
                 if (signal == null) throw new IllegalStateException("Compiled CLOCK signal not found: " + scope + "/" + node.id);
-                clocks.put(new ClockAddress(scope, node.id), new TimingSignalDriver(frequency, compiled.simulator(), signal, EDGE_SETTLE_BUDGET));
+                ClockAddress clockAddress = new ClockAddress(scope, node.id);
+                clocks.put(clockAddress, new TimingSignalDriver(frequency, compiled.simulator(), signal, EDGE_SETTLE_BUDGET));
+                if (hasEnableWire(document, node.id)) wiredEnableInputs.add(clockAddress);
             }
 
             if (node.kind != NodeKind.CUSTOM_CHIP) continue;
@@ -80,6 +84,13 @@ public final class CircuitTimingController {
             nestedStack.add(chipName);
             collect(definition.circuit, chips, CompiledCircuit.childScopePath(scope, node.id, chipName), Set.copyOf(nestedStack));
         }
+    }
+
+    private static boolean hasEnableWire(CircuitDocument document, int clockNodeId) {
+        for (WireConnection wire : document.wires) {
+            if (wire.targetNodeId() == clockNodeId && wire.targetPort() == 0) return true;
+        }
+        return false;
     }
 
     private TimingSignalDriver require(String scopePath, int nodeId) {
