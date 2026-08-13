@@ -25,6 +25,7 @@ Navigation is separated from editing so panning cannot accidentally drag a chip.
 
 - **Right-drag** — pan the circuit canvas.
 - **Middle-drag** — alternate pan control.
+- The editor forwards RMB/MMB drag/release directly to the canvas because Minecraft 26.2's normal container child-drag route is primary-button-only.
 - **Mouse wheel** — zoom around the cursor from 35% to 250%.
 - **Left-click / left-drag** — select and move nodes only.
 - A small movement threshold prevents hand jitter from moving a selected node.
@@ -35,7 +36,9 @@ Navigation is separated from editing so panning cannot accidentally drag a chip.
 - Duplicate/copy-paste intentionally copy the component itself, not its attached wires.
 - **Del / Backspace** — delete the selected node or wire.
 - Deleting a node that has attached wires opens a confirmation modal showing how many connections will also be removed.
-- **F2** — rename/recolor the selected saved chip or folder in the library.
+- **F2 on a selected INPUT/OUTPUT** — name that reusable chip pin.
+- **F2 on a selected saved chip/folder in the library** — rename/recolor that library item.
+- While the circuit editor is open, a vanilla screenshot binding on F2 is temporarily suppressed so F2 belongs to the editor. The exact screenshot binding is restored when the editor closes; the user's Options file is not rewritten.
 - **E** — enter/leave route-edit mode for the selected wire.
 - **+** — add a route point to the selected wire; use keypad `+` or `Shift+=`.
 - **Alt+Left** or the toolbar Back icon — leave one nested chip level.
@@ -43,9 +46,22 @@ Navigation is separated from editing so panning cannot accidentally drag a chip.
 
 The top toolbar uses compact drawn icons. Action/error feedback lives in a dedicated **bottom status bar**.
 
+### Named INPUT/OUTPUT pins
+
+Exposed chip pins now have user-defined names rather than being limited to automatic `IN0`, `IN1`, `OUT0`, etc.
+
+1. Select an `INPUT` or `OUTPUT` node inside the chip definition.
+2. Press **F2**.
+3. Enter a name such as `A`, `B`, `CARRY_IN`, `RESULT`, `ZERO_FLAG`, or `ADDRESS`.
+4. Save the chip with **Ctrl+S**.
+
+The node label is stored in the circuit definition and becomes the port name exposed by every instance of that reusable chip. Hovering an input/output pin on the canvas shows a compact tooltip with the **full saved name**, direction, and bit width even when the inline label is hidden or truncated.
+
+Leaving the name blank falls back to automatic `IN#` / `OUT#` names.
+
 ### Live hierarchical chip inspection
 
-Custom chips can now be drilled into like a real hierarchical digital-logic debugger.
+Custom chips can be drilled into like a real hierarchical digital-logic debugger.
 
 Example:
 
@@ -117,7 +133,15 @@ Controls:
 - Left-click a saved chip once to place an instance.
 - Double-click/right-click a saved chip to open its definition for editing.
 
-Folder/color organization is stored in `config/logic-simulation/library.json`. Circuit files remain under `config/logic-simulation/chips/` as `.logicchip.json` files.
+Folder/color persistence is deliberately redundant now:
+
+- `config/logic-simulation/library.json` remains the library index.
+- Every `.logicchip.json` also stores its own `color` and `folder` metadata as a recovery source.
+- Loading happens in the safe order **layout → chip cache → reconciliation**. The editor no longer normalizes an empty chip cache and accidentally discards valid color/folder metadata on startup.
+- Changing a chip color, moving it to another folder, renaming a folder, or deleting a folder updates both the library index and affected chip metadata.
+- Saving an existing chip preserves its current folder. A new chip uses the selected folder when one is selected; otherwise it goes to OTHER.
+
+Circuit files remain physically under `config/logic-simulation/chips/` for backwards compatibility; library folder membership is persistent organizational metadata rather than OS subdirectories.
 
 ### Save Chip modal and reusable body layout
 
@@ -128,6 +152,8 @@ Folder/color organization is stored in `config/logic-simulation/library.json`. C
 - reusable body width,
 - reusable minimum body height,
 - spacing between exposed input/output pins.
+
+The selected chip color is written into the chip definition as well as the library index, so reopening/reloading the library cannot silently revert a properly saved color to gray.
 
 This means a chip with two inputs can intentionally be made taller so the two pins have more visual separation. Saved dimensions are used when that custom chip is placed inside another circuit.
 
@@ -172,10 +198,11 @@ The repository currently contains:
 5. Freeform circuit compiler with width validation.
 6. Recursive custom-chip flattening to NAND.
 7. Per-instance hierarchical runtime scopes for live internal inspection.
-8. Persistent presentation-only orthogonal wire routes.
-9. Persistent custom-chip visual dimensions/pin spacing.
-10. Ring-buffer trace recorder.
-11. Self-tests for NAND logic, buses, Split/Merge, custom chips, live hierarchy scopes, width mismatches, route/logic separation, chip visual bounds, and world interconnect validation.
+8. Named reusable input/output ports.
+9. Persistent presentation-only orthogonal wire routes.
+10. Persistent custom-chip visual dimensions/pin spacing/color/folder metadata.
+11. Ring-buffer trace recorder.
+12. Self-tests for NAND logic, buses, Split/Merge, custom chips, live hierarchy scopes, named ports, presentation metadata, width mismatches, route/logic separation, chip visual bounds, and world interconnect validation.
 
 ## World interconnect foundation
 
