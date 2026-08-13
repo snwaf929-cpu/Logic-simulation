@@ -4,6 +4,7 @@ import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
@@ -137,7 +138,6 @@ public final class CircuitEditorScreen extends Screen {
             componentLibrary.selectChip(currentChipName);
         }
 
-        // Keep the hierarchy breadcrumb readable by anchoring the tool group to the right.
         toolbarStartX = Math.max(154, this.width - TOOLBAR_RESERVED_WIDTH);
         int x = toolbarStartX;
         x = addToolbarButton(x, EditorIconButton.Icon.BACK, 0xFF63A9D8, "Back one chip level  Alt+Left", canvas::navigateBack);
@@ -237,9 +237,16 @@ public final class CircuitEditorScreen extends Screen {
         setEditorEnabled(false);
     }
 
-    /** F2 edits a selected INPUT/OUTPUT first; otherwise it edits the selected library item. */
+    /**
+     * F2 belongs to whichever editor surface the user most recently interacted with: canvas I/O
+     * or library item. This prevents a stale canvas selection from hijacking an F2 library rename.
+     */
     private void openF2EditModal() {
         if (modalMode != ModalMode.NONE) return;
+        if (this.getFocused() == componentLibrary) {
+            openLibraryEditModal();
+            return;
+        }
         CircuitCanvasWidget.IoSelection io = canvas.selectedIoSelection();
         if (io != null) {
             openIoEditModal(io);
@@ -357,7 +364,6 @@ public final class CircuitEditorScreen extends Screen {
 
         CircuitCompiler.compile(canvas.document(), library);
 
-        // Existing chips keep their folder. New chips inherit the currently selected folder (or OTHER).
         String targetFolder;
         if (currentChipName != null && library.exists(currentChipName)) {
             targetFolder = library.folderOf(currentChipName);
@@ -659,7 +665,7 @@ public final class CircuitEditorScreen extends Screen {
             graphics.text(this.font, libraryEditKind == LibraryEditKind.CHIP ? "CHIP COLOR" : "FOLDER COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
         } else if (modalMode == ModalMode.EDIT_IO) {
             graphics.text(this.font, "PORT NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
-            String kind = pendingIo != null && pendingIo.kind().name().equals("OUTPUT") ? "output" : "input";
+            String kind = pendingIo != null && pendingIo.kind() == NodeKind.OUTPUT ? "output" : "input";
             graphics.text(this.font, "This becomes the reusable chip " + kind + " pin name and appears when that pin is hovered.", modalX + 20, modalY + 83, 0xFF7F8B98, false);
             graphics.text(this.font, "Leave it blank to use the automatic IN#/OUT# name.", modalX + 20, modalY + 102, 0xFF65717E, false);
         } else if (modalMode == ModalMode.CONFIRM_DELETE) {
@@ -686,7 +692,7 @@ public final class CircuitEditorScreen extends Screen {
             case SAVE_CHIP -> 0xFF55B96B;
             case ADD_FOLDER -> 0xFF4C86D9;
             case EDIT_LIBRARY_ITEM -> modalColor;
-            case EDIT_IO -> pendingIo != null && pendingIo.kind().name().equals("OUTPUT") ? 0xFF7B68D9 : 0xFF4C86D9;
+            case EDIT_IO -> pendingIo != null && pendingIo.kind() == NodeKind.OUTPUT ? 0xFF7B68D9 : 0xFF4C86D9;
             case CONFIRM_DELETE -> 0xFFE05252;
             case NONE -> 0xFF59636E;
         };
@@ -697,7 +703,7 @@ public final class CircuitEditorScreen extends Screen {
             case SAVE_CHIP -> "SAVE CHIP";
             case ADD_FOLDER -> "ADD FOLDER";
             case EDIT_LIBRARY_ITEM -> libraryEditKind == LibraryEditKind.CHIP ? "EDIT CHIP" : "EDIT FOLDER";
-            case EDIT_IO -> pendingIo != null && pendingIo.kind().name().equals("OUTPUT") ? "NAME OUTPUT" : "NAME INPUT";
+            case EDIT_IO -> pendingIo != null && pendingIo.kind() == NodeKind.OUTPUT ? "NAME OUTPUT" : "NAME INPUT";
             case CONFIRM_DELETE -> "CONFIRM DELETE";
             case NONE -> "";
         };
