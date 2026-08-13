@@ -9,7 +9,7 @@ public final class LogicSimulationClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientEditorBridge.installEditorOpener(() ->
-                Minecraft.getInstance().setScreen(new CircuitEditorScreen())
+                Minecraft.getInstance().gui.setScreen(new CircuitEditorScreen())
         );
     }
 }
