@@ -14,7 +14,8 @@
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
     "CircuitEditorProgramMixin",
-    "ComponentLibraryClockMixin"
+    "ComponentLibraryClockMixin",
+    "CanvasAccess"
   ],
   "injectors": {"defaultRequire": 1}
 }
