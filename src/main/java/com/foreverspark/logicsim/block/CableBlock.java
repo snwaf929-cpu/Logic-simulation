@@ -64,6 +64,11 @@ public final class CableBlock extends Block {
     }
 
     @Override
+    protected BlockState updateShape(BlockState state, net.minecraft.world.level.LevelReader level, net.minecraft.world.level.ScheduledTickAccess ticks, BlockPos pos, Direction direction, BlockPos neighborPos, BlockState neighborState, net.minecraft.util.RandomSource random) {
+        return state.setValue(property(direction), connectsTo(level, pos, direction, neighborState));
+    }
+
+    @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
         builder.add(NORTH, SOUTH, WEST, EAST, UP, DOWN);
     }
