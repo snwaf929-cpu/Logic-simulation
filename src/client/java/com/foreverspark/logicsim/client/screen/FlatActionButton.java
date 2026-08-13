@@ -18,6 +18,13 @@ public final class FlatActionButton extends AbstractWidget {
         this.accent = 0xFF000000 | (accent & 0x00FFFFFF);
     }
 
+    public void setBounds(int x, int y, int width, int height) {
+        setX(x);
+        setY(y);
+        this.width = Math.max(20, width);
+        this.height = Math.max(14, height);
+    }
+
     @Override
     protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         boolean hovered = isHovered();
@@ -25,7 +32,6 @@ public final class FlatActionButton extends AbstractWidget {
         int border = hovered ? accent : 0xFF3B444F;
         graphics.fill(getX(), getY(), getX() + width, getY() + height, bg);
         graphics.outline(getX(), getY(), width, height, border);
-
         var font = Minecraft.getInstance().font;
         String text = getMessage().getString();
         int tx = getX() + Math.max(4, (width - font.width(text)) / 2);
@@ -35,12 +41,9 @@ public final class FlatActionButton extends AbstractWidget {
 
     @Override
     public void onClick(MouseButtonEvent event, boolean doubleClick) {
-        if (event.button() == 0 && active && visible) {
-            action.run();
-        }
+        if (event.button() == 0 && active && visible) action.run();
     }
 
     @Override
-    protected void updateWidgetNarration(NarrationElementOutput builder) {
-    }
+    protected void updateWidgetNarration(NarrationElementOutput builder) {}
 }
