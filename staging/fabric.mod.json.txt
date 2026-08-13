@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "logicsimulation",
+  "version": "${version}",
+  "name": "Logic Simulation",
+  "description": "NAND-first digital logic simulation for building custom chips and computers inside Minecraft.",
+  "authors": ["ForeverSpArK"],
+  "contact": {"sources": "https://github.com/snwaf929-cpu/Logic-simulation"},
+  "license": "All-Rights-Reserved",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.foreverspark.logicsim.LogicSimulationMod"],
+    "client": ["com.foreverspark.logicsim.client.LogicSimulationClient"]
+  },
+  "mixins": ["logicsimulation.client.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~26.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
