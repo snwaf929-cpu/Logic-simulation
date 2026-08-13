@@ -89,11 +89,14 @@ public final class CompiledCircuit {
         return simulator;
     }
 
-    /** Deterministic scope path used by the compiler and the editor breadcrumb inspector. */
+    /**
+     * Deterministic scope path used by the compiler and editor inspector.
+     * The chip name is deliberately not part of the identity: renaming a saved chip must not
+     * invalidate an already-open live instance path. Node ids define instance identity.
+     */
     public static String childScopePath(String parentScope, int nodeId, String chipName) {
         String parent = parentScope == null || parentScope.isBlank() ? ROOT_SCOPE : parentScope;
-        String name = chipName == null ? "" : chipName.trim();
-        return parent + "/CHIP" + nodeId + "[" + name + "]";
+        return parent + "/CHIP" + nodeId;
     }
 
     private static Signal[] signals(
