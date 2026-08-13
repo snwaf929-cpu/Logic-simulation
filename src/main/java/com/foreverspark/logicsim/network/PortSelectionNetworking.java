@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.network;
 
+import com.foreverspark.logicsim.block.CableVisualRefresh;
 import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.block.CircuitPortBlockEntity;
 import com.foreverspark.logicsim.editor.model.PortDirection;
@@ -54,6 +55,7 @@ public final class PortSelectionNetworking {
                 if (spec == null) throw new IllegalArgumentException("Port no longer exists");
                 new PhysicalPortBinding(spec);
                 socket.bind(payload.circuitPos(), spec);
+                CableVisualRefresh.aroundSocket(player.level(), payload.socketPos(), socket);
                 if (direction == PortDirection.OUTPUT) circuit.publishSocket(socket);
                 player.sendSystemMessage(Component.literal("I/O Connector = " + spec.name() + " [" + spec.width() + "] " + direction.name()));
             } catch (RuntimeException error) {
