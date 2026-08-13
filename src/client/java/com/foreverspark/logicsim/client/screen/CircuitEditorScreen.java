@@ -16,7 +16,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Main editor shell with CAD-like shortcuts, safe deletion, and focused modal workflows. */
+/** Main editor shell with CAD-like shortcuts, safe deletion, and hierarchical live inspection. */
 public final class CircuitEditorScreen extends Screen {
     private static final int TOP_BAR_HEIGHT = 34;
     private static final int STATUS_BAR_HEIGHT = 24;
@@ -30,7 +30,9 @@ public final class CircuitEditorScreen extends Screen {
     private CircuitCanvasWidget canvas;
     private ComponentLibraryWidget componentLibrary;
     private String currentChipName;
-    private String status = "Ready — right-drag to pan, Ctrl+S to save.";
+    private String breadcrumb = "ROOT";
+    private boolean liveNestedRuntime;
+    private String status = "Ready — right/middle-drag to pan. Double-click a custom chip to inspect it.";
 
     private ModalMode modalMode = ModalMode.NONE;
     private LibraryEditKind libraryEditKind;
@@ -54,13 +56,24 @@ public final class CircuitEditorScreen extends Screen {
     @Override
     protected void init() {
         CircuitDocument previousDocument = canvas == null ? new CircuitDocument() : canvas.document();
+        String previousChipName = canvas == null ? currentChipName : canvas.currentChipName();
         toolbarButtons.clear();
 
         int canvasX = SIDEBAR_WIDTH + 16;
         int canvasY = TOP_BAR_HEIGHT + 2;
         int canvasWidth = Math.max(140, this.width - canvasX - 8);
         int canvasHeight = Math.max(100, this.height - canvasY - STATUS_BAR_HEIGHT - 4);
-        canvas = new CircuitCanvasWidget(canvasX, canvasY, canvasWidth, canvasHeight, previousDocument, library, this::setStatus);
+        canvas = new CircuitCanvasWidget(
+                canvasX,
+                canvasY,
+                canvasWidth,
+                canvasHeight,
+                previousDocument,
+                previousChipName,
+                library,
+                this::setStatus,
+                this::onCanvasNavigationChanged
+        );
         this.addRenderableWidget(canvas);
 
         int sidebarY = TOP_BAR_HEIGHT + 2;
@@ -76,8 +89,12 @@ public final class CircuitEditorScreen extends Screen {
                 this::setStatus
         );
         this.addRenderableWidget(componentLibrary);
+        if (currentChipName != null) {
+            componentLibrary.selectChip(currentChipName);
+        }
 
         int x = 154;
+        x = addToolbarButton(x, EditorIconButton.Icon.BACK, 0xFF63A9D8, "Back one chip level  Alt+Left", canvas::navigateBack);
         x = addToolbarButton(x, EditorIconButton.Icon.SAVE, 0xFF55B96B, "Save chip  Ctrl+S", this::openSaveModal);
         x = addToolbarButton(x, EditorIconButton.Icon.NEW, 0xFF7B8796, "New circuit", this::newCircuit);
         x = addToolbarButton(x, EditorIconButton.Icon.DELETE, 0xFFE05252, "Delete selection  Del / Backspace", this::requestDeleteSelection);
@@ -133,6 +150,8 @@ public final class CircuitEditorScreen extends Screen {
         if (modalMode != ModalMode.NONE) return;
         canvas.newDocument();
         currentChipName = null;
+        breadcrumb = "ROOT";
+        liveNestedRuntime = false;
         setStatus("New untitled circuit");
     }
 
@@ -202,7 +221,7 @@ public final class CircuitEditorScreen extends Screen {
             return;
         }
 
-        setStatus("Select a saved chip in the library, then press F2 to rename/recolor it");
+        setStatus("Select a saved chip or folder in the library, then press F2");
     }
 
     private void requestDeleteSelection() {
@@ -245,6 +264,10 @@ public final class CircuitEditorScreen extends Screen {
     private void applySave() throws IOException {
         String name = modalNameBox.getValue().trim();
         if (name.isEmpty()) throw new IllegalArgumentException("Chip name is required");
+
+        if (canvas.isNestedView() && currentChipName != null && !name.equalsIgnoreCase(currentChipName)) {
+            throw new IllegalArgumentException("Use F2 to rename a chip while inspecting a live instance");
+        }
         if (library.exists(name) && (currentChipName == null || !name.equalsIgnoreCase(currentChipName))) {
             throw new IllegalArgumentException("A chip named '" + name + "' already exists. Open it first or choose another name.");
         }
@@ -257,9 +280,17 @@ public final class CircuitEditorScreen extends Screen {
         CircuitCompiler.compile(canvas.document(), library);
         library.save(name, canvas.document(), modalColor, visual);
         currentChipName = name;
+        canvas.setCurrentChipName(name);
         componentLibrary.selectChip(name);
+
+        boolean nested = canvas.isNestedView();
+        if (nested) {
+            canvas.refreshLiveRuntime();
+        }
         closeModal();
-        setStatus("Saved " + name + "  |  body " + formatNumber(visual.width) + "×" + formatNumber(visual.minHeight) + "  pin gap " + formatNumber(visual.portSpacing));
+        setStatus(nested
+                ? "Saved " + name + " and rebuilt the running parent — internal signals are live again"
+                : "Saved " + name + "  |  body " + formatNumber(visual.width) + "×" + formatNumber(visual.minHeight) + "  pin gap " + formatNumber(visual.portSpacing));
     }
 
     private void applyAddFolder() throws IOException {
@@ -278,10 +309,14 @@ public final class CircuitEditorScreen extends Screen {
                 library.renameChip(oldName, newName);
                 canvas.renameCustomChipReferences(oldName, newName);
                 componentLibrary.renameSelection(oldName, newName);
-                if (currentChipName != null && currentChipName.equalsIgnoreCase(oldName)) currentChipName = newName;
+                if (currentChipName != null && currentChipName.equalsIgnoreCase(oldName)) {
+                    currentChipName = newName;
+                    canvas.setCurrentChipName(newName);
+                }
             }
             library.setChipColor(newName, modalColor);
             componentLibrary.selectChip(newName);
+            canvas.refreshLiveRuntime();
             closeModal();
             setStatus("Updated chip " + newName);
             return;
@@ -301,12 +336,21 @@ public final class CircuitEditorScreen extends Screen {
     private void openChip(String name) {
         try {
             ChipDefinition definition = library.load(name);
-            canvas.setDocument(library.copyDocument(definition.circuit));
+            canvas.setDocument(library.copyDocument(definition.circuit), definition.name);
             currentChipName = definition.name;
             componentLibrary.selectChip(definition.name);
-            setStatus("Editing " + definition.name + " — Ctrl+S opens save/layout settings; F2 renames the library entry");
+            setStatus("Editing " + definition.name + " — double-click any custom chip instance to drill inside it live");
         } catch (RuntimeException | IOException exception) {
             setStatus("LOAD FAILED: " + message(exception));
+        }
+    }
+
+    private void onCanvasNavigationChanged(CircuitCanvasWidget.NavigationState state) {
+        currentChipName = state.currentChipName();
+        breadcrumb = state.breadcrumb();
+        liveNestedRuntime = state.depth() > 0 && state.liveRuntime();
+        if (componentLibrary != null && currentChipName != null) {
+            componentLibrary.selectChip(currentChipName);
         }
     }
 
@@ -374,8 +418,32 @@ public final class CircuitEditorScreen extends Screen {
             return super.keyPressed(event);
         }
 
-        if (key == GLFW.GLFW_KEY_S && (event.modifiers() & GLFW.GLFW_MOD_CONTROL) != 0) {
+        boolean ctrl = (event.modifiers() & GLFW.GLFW_MOD_CONTROL) != 0;
+        boolean shift = (event.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0;
+        boolean alt = (event.modifiers() & GLFW.GLFW_MOD_ALT) != 0;
+
+        if (ctrl && key == GLFW.GLFW_KEY_S) {
             openSaveModal();
+            return true;
+        }
+        if (ctrl && key == GLFW.GLFW_KEY_D) {
+            canvas.duplicateSelection();
+            return true;
+        }
+        if (ctrl && key == GLFW.GLFW_KEY_C) {
+            canvas.copySelection();
+            return true;
+        }
+        if (ctrl && key == GLFW.GLFW_KEY_V) {
+            canvas.pasteClipboard();
+            return true;
+        }
+        if (key == GLFW.GLFW_KEY_KP_ADD || (key == GLFW.GLFW_KEY_EQUAL && shift)) {
+            canvas.addRoutePointToSelection();
+            return true;
+        }
+        if (alt && key == GLFW.GLFW_KEY_LEFT && canvas.canNavigateBack()) {
+            canvas.navigateBack();
             return true;
         }
         if (key == GLFW.GLFW_KEY_DELETE || key == GLFW.GLFW_KEY_BACKSPACE) {
@@ -406,8 +474,14 @@ public final class CircuitEditorScreen extends Screen {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
 
         graphics.text(this.font, "LOGIC", 8, 13, 0xFFE6ECF3, true);
-        String chipLabel = currentChipName == null ? "UNTITLED" : currentChipName;
-        graphics.text(this.font, "/  " + truncate(chipLabel, 18), 48, 13, currentChipName == null ? 0xFF6F7A87 : 0xFF9DA8B5, false);
+        String path = breadcrumb == null || breadcrumb.isBlank()
+                ? currentChipName == null ? "ROOT" : currentChipName
+                : breadcrumb;
+        int pathColor = liveNestedRuntime ? 0xFF63C8FF : currentChipName == null ? 0xFF6F7A87 : 0xFF9DA8B5;
+        graphics.text(this.font, "/  " + truncate(path, 44), 48, 13, pathColor, false);
+        if (liveNestedRuntime) {
+            graphics.text(this.font, "LIVE", Math.max(8, this.width - 34), 13, 0xFF55D96B, true);
+        }
 
         boolean error = isErrorStatus(status);
         graphics.fill(8, this.height - 17, 13, this.height - 12, error ? 0xFFE05252 : 0xFF55B96B);
@@ -451,7 +525,10 @@ public final class CircuitEditorScreen extends Screen {
             graphics.text(this.font, "HEIGHT", modalX + 124, modalY + 83, 0xFF8B96A3, false);
             graphics.text(this.font, "PIN GAP", modalX + 228, modalY + 83, 0xFF8B96A3, false);
             graphics.text(this.font, "CHIP COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
-            graphics.text(this.font, "Height + pin gap control how much space appears between exposed inputs/outputs.", modalX + 20, modalY + 158, 0xFF65717E, false);
+            graphics.text(this.font, canvas != null && canvas.isNestedView()
+                            ? "Saving rebuilds the parent runtime so this exact instance becomes live again."
+                            : "Height + pin gap control spacing between exposed inputs/outputs.",
+                    modalX + 20, modalY + 158, 0xFF65717E, false);
         } else if (modalMode == ModalMode.ADD_FOLDER) {
             graphics.text(this.font, "NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
             graphics.text(this.font, "FOLDER COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
@@ -468,7 +545,6 @@ public final class CircuitEditorScreen extends Screen {
             graphics.text(this.font, "! " + truncate(modalError, 50), modalX + 20, modalY + MODAL_HEIGHT - 34, 0xFFFF7878, false);
         }
 
-        // Screen rendered these once below the dim layer; render active modal controls again on top.
         if (modalNameBox.visible) modalNameBox.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalWidthBox.visible) modalWidthBox.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalHeightBox.visible) modalHeightBox.extractRenderState(graphics, mouseX, mouseY, delta);
@@ -500,7 +576,7 @@ public final class CircuitEditorScreen extends Screen {
 
     private String modalSubtitle() {
         return switch (modalMode) {
-            case SAVE_CHIP -> "Name, color, and reusable body layout";
+            case SAVE_CHIP -> canvas != null && canvas.isNestedView() ? "Edit this saved chip inside the running hierarchy" : "Name, color, and reusable body layout";
             case ADD_FOLDER -> "Name and color for the new folder";
             case EDIT_LIBRARY_ITEM -> "F2 quick edit";
             case CONFIRM_DELETE -> "Connected nodes require confirmation";
