@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.client;
 
 import com.foreverspark.logicsim.block.ConnectorBlocks;
 import com.foreverspark.logicsim.block.ModBlocks;
+import com.foreverspark.logicsim.network.CircuitStatsRequest;
 import com.foreverspark.logicsim.network.RequestCircuitPortsPayload;
 import com.foreverspark.logicsim.platform.ClientEditorBridge;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -18,7 +19,11 @@ public final class CircuitBlockUseHandler {
             if (hand != InteractionHand.MAIN_HAND) return InteractionResult.PASS;
             var block = level.getBlockState(hit.getBlockPos()).getBlock();
             if (block == ModBlocks.CIRCUIT_BLOCK) {
-                ClientEditorBridge.openEditor(hit.getBlockPos());
+                if (player.isShiftKeyDown()) {
+                    ClientPlayNetworking.send(new CircuitStatsRequest(hit.getBlockPos()));
+                } else {
+                    ClientEditorBridge.openEditor(hit.getBlockPos());
+                }
                 return InteractionResult.SUCCESS;
             }
             if (block == ConnectorBlocks.IO_CONNECTOR) {
