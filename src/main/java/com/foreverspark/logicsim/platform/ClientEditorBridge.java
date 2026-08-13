@@ -1,23 +1,12 @@
 package com.foreverspark.logicsim.platform;
 
+import net.minecraft.core.BlockPos;
 import java.util.Objects;
+import java.util.function.Consumer;
 
-/**
- * Common-side bridge that keeps client-only Minecraft classes out of the main source set.
- * Dedicated servers retain the no-op opener.
- */
 public final class ClientEditorBridge {
-    private static Runnable editorOpener = () -> {
-    };
-
-    private ClientEditorBridge() {
-    }
-
-    public static void installEditorOpener(Runnable opener) {
-        editorOpener = Objects.requireNonNull(opener, "opener");
-    }
-
-    public static void openEditor() {
-        editorOpener.run();
-    }
+    private static Consumer<BlockPos> editorOpener = ignored -> {};
+    private ClientEditorBridge() {}
+    public static void installEditorOpener(Consumer<BlockPos> opener) { editorOpener = Objects.requireNonNull(opener, "opener"); }
+    public static void openEditor(BlockPos pos) { editorOpener.accept(pos == null ? null : pos.immutable()); }
 }
