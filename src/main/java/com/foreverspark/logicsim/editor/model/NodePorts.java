@@ -5,7 +5,10 @@ public final class NodePorts {
     private NodePorts() {}
     public static List<PortSpec> inputs(EditorNode node, ChipLookup chips) {
         return switch (node.kind) {
-            case INPUT, CONSTANT -> List.of();
+            case INPUT -> List.of();
+            case CONSTANT -> node.clockSource
+                    ? List.of(new PortSpec("ENABLE", PortDirection.INPUT, 1))
+                    : List.of();
             case OUTPUT -> List.of(new PortSpec("IN", PortDirection.INPUT, node.width));
             case NAND -> List.of(new PortSpec("A", PortDirection.INPUT, 1), new PortSpec("B", PortDirection.INPUT, 1));
             case PROBE, BUS, SPLITTER -> List.of(new PortSpec("BUS", PortDirection.INPUT, node.width));
