@@ -34,6 +34,12 @@ public final class ModBlocks {
             BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
     );
 
+    public static final Block DISPLAY_PANEL = register(
+            ModBlockItemIds.DISPLAY_PANEL,
+            DisplayPanelBlock::new,
+            BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
+    );
+
     private ModBlocks() {
     }
 
@@ -65,6 +71,7 @@ public final class ModBlocks {
             tab.accept(CIRCUIT_BLOCK.asItem());
             tab.accept(SIGNAL_WIRE.asItem());
             tab.accept(BUS_CABLE.asItem());
+            tab.accept(DISPLAY_PANEL.asItem());
         });
     }
 }
