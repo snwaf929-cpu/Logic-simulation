@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.interconnect.CableKind;
+import com.foreverspark.logicsim.network.ModNetworking;
 import java.util.function.Function;
 
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
@@ -53,6 +54,7 @@ public final class ModBlocks {
     }
 
     public static void initialize() {
+        ModNetworking.initialize();
         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.BUILDING_BLOCKS).register(tab -> {
             tab.accept(CIRCUIT_BLOCK.asItem());
             tab.accept(SIGNAL_WIRE.asItem());
