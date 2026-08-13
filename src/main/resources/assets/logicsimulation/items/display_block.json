@@ -1,6 +1,6 @@
 {
   "model": {
     "type": "minecraft:model",
-    "model": "logicsimulation:block/circuit_block"
+    "model": "logicsimulation:block/display_block"
   }
 }

@@ -21,7 +21,7 @@ import java.util.Set;
 
 public final class DisplayBlockEntity extends BlockEntity {
     public static final int MAX_WIDTH = 64;
-    public static final int MAX_HEIGHT = 36;
+    public static final int MAX_HEIGHT = 64;
     public static final int DEFAULT_PIXEL_WIDTH = 32;
     private static final int[] PIXEL_WIDTHS = {1, 2, 4, 8, 16, 32, 64};
     private static final int MAX_WALL_BLOCKS = 4096;
@@ -35,11 +35,9 @@ public final class DisplayBlockEntity extends BlockEntity {
     public DisplayFramebuffer framebuffer() { return framebuffer; }
     public int pixelWidth() { return pixelWidth; }
     public int pixelHeight() { return pixelHeightFor(pixelWidth); }
-
-    public static int pixelHeightFor(int width) { return Math.max(1, (int)Math.round(width * 9.0 / 16.0)); }
+    public static int pixelHeightFor(int width) { return width; }
     public static int nextPixelWidth(int current) {
-        for (int index = 0; index < PIXEL_WIDTHS.length; index++)
-            if (PIXEL_WIDTHS[index] == current) return PIXEL_WIDTHS[(index + 1) % PIXEL_WIDTHS.length];
+        for (int index = 0; index < PIXEL_WIDTHS.length; index++) if (PIXEL_WIDTHS[index] == current) return PIXEL_WIDTHS[(index + 1) % PIXEL_WIDTHS.length];
         return DEFAULT_PIXEL_WIDTH;
     }
 
@@ -106,8 +104,7 @@ public final class DisplayBlockEntity extends BlockEntity {
     public void sampleSignals(int x, int y, int rgb565, boolean write, boolean clear) {
         long before = framebuffer.revision();
         if (clear && !lastClear) framebuffer.clear(0);
-        if (write && !lastWrite && x >= 0 && x < pixelWidth && y >= 0 && y < pixelHeight())
-            framebuffer.writePixel(x, y, rgb565);
+        if (write && !lastWrite && x >= 0 && x < pixelWidth && y >= 0 && y < pixelHeight()) framebuffer.writePixel(x, y, rgb565);
         lastWrite = write;
         lastClear = clear;
         if (framebuffer.revision() != before) setChanged();
@@ -126,8 +123,7 @@ public final class DisplayBlockEntity extends BlockEntity {
         if (framebuffer.revision() != before) setChanged();
     }
 
-    @Override
-    protected void saveAdditional(ValueOutput output) {
+    @Override protected void saveAdditional(ValueOutput output) {
         output.putInt("pixelWidth", pixelWidth);
         int width = pixelWidth, height = pixelHeight();
         for (int index = 0; index < width * height; index++) {
@@ -137,8 +133,7 @@ public final class DisplayBlockEntity extends BlockEntity {
         super.saveAdditional(output);
     }
 
-    @Override
-    protected void loadAdditional(ValueInput input) {
+    @Override protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
         pixelWidth = normalizePixelWidth(input.getIntOr("pixelWidth", DEFAULT_PIXEL_WIDTH));
         framebuffer.clear(0);
@@ -155,16 +150,6 @@ public final class DisplayBlockEntity extends BlockEntity {
     @Override public CompoundTag getUpdateTag(HolderLookup.Provider registryLookup) { return saveWithoutMetadata(registryLookup); }
     @Override public Packet<ClientGamePacketListener> getUpdatePacket() { return ClientboundBlockEntityDataPacket.create(this); }
     @Override public void setChanged() { super.setChanged(); syncPending = true; }
-
-    private void flushClientSync(Level level) {
-        if (!syncPending) return;
-        syncPending = false;
-        BlockState state = getBlockState();
-        level.sendBlockUpdated(worldPosition, state, state, Block.UPDATE_ALL);
-    }
-
-    private static int normalizePixelWidth(int width) {
-        for (int candidate : PIXEL_WIDTHS) if (candidate == width) return candidate;
-        return DEFAULT_PIXEL_WIDTH;
-    }
+    private void flushClientSync(Level level) { if (!syncPending) return; syncPending = false; BlockState state = getBlockState(); level.sendBlockUpdated(worldPosition, state, state, Block.UPDATE_ALL); }
+    private static int normalizePixelWidth(int width) { for (int candidate : PIXEL_WIDTHS) if (candidate == width) return candidate; return DEFAULT_PIXEL_WIDTH; }
 }
