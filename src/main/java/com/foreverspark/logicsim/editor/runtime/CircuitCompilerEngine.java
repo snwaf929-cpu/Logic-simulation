@@ -87,7 +87,7 @@ final class CircuitCompilerEngine {
                 matching = wire;
             }
             Signal[] signals;
-            if (matching == null) signals = createSignals(path + "/NODE" + node.id + "/IN" + port + "/FLOAT", width);
+            if (matching == null) signals = createSignals(path + "/NODE" + node.id + "/IN" + port + "/FLOAT", width, LogicValue.LOW);
             else {
                 EditorNode sourceNode = document.node(matching.sourceNodeId());
                 List<PortSpec> sourcePorts = NodePorts.outputs(sourceNode, chips);
@@ -181,8 +181,12 @@ final class CircuitCompilerEngine {
         }
 
         private Signal[] createSignals(String basePath, int width) {
+            return createSignals(basePath, width, LogicValue.UNKNOWN);
+        }
+
+        private Signal[] createSignals(String basePath, int width, LogicValue initialValue) {
             Signal[] signals = new Signal[width];
-            for (int bit = 0; bit < width; bit++) signals[bit] = circuit.signal(basePath + "[" + bit + "]", LogicValue.UNKNOWN);
+            for (int bit = 0; bit < width; bit++) signals[bit] = circuit.signal(basePath + "[" + bit + "]", initialValue);
             return signals;
         }
     }
