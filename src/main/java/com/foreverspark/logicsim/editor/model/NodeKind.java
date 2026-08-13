@@ -5,7 +5,6 @@ public enum NodeKind {
     OUTPUT,
     NAND,
     CONSTANT,
-    CLOCK,
     PROBE,
     BUS,
     SPLITTER,
