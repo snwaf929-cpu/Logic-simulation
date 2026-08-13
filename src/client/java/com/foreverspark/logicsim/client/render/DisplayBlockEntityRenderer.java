@@ -14,27 +14,25 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Arrays;
+
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     private static final String PIXEL = "█";
     private final Font font;
 
-    public DisplayBlockEntityRenderer(BlockEntityRendererProvider.Context context) {
-        this.font = context.font();
-    }
-
-    @Override
-    public DisplayWorldRenderState createRenderState() {
-        return new DisplayWorldRenderState();
-    }
+    public DisplayBlockEntityRenderer(BlockEntityRendererProvider.Context context) { this.font = context.font(); }
+    @Override public DisplayWorldRenderState createRenderState() { return new DisplayWorldRenderState(); }
 
     @Override
     public void extractRenderState(DisplayBlockEntity blockEntity, DisplayWorldRenderState state, float tickProgress, Vec3 cameraPos, @Nullable ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         BlockEntityRenderer.super.extractRenderState(blockEntity, state, tickProgress, cameraPos, crumblingOverlay);
         state.facing = DisplayPorts.front(blockEntity.getBlockState());
-        int index = 0;
-        for (int y = 0; y < DisplayBlockEntity.HEIGHT; y++) {
-            for (int x = 0; x < DisplayBlockEntity.WIDTH; x++) {
-                state.pixels[index++] = blockEntity.framebuffer().pixelArgb(x, y);
+        state.pixelWidth = blockEntity.pixelWidth();
+        state.pixelHeight = blockEntity.pixelHeight();
+        Arrays.fill(state.pixels, 0xFF000000);
+        for (int y = 0; y < state.pixelHeight; y++) {
+            for (int x = 0; x < state.pixelWidth; x++) {
+                state.pixels[y * DisplayBlockEntity.MAX_WIDTH + x] = blockEntity.framebuffer().pixelArgb(x, y);
             }
         }
     }
@@ -45,15 +43,16 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         matrices.translate(0.5, 0.5, 0.5);
         matrices.mulPose(Axis.YP.rotationDegrees(rotationDegrees(state.facing)));
         matrices.translate(-0.5, -0.5, -0.5);
-
-        // The canonical panel is on NORTH; the pose above rotates it onto the placed block's FACING side.
         matrices.translate(0.07, 0.755, -0.002);
-        matrices.scale(0.0045f, -0.0030f, 0.0045f);
+
+        float scaleX = 0.0045f * DisplayBlockEntity.DEFAULT_PIXEL_WIDTH / Math.max(1.0f, state.pixelWidth);
+        float scaleY = 0.0030f * DisplayBlockEntity.pixelHeightFor(DisplayBlockEntity.DEFAULT_PIXEL_WIDTH) / Math.max(1.0f, state.pixelHeight);
+        matrices.scale(scaleX, -scaleY, scaleX);
 
         int glyphWidth = Math.max(1, font.width(PIXEL));
-        for (int y = 0; y < DisplayBlockEntity.HEIGHT; y++) {
-            for (int x = 0; x < DisplayBlockEntity.WIDTH; x++) {
-                int color = state.pixels[y * DisplayBlockEntity.WIDTH + x];
+        for (int y = 0; y < state.pixelHeight; y++) {
+            for (int x = 0; x < state.pixelWidth; x++) {
+                int color = state.pixels[y * DisplayBlockEntity.MAX_WIDTH + x];
                 if ((color & 0x00FFFFFF) == 0) continue;
                 queue.submitText(
                         matrices,
