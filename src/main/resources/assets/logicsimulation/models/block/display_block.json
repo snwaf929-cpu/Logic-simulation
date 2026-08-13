@@ -1,0 +1,70 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "minecraft:block/polished_blackstone",
+    "case": "minecraft:block/polished_blackstone",
+    "screen": "minecraft:block/black_concrete"
+  },
+  "elements": [
+    {
+      "from": [0, 0, 1],
+      "to": [16, 16, 16],
+      "faces": {
+        "down": {"texture": "#case"},
+        "up": {"texture": "#case"},
+        "north": {"texture": "#case"},
+        "south": {"texture": "#case"},
+        "west": {"texture": "#case"},
+        "east": {"texture": "#case"}
+      }
+    },
+    {
+      "from": [1, 4, 0.75],
+      "to": [15, 13, 1],
+      "faces": {
+        "north": {"texture": "#screen"},
+        "south": {"texture": "#screen"},
+        "down": {"texture": "#screen"},
+        "up": {"texture": "#screen"},
+        "west": {"texture": "#screen"},
+        "east": {"texture": "#screen"}
+      }
+    },
+    {
+      "from": [0, 13, 0],
+      "to": [16, 16, 1],
+      "faces": {
+        "north": {"texture": "#case"}, "south": {"texture": "#case"},
+        "down": {"texture": "#case"}, "up": {"texture": "#case"},
+        "west": {"texture": "#case"}, "east": {"texture": "#case"}
+      }
+    },
+    {
+      "from": [0, 0, 0],
+      "to": [16, 4, 1],
+      "faces": {
+        "north": {"texture": "#case"}, "south": {"texture": "#case"},
+        "down": {"texture": "#case"}, "up": {"texture": "#case"},
+        "west": {"texture": "#case"}, "east": {"texture": "#case"}
+      }
+    },
+    {
+      "from": [0, 4, 0],
+      "to": [1, 13, 1],
+      "faces": {
+        "north": {"texture": "#case"}, "south": {"texture": "#case"},
+        "down": {"texture": "#case"}, "up": {"texture": "#case"},
+        "west": {"texture": "#case"}, "east": {"texture": "#case"}
+      }
+    },
+    {
+      "from": [15, 4, 0],
+      "to": [16, 13, 1],
+      "faces": {
+        "north": {"texture": "#case"}, "south": {"texture": "#case"},
+        "down": {"texture": "#case"}, "up": {"texture": "#case"},
+        "west": {"texture": "#case"}, "east": {"texture": "#case"}
+      }
+    }
+  ]
+}
