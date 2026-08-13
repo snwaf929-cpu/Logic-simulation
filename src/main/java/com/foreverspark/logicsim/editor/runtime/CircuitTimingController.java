@@ -29,42 +29,30 @@ public final class CircuitTimingController {
         collect(root, chips == null ? ChipLookup.empty() : chips, CompiledCircuit.ROOT_SCOPE, Set.of());
     }
 
-    public Set<ClockAddress> clocks() {
-        return Set.copyOf(clocks.keySet());
-    }
-
-    public boolean hasClock(String scopePath, int nodeId) {
-        return clocks.containsKey(address(scopePath, nodeId));
-    }
-
-    public long frequencyHz(String scopePath, int nodeId) {
-        return require(scopePath, nodeId).timing().frequencyHz();
-    }
-
-    public void setFrequencyHz(String scopePath, int nodeId, long frequencyHz) {
-        require(scopePath, nodeId).timing().setFrequencyHz(frequencyHz);
-    }
-
-    public boolean running(String scopePath, int nodeId) {
-        return require(scopePath, nodeId).timing().running();
-    }
-
-    public void setRunning(String scopePath, int nodeId, boolean running) {
-        require(scopePath, nodeId).timing().setRunning(running);
-    }
-
-    public long pendingEdges(String scopePath, int nodeId) {
-        return require(scopePath, nodeId).timing().pendingEdges();
-    }
+    public Set<ClockAddress> clocks() { return Set.copyOf(clocks.keySet()); }
+    public boolean hasClock(String scopePath, int nodeId) { return clocks.containsKey(address(scopePath, nodeId)); }
+    public long frequencyHz(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().frequencyHz(); }
+    public void setFrequencyHz(String scopePath, int nodeId, long frequencyHz) { require(scopePath, nodeId).timing().setFrequencyHz(frequencyHz); }
+    public boolean running(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().running(); }
+    public void setRunning(String scopePath, int nodeId, boolean running) { require(scopePath, nodeId).timing().setRunning(running); }
+    public long pendingEdges(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().pendingEdges(); }
 
     public long stepEdges(String scopePath, int nodeId, long edges) {
-        return require(scopePath, nodeId).stepEdges(edges);
+        return stepEdges(scopePath, nodeId, edges, () -> {});
+    }
+
+    public long stepEdges(String scopePath, int nodeId, long edges, Runnable afterSettledEdge) {
+        return require(scopePath, nodeId).stepEdges(edges, afterSettledEdge);
     }
 
     public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock) {
+        return advanceNanos(elapsedNanos, edgeBudgetPerClock, () -> {});
+    }
+
+    public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock, Runnable afterSettledEdge) {
         long emitted = 0L;
         for (TimingSignalDriver clock : clocks.values()) {
-            long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock);
+            long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, afterSettledEdge);
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
         return emitted;
