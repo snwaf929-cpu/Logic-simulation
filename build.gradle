@@ -57,6 +57,14 @@ tasks.register('selfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.tools.LogicSelfTest'
 }
 
+tasks.register('infrastructureSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs CPU editor bus, constant, probe, splitter, and merger regression tests.'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.tools.InfrastructureSelfTest'
+}
+
 tasks.register('clientSelfTest', JavaExec) {
     group = 'verification'
     description = 'Runs client-side chip-library persistence regression tests without launching Minecraft.'
