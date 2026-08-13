@@ -10,6 +10,7 @@ import net.minecraft.resources.Identifier;
 
 public record ProgramCircuitPayload(BlockPos pos, String programJson) implements CustomPacketPayload {
     public static final int MAX_JSON_LENGTH = 2_000_000;
+    public static final String CONTROL_TOGGLE_REDSTONE_CLOCK_GATE = "__LOGICSIM_CONTROL_REDSTONE_CLOCK_GATE__";
     public static final Type<ProgramCircuitPayload> TYPE = new Type<>(
             Identifier.fromNamespaceAndPath(LogicSimulationMod.MOD_ID, "program_circuit")
     );
