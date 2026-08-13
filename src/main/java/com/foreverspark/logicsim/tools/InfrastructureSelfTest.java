@@ -17,9 +17,10 @@ public final class InfrastructureSelfTest {
         testProbeSink();
         testConstantSplitMerge();
         testSixteenIndividualBitsIntoBusAndBack();
+        testFloatingInputsDefaultLow();
         testStructuralBusLoopRejectedWithoutStackOverflow();
         testNandFeedbackStillCompiles();
-        System.out.println("CPU editor infrastructure + bus packing + cycle safety self-test: PASS");
+        System.out.println("CPU editor infrastructure + bus packing + floating-low + cycle safety self-test: PASS");
     }
 
     private static void testBusPassThrough() {
@@ -118,6 +119,24 @@ public final class InfrastructureSelfTest {
             long expected = (pattern >>> bit) & 1;
             check(compiled.inputUnsigned(bitsOut[bit].id, 0) == expected, "16-bit packed bus bit " + bit);
         }
+    }
+
+    /** Floating/unconnected input ports behave like real pulled-low infrastructure: 0, not X. */
+    private static void testFloatingInputsDefaultLow() {
+        CircuitDocument document = new CircuitDocument();
+
+        // Both NAND inputs are intentionally left unconnected. 0 NAND 0 must produce 1.
+        EditorNode nand = document.addNode(NodeKind.NAND, 80, 0);
+        EditorNode nandOutput = document.addNode(NodeKind.OUTPUT, 200, 0);
+        document.connect(nand.id, 0, nandOutput.id, 0);
+
+        // A completely floating multi-bit sink must read all zeroes as well.
+        EditorNode floatingBusOutput = document.addNode(NodeKind.OUTPUT, 200, 80);
+        floatingBusOutput.width = 16;
+
+        CompiledCircuit compiled = CircuitCompiler.compile(document, name -> null);
+        check(compiled.inputUnsigned(nandOutput.id, 0) == 1L, "unconnected NAND inputs default to 0, so NAND output is 1");
+        check(compiled.inputUnsigned(floatingBusOutput.id, 0) == 0L, "unconnected 16-bit input defaults to 0x0000");
     }
 
     private static void testStructuralBusLoopRejectedWithoutStackOverflow() {
