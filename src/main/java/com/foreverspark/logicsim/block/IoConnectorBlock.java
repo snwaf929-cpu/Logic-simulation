@@ -40,7 +40,7 @@ public final class IoConnectorBlock extends BaseEntityBlock {
     @Nullable
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
-        return createTickerHelper(type, ModBlockEntities.CIRCUIT_PORT, CircuitPortBlockEntity::tick);
+        return createTickerHelper(type, ModBlockEntities.CIRCUIT_PORT, CircuitPortWorldTicker::tick);
     }
 
     @Override
