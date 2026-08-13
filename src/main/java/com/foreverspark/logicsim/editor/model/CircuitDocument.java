@@ -5,7 +5,7 @@ import java.util.Comparator;
 import java.util.List;
 
 public final class CircuitDocument {
-    public int formatVersion = 1;
+    public int formatVersion = 2;
     public int nextNodeId = 1;
     public List<EditorNode> nodes = new ArrayList<>();
     public List<WireConnection> wires = new ArrayList<>();
@@ -50,6 +50,16 @@ public final class CircuitDocument {
         wires.removeIf(wire -> wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId);
     }
 
+    public int connectionCount(int nodeId) {
+        int count = 0;
+        for (WireConnection wire : wires) {
+            if (wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     public List<EditorNode> inputNodes() {
         return nodes.stream()
                 .filter(node -> node.kind == NodeKind.INPUT)
@@ -71,6 +81,11 @@ public final class CircuitDocument {
         if (wires == null) {
             wires = new ArrayList<>();
         }
+        wires.removeIf(wire -> wire == null);
+        for (WireConnection wire : wires) {
+            wire.normalize();
+        }
+
         int maxId = nodes.stream().mapToInt(node -> node.id).max().orElse(0);
         nextNodeId = Math.max(nextNodeId, maxId + 1);
         for (EditorNode node : nodes) {
