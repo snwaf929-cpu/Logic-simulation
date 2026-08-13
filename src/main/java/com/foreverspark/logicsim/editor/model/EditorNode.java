@@ -18,7 +18,6 @@ public final class EditorNode {
         this.x = x;
         this.y = y;
         if (kind == NodeKind.SPLITTER || kind == NodeKind.MERGER || kind == NodeKind.BUS || kind == NodeKind.PROBE) this.width = 8;
-        if (kind == NodeKind.CLOCK) this.width = 1;
     }
 
     public String displayName() {
@@ -29,7 +28,6 @@ public final class EditorNode {
             case OUTPUT -> "OUTPUT " + id;
             case NAND -> "NAND";
             case CONSTANT -> "CONSTANT " + width;
-            case CLOCK -> "CLOCK";
             case PROBE -> "PROBE " + width;
             case BUS -> "BUS " + width;
             case SPLITTER -> "SPLITTER " + width;
