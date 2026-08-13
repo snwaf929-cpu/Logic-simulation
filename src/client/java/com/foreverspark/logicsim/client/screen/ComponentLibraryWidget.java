@@ -252,7 +252,10 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         if (row.type == RowType.CHIP) {
             selectedChip = row.name;
             selectedFolder = null;
-            if (event.button() == 1) {
+            if (event.button() == 1 || (event.button() == 0 && doubleClick)) {
+                draggingChip = null;
+                dragMoved = false;
+                canvas.cancelPlacement();
                 openChip.accept(row.name);
                 return;
             }
