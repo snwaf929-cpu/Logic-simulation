@@ -12,7 +12,8 @@
     "CircuitCanvasTerminalRenderMixin",
     "CircuitCanvasCustomChipTextMixin",
     "CircuitCanvasLowZoomTitleMixin",
-    "CircuitCanvasBusWireTextMixin"
+    "CircuitCanvasBusWireTextMixin",
+    "CircuitEditorProgramMixin"
   ],
   "injectors": {"defaultRequire": 1}
 }

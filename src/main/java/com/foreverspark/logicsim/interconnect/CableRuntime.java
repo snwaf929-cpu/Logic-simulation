@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.interconnect;
 
 import com.foreverspark.logicsim.block.CableBlock;
+import com.foreverspark.logicsim.block.CircuitPortBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import net.minecraft.core.BlockPos;
@@ -28,8 +29,13 @@ public final class CableRuntime {
         long normalized = value & mask(cable.bitWidth());
         Set<BlockPos> run = CableRun.collect(level, start, MAX_SEGMENTS);
         Map<BlockPos, Long> values = VALUES.computeIfAbsent(level, ignored -> new HashMap<>());
-        for (BlockPos pos : run) values.put(pos.immutable(), normalized);
-        notifyDisplays(level, run, cable, normalized);
+        boolean changed = false;
+        for (BlockPos pos : run) {
+            Long previous = values.put(pos.immutable(), normalized);
+            if (previous == null || previous.longValue() != normalized) changed = true;
+        }
+        if (!changed) return;
+        notifyDevices(level, run, cable, normalized);
     }
 
     public static synchronized long value(Level level, BlockPos pos) {
@@ -37,18 +43,24 @@ public final class CableRuntime {
         return values == null ? 0L : values.getOrDefault(pos, 0L);
     }
 
-    private static void notifyDisplays(Level level, Set<BlockPos> run, CableBlock cable, long value) {
+    private static void notifyDevices(Level level, Set<BlockPos> run, CableBlock cable, long value) {
         for (BlockPos cablePos : run) {
             for (Direction direction : Direction.values()) {
                 BlockPos neighborPos = cablePos.relative(direction);
                 if (run.contains(neighborPos)) continue;
                 BlockState neighbor = level.getBlockState(neighborPos);
-                if (!(neighbor.getBlock() instanceof DisplayBlock)) continue;
 
-                Direction displayFace = direction.getOpposite();
-                if (displayPortWidth(displayFace) != cable.bitWidth()) continue;
-                if (level.getBlockEntity(neighborPos) instanceof DisplayBlockEntity display) {
-                    display.acceptCableValue(displayFace, value);
+                if (neighbor.getBlock() instanceof DisplayBlock) {
+                    Direction displayFace = direction.getOpposite();
+                    if (displayPortWidth(displayFace) == cable.bitWidth()
+                            && level.getBlockEntity(neighborPos) instanceof DisplayBlockEntity display) {
+                        display.acceptCableValue(displayFace, value);
+                    }
+                    continue;
+                }
+
+                if (level.getBlockEntity(neighborPos) instanceof CircuitPortBlockEntity socket && socket.accepts(cable)) {
+                    socket.acceptCableValue(value);
                 }
             }
         }

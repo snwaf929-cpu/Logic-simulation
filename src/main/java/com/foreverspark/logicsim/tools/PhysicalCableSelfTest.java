@@ -21,6 +21,7 @@ public final class PhysicalCableSelfTest {
         check(!CableKind.BUS.supportsWidth(1), "bus rejects 1-bit; use signal wire");
         check(!CableKind.BUS.supportsWidth(64), "physical bus currently stops at 32-bit");
         testNamedCircuitPortsBecomeWorldPorts();
+        CircuitProgramSelfTest.main(args);
         System.out.println("Physical cable widths + circuit world-port binding self-test: PASS");
     }
 

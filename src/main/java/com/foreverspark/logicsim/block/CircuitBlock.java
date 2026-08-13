@@ -15,16 +15,8 @@ public final class CircuitBlock extends Block {
     }
 
     @Override
-    protected InteractionResult useWithoutItem(
-            BlockState state,
-            Level level,
-            BlockPos pos,
-            Player player,
-            BlockHitResult hit
-    ) {
-        if (level.isClientSide()) {
-            ClientEditorBridge.openEditor();
-        }
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hit) {
+        if (level.isClientSide()) ClientEditorBridge.openEditor(pos);
         return InteractionResult.SUCCESS;
     }
 }

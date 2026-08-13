@@ -1,6 +1,8 @@
 package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.interconnect.CableKind;
+import com.foreverspark.logicsim.network.ModNetworking;
+import com.foreverspark.logicsim.network.PortSelectionNetworking;
 import java.util.function.Function;
 
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
@@ -18,7 +20,7 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 public final class ModBlocks {
     public static final Block CIRCUIT_BLOCK = register(
             ModBlockItemIds.CIRCUIT_BLOCK,
-            CircuitBlock::new,
+            ProgrammableCircuitBlock::new,
             BlockBehaviour.Properties.of().sound(SoundType.METAL)
     );
 
@@ -30,46 +32,31 @@ public final class ModBlocks {
 
     public static final CableBlock BUS_CABLE_2 = registerBus(ModBlockItemIds.BUS_CABLE_2, 2);
     public static final CableBlock BUS_CABLE_4 = registerBus(ModBlockItemIds.BUS_CABLE_4, 4);
-    /** Existing id retained as the 8-bit bus cable for compatibility with worlds/items already created. */
     public static final CableBlock BUS_CABLE = registerBus(ModBlockItemIds.BUS_CABLE, 8);
     public static final CableBlock BUS_CABLE_16 = registerBus(ModBlockItemIds.BUS_CABLE_16, 16);
     public static final CableBlock BUS_CABLE_32 = registerBus(ModBlockItemIds.BUS_CABLE_32, 32);
 
-    private ModBlocks() {
-    }
+    private ModBlocks() {}
 
     private static CableBlock registerBus(BlockItemId id, int width) {
-        return (CableBlock) register(
-                id,
-                properties -> new CableBlock(CableKind.BUS, width, properties),
-                BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion()
-        );
+        return (CableBlock) register(id, properties -> new CableBlock(CableKind.BUS, width, properties), BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion());
     }
 
-    private static Block register(
-            ResourceKey<Block> id,
-            Function<BlockBehaviour.Properties, Block> blockFactory,
-            BlockBehaviour.Properties properties
-    ) {
+    private static Block register(ResourceKey<Block> id, Function<BlockBehaviour.Properties, Block> blockFactory, BlockBehaviour.Properties properties) {
         Block block = blockFactory.apply(properties.setId(id));
         return Registry.register(BuiltInRegistries.BLOCK, id, block);
     }
 
-    private static Block register(
-            BlockItemId id,
-            Function<BlockBehaviour.Properties, Block> blockFactory,
-            BlockBehaviour.Properties properties
-    ) {
+    private static Block register(BlockItemId id, Function<BlockBehaviour.Properties, Block> blockFactory, BlockBehaviour.Properties properties) {
         Block block = register(id.block(), blockFactory, properties);
-        BlockItem blockItem = new BlockItem(
-                block,
-                new Item.Properties().useBlockDescriptionPrefix().setId(id.item())
-        );
+        BlockItem blockItem = new BlockItem(block, new Item.Properties().useBlockDescriptionPrefix().setId(id.item()));
         Registry.register(BuiltInRegistries.ITEM, id.item(), blockItem);
         return block;
     }
 
     public static void initialize() {
+        ModNetworking.initialize();
+        PortSelectionNetworking.initialize();
         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.BUILDING_BLOCKS).register(tab -> {
             tab.accept(CIRCUIT_BLOCK.asItem());
             tab.accept(SIGNAL_WIRE.asItem());
