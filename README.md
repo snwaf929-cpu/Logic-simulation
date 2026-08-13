@@ -11,17 +11,49 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 - Java: `25`
 - Gradle Wrapper: `9.5.1`
 
-## Current playable milestone
-
-The first in-game circuit test is implemented:
+## Current playable milestone — freeform circuit editor
 
 1. Find **Circuit Block** in the Building Blocks creative tab.
-2. Place it in the world.
-3. Right-click it with an empty hand.
-4. The Circuit Editor opens with two inputs driving one real NAND gate.
-5. Toggle A and B and watch the output and wire states update through the event-driven simulation core.
+2. Place it and right-click it with an empty hand.
+3. The editor opens on an empty freeform canvas.
+4. Place `INPUT`, `NAND`, `OUTPUT`, `SPLITTER`, `MERGER`, or a previously saved `CUSTOM CHIP`.
+5. Click an output port and then a compatible input port to create a wire.
+6. The circuit recompiles into the real NAND event-driven simulator after structural changes.
 
-This is intentionally a small vertical slice. The next editor milestone will add freely placeable nodes, wire creation, delete/move tools, and saving a circuit as a reusable custom chip.
+### Editor controls
+
+- **Left click a tool, then the canvas** — place that node.
+- **Left drag a node** — move it.
+- **Click OUT port → IN port** — connect a wire/bus.
+- **Right-click an INPUT** — toggle it between zero and all-one bits.
+- **Left-click a node/wire + DELETE SELECTED** — delete it.
+- **Right-click a wire** — delete that wire immediately.
+- **Middle-drag** — pan the canvas.
+- **Mouse wheel** — zoom from 35% to 250% around the cursor.
+- **WIDTH - / WIDTH +** — change selected Input/Output/Splitter/Merger width through `1/2/4/8/16/32/64` bits. Attached wires are cleared when the width changes.
+- **RESET VIEW** — reset pan/zoom.
+
+### Buses, splitter, and merger
+
+Bus width is part of the port type. A multi-bit connection is rendered as one bus wire and labeled with its width, for example `[16]`.
+
+- `SPLITTER N`: one N-bit bus input → N individual 1-bit outputs.
+- `MERGER N`: N individual 1-bit inputs → one N-bit bus output.
+- Width mismatches are rejected, for example `16-bit → 1-bit` cannot be connected directly.
+
+Splitter and Merger are structural wiring primitives; they do not add hidden logic gates.
+
+### Reusable custom chips
+
+Enter a name in **CIRCUIT NAME / SAVE** and press **SAVE CHIP**. Saved circuits are stored in the client config folder under `logic-simulation/chips/` as `.logicchip.json` files.
+
+To reuse one:
+
+1. Enter its name under **CHIP TO INSERT**.
+2. Press **+ CUSTOM CHIP**.
+3. Place it on the canvas and wire its exposed input/output ports.
+
+At runtime custom chips are recursively flattened into the NANDs the player actually built; they are not magic prebuilt gates. **LOAD** opens a saved chip for editing.
 
 ## Core principles
 
@@ -40,9 +72,15 @@ The repository contains:
 1. `0 / 1 / X` logic values.
 2. NAND nodes.
 3. Event-driven propagation.
-4. 1-64 bit buses with structural split/merge mapping.
-5. Ring-buffer trace recorder.
-6. Dependency-free self-tests and an early benchmark tool.
+4. Typed 1-64 bit buses with structural split/merge mapping.
+5. Freeform circuit document compiler with width validation.
+6. Recursive custom-chip flattening to NAND.
+7. Ring-buffer trace recorder.
+8. Self-tests covering NAND logic, buses, Split/Merge, custom chips, and width mismatch rejection.
+
+## Next hardware milestone
+
+The next major layer is **world-space interconnect**: place saved chips/computer components as blocks and connect their exposed typed ports using mod `Wire` and `Bus Cable` blocks. This will be separate from Minecraft redstone and will reuse the same width/type validation as the editor.
 
 ## Build / run
 
@@ -54,7 +92,7 @@ Windows:
 .\gradlew.bat runClient
 ```
 
-Build + core self-test:
+Build + core/editor self-test:
 
 ```powershell
 .\gradlew.bat build selfTest
