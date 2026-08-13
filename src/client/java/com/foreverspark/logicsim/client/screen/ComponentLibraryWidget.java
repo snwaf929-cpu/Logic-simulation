@@ -13,30 +13,17 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
-/**
- * Compact, cubic component browser inspired by the collection workflow of Digital Logic Sim.
- * Primitive components and user chip folders live in one scrollable library.
- */
+/** Compact cubic component + saved-chip library. */
 public final class ComponentLibraryWidget extends AbstractWidget {
     private static final int ROW_HEIGHT = 18;
     private static final int INDENT = 12;
-    private static final int[] PALETTE = {
-            0xFFE05252,
-            0xFFE08A3E,
-            0xFFE1C84A,
-            0xFF55B96B,
-            0xFF4C86D9,
-            0xFF7B68D9,
-            0xFFC25BC7,
-            0xFF7B8796
-    };
+    private static final int HEADER_HEIGHT = 25;
+    private static final int FOOTER_HEIGHT = 30;
 
     private final ClientChipLibrary library;
     private final CircuitCanvasWidget canvas;
-    private final Supplier<String> folderNameSupplier;
-    private final Consumer<String> folderNameSetter;
+    private final Runnable requestAdd;
     private final Consumer<String> openChip;
     private final Consumer<String> status;
     private final List<RowHit> rows = new ArrayList<>();
@@ -55,18 +42,40 @@ public final class ComponentLibraryWidget extends AbstractWidget {
             int height,
             ClientChipLibrary library,
             CircuitCanvasWidget canvas,
-            Supplier<String> folderNameSupplier,
-            Consumer<String> folderNameSetter,
+            Runnable requestAdd,
             Consumer<String> openChip,
             Consumer<String> status
     ) {
         super(x, y, width, height, Component.literal("Component library"));
         this.library = library;
         this.canvas = canvas;
-        this.folderNameSupplier = folderNameSupplier;
-        this.folderNameSetter = folderNameSetter;
+        this.requestAdd = requestAdd;
         this.openChip = openChip;
         this.status = status;
+    }
+
+    public String selectedChipName() {
+        return selectedChip;
+    }
+
+    public String selectedFolderName() {
+        return selectedFolder;
+    }
+
+    public void selectChip(String name) {
+        selectedChip = name;
+        selectedFolder = null;
+    }
+
+    public void selectFolder(String name) {
+        selectedFolder = name;
+        selectedChip = null;
+    }
+
+    public void renameSelection(String oldName, String newName) {
+        if (oldName != null && oldName.equals(selectedChip)) selectedChip = newName;
+        if (oldName != null && oldName.equals(selectedFolder)) selectedFolder = newName;
+        if (oldName != null && oldName.equals(draggingChip)) draggingChip = newName;
     }
 
     @Override
@@ -74,13 +83,11 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         var font = Minecraft.getInstance().font;
         graphics.fill(getX(), getY(), getX() + width, getY() + height, 0xF015191E);
         graphics.outline(getX(), getY(), width, height, 0xFF343C46);
+        graphics.text(font, "LIBRARY", getX() + 8, getY() + 8, 0xFFE7ECF2, true);
 
-        graphics.text(font, "COMPONENTS", getX() + 7, getY() + 7, 0xFFE7ECF2, true);
-        graphics.text(font, "FOLDER NAME", getX() + 7, getY() + 24, 0xFF7F8A99, false);
-
-        int contentTop = getY() + 51;
-        int footerTop = getY() + height - 68;
-        int viewportHeight = Math.max(20, footerTop - contentTop - 3);
+        int contentTop = getY() + HEADER_HEIGHT;
+        int footerTop = getY() + height - FOOTER_HEIGHT;
+        int viewportHeight = Math.max(20, footerTop - contentTop - 2);
         int y = contentTop - (int) Math.round(scroll);
         rows.clear();
 
@@ -100,23 +107,19 @@ public final class ComponentLibraryWidget extends AbstractWidget {
             y = drawFolder(graphics, folder, y, contentTop, footerTop);
             if (folder.expanded()) {
                 for (String chip : library.chipsInFolder(folder.name())) {
-                    y = drawChip(graphics, chip, folder.name(), y, contentTop, footerTop);
+                    y = drawChip(graphics, chip, y, contentTop, footerTop);
                 }
             }
         }
 
-        List<String> other = library.unfiledChips();
-        if (!other.isEmpty()) {
-            y = drawOtherFolder(graphics, y, contentTop, footerTop);
-            for (String chip : other) {
-                y = drawChip(graphics, chip, "", y, contentTop, footerTop);
-            }
+        y = drawOtherFolder(graphics, y, contentTop, footerTop);
+        for (String chip : library.unfiledChips()) {
+            y = drawChip(graphics, chip, y, contentTop, footerTop);
         }
 
         int contentHeight = Math.max(0, y + (int) Math.round(scroll) - contentTop);
         maxScroll = Math.max(0, contentHeight - viewportHeight);
         scroll = clamp(scroll, 0, maxScroll);
-
         drawFooter(graphics, footerTop);
     }
 
@@ -129,8 +132,7 @@ public final class ComponentLibraryWidget extends AbstractWidget {
 
     private int drawComponent(GuiGraphicsExtractor graphics, String name, NodeKind kind, int color, int y, int clipTop, int clipBottom) {
         if (visibleRow(y, ROW_HEIGHT, clipTop, clipBottom)) {
-            int bg = 0xFF1C2229;
-            graphics.fill(getX() + 5, y, getX() + width - 5, y + ROW_HEIGHT - 1, bg);
+            graphics.fill(getX() + 5, y, getX() + width - 5, y + ROW_HEIGHT - 1, 0xFF1C2229);
             graphics.fill(getX() + 5, y, getX() + 8, y + ROW_HEIGHT - 1, color);
             graphics.text(Minecraft.getInstance().font, name, getX() + 13, y + 5, 0xFFD7DEE8, false);
             rows.add(new RowHit(RowType.COMPONENT, name, kind, y, ROW_HEIGHT));
@@ -141,12 +143,10 @@ public final class ComponentLibraryWidget extends AbstractWidget {
     private int drawFolder(GuiGraphicsExtractor graphics, ClientChipLibrary.FolderInfo folder, int y, int clipTop, int clipBottom) {
         if (visibleRow(y, ROW_HEIGHT, clipTop, clipBottom)) {
             boolean selected = folder.name().equals(selectedFolder);
-            int bg = selected ? 0xFF2A3038 : 0xFF1B2026;
-            graphics.fill(getX() + 5, y, getX() + width - 5, y + ROW_HEIGHT - 1, bg);
+            graphics.fill(getX() + 5, y, getX() + width - 5, y + ROW_HEIGHT - 1, selected ? 0xFF2A3038 : 0xFF1B2026);
             graphics.fill(getX() + 5, y, getX() + 9, y + ROW_HEIGHT - 1, folder.color());
-            String arrow = folder.expanded() ? "v" : ">";
-            graphics.text(Minecraft.getInstance().font, arrow, getX() + 14, y + 5, 0xFFAEB7C2, false);
-            graphics.text(Minecraft.getInstance().font, truncate(folder.name(), 18), getX() + 25, y + 5, selected ? 0xFFFFFFFF : 0xFFD7DEE8, false);
+            graphics.text(Minecraft.getInstance().font, folder.expanded() ? "v" : ">", getX() + 14, y + 5, 0xFFAEB7C2, false);
+            graphics.text(Minecraft.getInstance().font, truncate(folder.name(), 19), getX() + 25, y + 5, selected ? 0xFFFFFFFF : 0xFFD7DEE8, false);
             rows.add(new RowHit(RowType.FOLDER, folder.name(), null, y, ROW_HEIGHT));
         }
         return y + ROW_HEIGHT + 1;
@@ -163,14 +163,13 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         return y + ROW_HEIGHT + 1;
     }
 
-    private int drawChip(GuiGraphicsExtractor graphics, String chipName, String folderName, int y, int clipTop, int clipBottom) {
+    private int drawChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom) {
         if (visibleRow(y, ROW_HEIGHT, clipTop, clipBottom)) {
             boolean selected = chipName.equals(selectedChip);
             int left = getX() + 5 + INDENT;
             graphics.fill(left, y, getX() + width - 5, y + ROW_HEIGHT - 1, selected ? 0xFF29313A : 0xFF181D23);
             graphics.fill(left + 4, y + 4, left + 12, y + 12, library.chipColor(chipName));
-            graphics.text(Minecraft.getInstance().font, truncate(chipName, 17), left + 17, y + 5, selected ? 0xFFFFFFFF : 0xFFC8D0DA, false);
-            graphics.text(Minecraft.getInstance().font, "EDIT", getX() + width - 34, y + 5, 0xFF697583, false);
+            graphics.text(Minecraft.getInstance().font, truncate(chipName, 18), left + 17, y + 5, selected ? 0xFFFFFFFF : 0xFFC8D0DA, false);
             rows.add(new RowHit(RowType.CHIP, chipName, null, y, ROW_HEIGHT));
         }
         return y + ROW_HEIGHT + 1;
@@ -178,26 +177,25 @@ public final class ComponentLibraryWidget extends AbstractWidget {
 
     private void drawFooter(GuiGraphicsExtractor graphics, int footerTop) {
         var font = Minecraft.getInstance().font;
-        graphics.fill(getX() + 1, footerTop, getX() + width - 1, getY() + height - 1, 0xFF11151A);
-        graphics.fill(getX() + 5, footerTop + 5, getX() + 59, footerTop + 23, 0xFF20262D);
-        graphics.outline(getX() + 5, footerTop + 5, 54, 18, 0xFF46515D);
-        graphics.text(font, "+ FOLDER", getX() + 12, footerTop + 10, 0xFFD7DEE8, false);
+        graphics.fill(getX() + 1, footerTop, getX() + width - 1, getY() + height - 1, 0xFF101419);
 
-        graphics.fill(getX() + 63, footerTop + 5, getX() + 116, footerTop + 23, 0xFF20262D);
-        graphics.outline(getX() + 63, footerTop + 5, 53, 18, 0xFF46515D);
-        graphics.text(font, "RENAME", getX() + 68, footerTop + 10, 0xFFD7DEE8, false);
+        int bx = getX() + 6;
+        int by = footerTop + 5;
+        graphics.fill(bx, by, bx + 20, by + 20, 0xFF20262D);
+        graphics.outline(bx, by, 20, 20, 0xFF46515D);
+        graphics.fill(bx + 5, by + 9, bx + 15, by + 11, 0xFFE5EBF2);
+        graphics.fill(bx + 9, by + 5, bx + 11, by + 15, 0xFFE5EBF2);
 
-        graphics.fill(getX() + 120, footerTop + 5, getX() + width - 5, footerTop + 23, 0xFF20262D);
-        graphics.outline(getX() + 120, footerTop + 5, width - 125, 18, 0xFF654247);
-        graphics.text(font, "DELETE", getX() + 125, footerTop + 10, 0xFFE7B0B5, false);
+        String hint;
+        if (selectedChip != null) hint = "F2  RENAME / COLOR";
+        else if (selectedFolder != null && !selectedFolder.isBlank()) hint = "F2  EDIT FOLDER";
+        else hint = "+  ADD FOLDER";
+        graphics.text(font, hint, bx + 28, by + 7, 0xFF7F8A99, false);
 
-        graphics.text(font, selectedChip != null ? "CHIP COLOR" : selectedFolder != null ? "FOLDER COLOR" : "SELECT CHIP/FOLDER", getX() + 7, footerTop + 29, 0xFF7F8A99, false);
-        int swatchY = footerTop + 43;
-        int swatchW = Math.max(12, (width - 18) / PALETTE.length);
-        for (int i = 0; i < PALETTE.length; i++) {
-            int x = getX() + 6 + i * swatchW;
-            graphics.fill(x, swatchY, x + swatchW - 3, swatchY + 14, PALETTE[i]);
-            graphics.outline(x, swatchY, swatchW - 3, 14, 0xFF0B0D10);
+        if (selectedFolder != null && !selectedFolder.isBlank()) {
+            int tx = getX() + width - 23;
+            graphics.outline(tx, by, 17, 20, 0xFF684148);
+            graphics.text(font, "x", tx + 6, by + 7, 0xFFE6A9B0, false);
         }
     }
 
@@ -207,9 +205,24 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         double my = event.y();
         if (!contains(mx, my)) return;
 
-        int footerTop = getY() + height - 68;
+        int footerTop = getY() + height - FOOTER_HEIGHT;
         if (my >= footerTop) {
-            handleFooterClick(mx, my, footerTop, event.button());
+            if (event.button() == 0 && mx >= getX() + 6 && mx < getX() + 26 && my >= footerTop + 5 && my < footerTop + 25) {
+                requestAdd.run();
+                return;
+            }
+            if (event.button() == 0 && selectedFolder != null && !selectedFolder.isBlank()
+                    && mx >= getX() + width - 23 && mx < getX() + width - 6
+                    && my >= footerTop + 5 && my < footerTop + 25) {
+                try {
+                    String removed = selectedFolder;
+                    library.deleteFolder(removed);
+                    selectedFolder = null;
+                    status.accept("Deleted folder " + removed + "; its chips moved to OTHER");
+                } catch (IOException | RuntimeException exception) {
+                    status.accept("Delete folder failed: " + exception.getMessage());
+                }
+            }
             return;
         }
 
@@ -253,7 +266,7 @@ public final class ComponentLibraryWidget extends AbstractWidget {
 
     @Override
     protected void onDrag(MouseButtonEvent event, double dx, double dy) {
-        if (event.button() == 0 && draggingChip != null && (Math.abs(dx) + Math.abs(dy) > 0.01)) {
+        if (event.button() == 0 && draggingChip != null && Math.abs(dx) + Math.abs(dy) > 0.01) {
             dragMoved = true;
         }
     }
@@ -286,74 +299,6 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         double amount = scrollY != 0 ? scrollY : scrollX;
         scroll = clamp(scroll - amount * 28.0, 0, maxScroll);
         return true;
-    }
-
-    private void handleFooterClick(double mx, double my, int footerTop, int button) {
-        if (button != 0) return;
-
-        if (my >= footerTop + 5 && my < footerTop + 23) {
-            if (mx >= getX() + 5 && mx < getX() + 59) {
-                try {
-                    library.createFolder(folderNameSupplier.get());
-                    selectedFolder = folderNameSupplier.get().trim();
-                    selectedChip = null;
-                    folderNameSetter.accept("");
-                    status.accept("Folder created: " + selectedFolder);
-                } catch (IOException | RuntimeException exception) {
-                    status.accept("Create folder failed: " + exception.getMessage());
-                }
-                return;
-            }
-            if (mx >= getX() + 63 && mx < getX() + 116) {
-                if (selectedFolder == null || selectedFolder.isBlank()) {
-                    status.accept("Select a user folder to rename");
-                    return;
-                }
-                try {
-                    String newName = folderNameSupplier.get().trim();
-                    library.renameFolder(selectedFolder, newName);
-                    selectedFolder = newName;
-                    folderNameSetter.accept("");
-                    status.accept("Folder renamed to " + newName);
-                } catch (IOException | RuntimeException exception) {
-                    status.accept("Rename failed: " + exception.getMessage());
-                }
-                return;
-            }
-            if (mx >= getX() + 120) {
-                if (selectedFolder == null || selectedFolder.isBlank()) {
-                    status.accept("Select a user folder to delete");
-                    return;
-                }
-                try {
-                    String removed = selectedFolder;
-                    library.deleteFolder(removed);
-                    selectedFolder = null;
-                    status.accept("Deleted folder " + removed + " (chips moved to OTHER)");
-                } catch (IOException | RuntimeException exception) {
-                    status.accept("Delete failed: " + exception.getMessage());
-                }
-                return;
-            }
-        }
-
-        int swatchY = footerTop + 43;
-        if (my >= swatchY && my < swatchY + 14) {
-            int swatchW = Math.max(12, (width - 18) / PALETTE.length);
-            int index = (int) ((mx - (getX() + 6)) / swatchW);
-            if (index < 0 || index >= PALETTE.length) return;
-            try {
-                if (selectedChip != null) {
-                    library.setChipColor(selectedChip, PALETTE[index]);
-                    status.accept("Colored chip " + selectedChip);
-                } else if (selectedFolder != null && !selectedFolder.isBlank()) {
-                    library.setFolderColor(selectedFolder, PALETTE[index]);
-                    status.accept("Colored folder " + selectedFolder);
-                }
-            } catch (IOException | RuntimeException exception) {
-                status.accept("Color failed: " + exception.getMessage());
-            }
-        }
     }
 
     private RowHit rowAt(double mx, double my) {
