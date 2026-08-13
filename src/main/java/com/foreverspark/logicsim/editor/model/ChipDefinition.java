@@ -4,10 +4,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class ChipDefinition {
-    public int formatVersion = 2;
+    public int formatVersion = 3;
     public String name = "";
     public CircuitDocument circuit = new CircuitDocument();
     public ChipVisualSettings visual = new ChipVisualSettings();
+
+    /**
+     * Presentation metadata is duplicated into the chip file as a recovery source.
+     * A value of 0 means "legacy/unspecified" and lets the library index supply the default.
+     */
+    public int color = 0;
+    public String folder = "";
 
     public ChipDefinition() {
     }
@@ -29,6 +36,9 @@ public final class ChipDefinition {
         circuit.normalize();
         if (visual == null) visual = new ChipVisualSettings();
         visual.normalize();
+        if (folder == null) folder = "";
+        if (color != 0) color = 0xFF000000 | (color & 0x00FFFFFF);
+        formatVersion = Math.max(formatVersion, 3);
     }
 
     public List<PortSpec> inputPorts() {
