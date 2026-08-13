@@ -10,10 +10,18 @@ import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.model.PortDirection;
+import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompileException;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
+import com.foreverspark.logicsim.interconnect.CableConnection;
+import com.foreverspark.logicsim.interconnect.CableKind;
+import com.foreverspark.logicsim.interconnect.DevicePortAddress;
+import com.foreverspark.logicsim.interconnect.InterconnectDevice;
+import com.foreverspark.logicsim.interconnect.InterconnectGraph;
 
+import java.util.List;
 import java.util.Map;
 
 public final class LogicSelfTest {
@@ -29,7 +37,8 @@ public final class LogicSelfTest {
         testFreeformBusSplitMerge();
         testCustomChipFlattening();
         testWidthMismatchRejected();
-        System.out.println("Logic core + editor compiler self-test: PASS");
+        testInterconnectValidation();
+        System.out.println("Logic core + editor + interconnect self-test: PASS");
     }
 
     private static void testNandTruthTable() {
@@ -183,6 +192,72 @@ public final class LogicSelfTest {
             rejected = expected.getMessage().contains("Width mismatch");
         }
         check(rejected, "width mismatch must be rejected");
+    }
+
+    private static void testInterconnectValidation() {
+        InterconnectGraph graph = new InterconnectGraph();
+        graph.registerDevice(new InterconnectDevice(
+                "CPU",
+                List.of(),
+                List.of(
+                        new PortSpec("DATA", PortDirection.OUTPUT, 16),
+                        new PortSpec("IRQ", PortDirection.OUTPUT, 1)
+                )
+        ));
+        graph.registerDevice(new InterconnectDevice(
+                "RAM",
+                List.of(new PortSpec("DATA", PortDirection.INPUT, 16)),
+                List.of()
+        ));
+        graph.registerDevice(new InterconnectDevice(
+                "CTRL",
+                List.of(new PortSpec("IRQ", PortDirection.INPUT, 1)),
+                List.of()
+        ));
+
+        CableConnection bus = graph.connect(
+                new DevicePortAddress("CPU", PortDirection.OUTPUT, 0),
+                new DevicePortAddress("RAM", PortDirection.INPUT, 0),
+                CableKind.BUS
+        );
+        check(bus.width() == 16 && bus.kind() == CableKind.BUS, "16-bit world bus connection");
+
+        CableConnection signal = graph.connect(
+                new DevicePortAddress("CPU", PortDirection.OUTPUT, 1),
+                new DevicePortAddress("CTRL", PortDirection.INPUT, 0),
+                CableKind.SIGNAL
+        );
+        check(signal.width() == 1 && signal.kind() == CableKind.SIGNAL, "1-bit world signal wire");
+
+        boolean wrongCableRejected = false;
+        try {
+            graph.disconnect(bus);
+            graph.connect(
+                    new DevicePortAddress("CPU", PortDirection.OUTPUT, 0),
+                    new DevicePortAddress("RAM", PortDirection.INPUT, 0),
+                    CableKind.SIGNAL
+            );
+        } catch (IllegalArgumentException expected) {
+            wrongCableRejected = expected.getMessage().contains("1-bit");
+        }
+        check(wrongCableRejected, "16-bit port must reject signal wire");
+
+        graph.registerDevice(new InterconnectDevice(
+                "BYTE_DEVICE",
+                List.of(new PortSpec("DATA", PortDirection.INPUT, 8)),
+                List.of()
+        ));
+        boolean mismatchRejected = false;
+        try {
+            graph.connect(
+                    new DevicePortAddress("CPU", PortDirection.OUTPUT, 0),
+                    new DevicePortAddress("BYTE_DEVICE", PortDirection.INPUT, 0),
+                    CableKind.BUS
+            );
+        } catch (IllegalArgumentException expected) {
+            mismatchRejected = expected.getMessage().contains("Width mismatch");
+        }
+        check(mismatchRejected, "world cable width mismatch must be rejected");
     }
 
     private static CircuitDocument makeNotDocument() {
