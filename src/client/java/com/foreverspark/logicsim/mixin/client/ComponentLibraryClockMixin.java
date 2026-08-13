@@ -40,9 +40,9 @@ public abstract class ComponentLibraryClockMixin {
         int x = self.getX() + self.getWidth() - 66;
         int y = self.getY() + self.getHeight() - 25;
         if (event.x() < x || event.x() >= x + 34 || event.y() < y || event.y() >= y + 20) return;
-        ClockPlacementState.arm();
+        ClockPlacementState.arm(canvas);
         canvas.setPlacement(NodeKind.CONSTANT);
-        status.accept("Place CLOCK — 1-bit virtual timing source, default 1 MHz");
+        status.accept("Place CLOCK — 1-bit virtual timing source, default 1 kHz");
         ci.cancel();
     }
 }
