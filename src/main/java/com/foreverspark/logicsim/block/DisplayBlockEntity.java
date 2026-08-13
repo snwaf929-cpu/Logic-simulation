@@ -2,7 +2,10 @@ package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.display.DisplayController;
 import com.foreverspark.logicsim.display.DisplayFramebuffer;
+import com.foreverspark.logicsim.interconnect.CableRuntime;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -18,6 +21,16 @@ public final class DisplayBlockEntity extends BlockEntity {
 
     public DisplayFramebuffer framebuffer() {
         return controller.framebuffer();
+    }
+
+    public static void tick(Level level, BlockPos pos, BlockState state, DisplayBlockEntity display) {
+        if (level.isClientSide()) return;
+        int x = (int)(CableRuntime.value(level, pos.relative(Direction.WEST)) & 0xFFFFL);
+        int y = (int)(CableRuntime.value(level, pos.relative(Direction.EAST)) & 0xFFFFL);
+        int color = (int)(CableRuntime.value(level, pos.relative(Direction.SOUTH)) & 0xFFFFL);
+        boolean write = (CableRuntime.value(level, pos.relative(Direction.UP)) & 1L) != 0L;
+        boolean clear = (CableRuntime.value(level, pos.relative(Direction.DOWN)) & 1L) != 0L;
+        display.sampleSignals(x, y, color, write, clear);
     }
 
     public void sampleSignals(int x, int y, int rgb565, boolean write, boolean clear) {
