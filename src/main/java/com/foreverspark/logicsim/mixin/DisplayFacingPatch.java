@@ -1,5 +1,8 @@
 package com.foreverspark.logicsim.mixin;
 
-public final class DisplayFacingPatch {
-    private DisplayFacingPatch() {}
+import com.foreverspark.logicsim.block.DisplayBlockEntity;
+import org.spongepowered.asm.mixin.Mixin;
+
+@Mixin(DisplayBlockEntity.class)
+public abstract class DisplayFacingPatch {
 }
