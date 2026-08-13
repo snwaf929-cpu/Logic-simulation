@@ -5,10 +5,13 @@ import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
@@ -39,9 +42,13 @@ public final class CircuitEditorScreen extends Screen {
     private ModalMode modalMode = ModalMode.NONE;
     private LibraryEditKind libraryEditKind;
     private String pendingLibraryName;
+    private CircuitCanvasWidget.IoSelection pendingIo;
     private CircuitCanvasWidget.DeletionIntent pendingDeletion;
     private String modalError = "";
     private int modalColor = ClientChipLibrary.DEFAULT_CHIP_COLOR;
+
+    /** Original screenshot key while this editor temporarily owns F2. Null means nothing was changed. */
+    private String suppressedScreenshotKey;
 
     private EditBox modalNameBox;
     private EditBox modalWidthBox;
@@ -53,6 +60,41 @@ public final class CircuitEditorScreen extends Screen {
 
     public CircuitEditorScreen() {
         super(Component.translatable("screen.logicsimulation.circuit_editor"));
+    }
+
+    @Override
+    public void added() {
+        super.added();
+        suppressVanillaF2ScreenshotWhileOpen();
+    }
+
+    @Override
+    public void removed() {
+        restoreVanillaScreenshotBinding();
+        super.removed();
+    }
+
+    /**
+     * Vanilla handles the screenshot mapping before Screen.keyPressed, so consuming F2 in this
+     * screen is too late. Temporarily unbind screenshot only when the user's screenshot key is F2,
+     * then restore the exact key when this editor closes. We intentionally do not save Options.
+     */
+    private void suppressVanillaF2ScreenshotWhileOpen() {
+        if (suppressedScreenshotKey != null) return;
+        String saved = this.minecraft.options.keyScreenshot.saveString();
+        InputConstants.Key screenshotKey = InputConstants.getKey(saved);
+        if (screenshotKey.getType() == InputConstants.Type.KEYSYM && screenshotKey.getValue() == GLFW.GLFW_KEY_F2) {
+            suppressedScreenshotKey = saved;
+            this.minecraft.options.keyScreenshot.setKey(InputConstants.UNKNOWN);
+            KeyMapping.resetMapping();
+        }
+    }
+
+    private void restoreVanillaScreenshotBinding() {
+        if (suppressedScreenshotKey == null) return;
+        this.minecraft.options.keyScreenshot.setKey(InputConstants.getKey(suppressedScreenshotKey));
+        KeyMapping.resetMapping();
+        suppressedScreenshotKey = null;
     }
 
     @Override
@@ -164,6 +206,7 @@ public final class CircuitEditorScreen extends Screen {
         modalMode = ModalMode.SAVE_CHIP;
         modalError = "";
         pendingLibraryName = null;
+        pendingIo = null;
         pendingDeletion = null;
 
         String name = currentChipName == null ? "" : currentChipName;
@@ -185,10 +228,35 @@ public final class CircuitEditorScreen extends Screen {
         modalMode = ModalMode.ADD_FOLDER;
         modalError = "";
         pendingLibraryName = null;
+        pendingIo = null;
         pendingDeletion = null;
         modalColor = ClientChipLibrary.DEFAULT_FOLDER_COLOR;
         modalNameBox.setValue("");
         modalPalette.setSelectedColor(modalColor);
+        configureModalWidgets();
+        setEditorEnabled(false);
+    }
+
+    /** F2 edits a selected INPUT/OUTPUT first; otherwise it edits the selected library item. */
+    private void openF2EditModal() {
+        if (modalMode != ModalMode.NONE) return;
+        CircuitCanvasWidget.IoSelection io = canvas.selectedIoSelection();
+        if (io != null) {
+            openIoEditModal(io);
+            return;
+        }
+        openLibraryEditModal();
+    }
+
+    private void openIoEditModal(CircuitCanvasWidget.IoSelection io) {
+        canvas.cancelPlacement();
+        modalMode = ModalMode.EDIT_IO;
+        pendingIo = io;
+        pendingLibraryName = null;
+        pendingDeletion = null;
+        modalError = "";
+        modalNameBox.setMaxLength(32);
+        modalNameBox.setValue(io.label());
         configureModalWidgets();
         setEditorEnabled(false);
     }
@@ -203,7 +271,9 @@ public final class CircuitEditorScreen extends Screen {
             modalMode = ModalMode.EDIT_LIBRARY_ITEM;
             libraryEditKind = LibraryEditKind.CHIP;
             pendingLibraryName = selectedChip;
+            pendingIo = null;
             modalColor = library.chipColor(selectedChip);
+            modalNameBox.setMaxLength(48);
             modalNameBox.setValue(selectedChip);
             modalPalette.setSelectedColor(modalColor);
             modalError = "";
@@ -216,7 +286,9 @@ public final class CircuitEditorScreen extends Screen {
             modalMode = ModalMode.EDIT_LIBRARY_ITEM;
             libraryEditKind = LibraryEditKind.FOLDER;
             pendingLibraryName = selectedFolder;
+            pendingIo = null;
             modalColor = library.folderColor(selectedFolder);
+            modalNameBox.setMaxLength(32);
             modalNameBox.setValue(selectedFolder);
             modalPalette.setSelectedColor(modalColor);
             modalError = "";
@@ -225,7 +297,7 @@ public final class CircuitEditorScreen extends Screen {
             return;
         }
 
-        setStatus("Select a saved chip or folder in the library, then press F2");
+        setStatus("Select an INPUT/OUTPUT on the canvas or a saved chip/folder, then press F2");
     }
 
     private void requestDeleteSelection() {
@@ -241,6 +313,7 @@ public final class CircuitEditorScreen extends Screen {
         }
 
         pendingDeletion = intent;
+        pendingIo = null;
         modalMode = ModalMode.CONFIRM_DELETE;
         modalError = "";
         configureModalWidgets();
@@ -253,6 +326,7 @@ public final class CircuitEditorScreen extends Screen {
                 case SAVE_CHIP -> applySave();
                 case ADD_FOLDER -> applyAddFolder();
                 case EDIT_LIBRARY_ITEM -> applyLibraryEdit();
+                case EDIT_IO -> applyIoEdit();
                 case CONFIRM_DELETE -> {
                     canvas.deleteSelectionConfirmed();
                     closeModal();
@@ -282,7 +356,17 @@ public final class CircuitEditorScreen extends Screen {
         ChipVisualSettings visual = new ChipVisualSettings(width, height, gap);
 
         CircuitCompiler.compile(canvas.document(), library);
-        library.save(name, canvas.document(), modalColor, visual);
+
+        // Existing chips keep their folder. New chips inherit the currently selected folder (or OTHER).
+        String targetFolder;
+        if (currentChipName != null && library.exists(currentChipName)) {
+            targetFolder = library.folderOf(currentChipName);
+        } else {
+            String selectedFolder = componentLibrary.selectedFolderName();
+            targetFolder = selectedFolder == null ? "" : selectedFolder;
+        }
+        library.save(name, canvas.document(), modalColor, visual, targetFolder);
+
         currentChipName = name;
         canvas.setCurrentChipName(name);
         componentLibrary.selectChip(name);
@@ -292,9 +376,10 @@ public final class CircuitEditorScreen extends Screen {
             canvas.refreshLiveRuntime();
         }
         closeModal();
+        String folderText = targetFolder == null || targetFolder.isBlank() ? "OTHER" : targetFolder;
         setStatus(nested
-                ? "Saved " + name + " and rebuilt the running parent — internal signals are live again"
-                : "Saved " + name + "  |  body " + formatNumber(visual.width) + "×" + formatNumber(visual.minHeight) + "  pin gap " + formatNumber(visual.portSpacing));
+                ? "Saved " + name + " in " + folderText + " and rebuilt the running parent"
+                : "Saved " + name + " in " + folderText + "  |  body " + formatNumber(visual.width) + "×" + formatNumber(visual.minHeight) + "  pin gap " + formatNumber(visual.portSpacing));
     }
 
     private void applyAddFolder() throws IOException {
@@ -322,7 +407,7 @@ public final class CircuitEditorScreen extends Screen {
             componentLibrary.selectChip(newName);
             canvas.refreshLiveRuntime();
             closeModal();
-            setStatus("Updated chip " + newName);
+            setStatus("Updated chip " + newName + " — color and folder metadata persisted");
             return;
         }
 
@@ -335,6 +420,14 @@ public final class CircuitEditorScreen extends Screen {
         componentLibrary.selectFolder(newName);
         closeModal();
         setStatus("Updated folder " + newName);
+    }
+
+    private void applyIoEdit() {
+        String newLabel = modalNameBox.getValue().trim();
+        if (!canvas.renameSelectedIo(newLabel)) {
+            throw new IllegalStateException("Selected INPUT/OUTPUT is no longer available");
+        }
+        closeModal();
     }
 
     private void openChip(String name) {
@@ -362,6 +455,9 @@ public final class CircuitEditorScreen extends Screen {
         boolean hasName = modalMode != ModalMode.CONFIRM_DELETE && modalMode != ModalMode.NONE;
         boolean saveLayoutFields = modalMode == ModalMode.SAVE_CHIP;
         boolean hasPalette = modalMode == ModalMode.SAVE_CHIP || modalMode == ModalMode.ADD_FOLDER || modalMode == ModalMode.EDIT_LIBRARY_ITEM;
+        if (modalNameBox != null && modalMode != ModalMode.EDIT_IO) {
+            modalNameBox.setMaxLength(modalMode == ModalMode.ADD_FOLDER || (modalMode == ModalMode.EDIT_LIBRARY_ITEM && libraryEditKind == LibraryEditKind.FOLDER) ? 32 : 48);
+        }
         setWidgetVisible(modalNameBox, hasName);
         setWidgetVisible(modalWidthBox, saveLayoutFields);
         setWidgetVisible(modalHeightBox, saveLayoutFields);
@@ -390,8 +486,10 @@ public final class CircuitEditorScreen extends Screen {
         modalMode = ModalMode.NONE;
         libraryEditKind = null;
         pendingLibraryName = null;
+        pendingIo = null;
         pendingDeletion = null;
         modalError = "";
+        if (modalNameBox != null) modalNameBox.setMaxLength(48);
         hideModalWidgets();
         setEditorEnabled(true);
     }
@@ -404,6 +502,27 @@ public final class CircuitEditorScreen extends Screen {
 
     private void setStatus(String status) {
         this.status = status == null ? "" : status;
+    }
+
+    /**
+     * Minecraft 26.2's ContainerEventHandler only forwards drag events for button 0.
+     * MouseHandler itself tracks RMB/MMB correctly, so forward those two buttons straight
+     * to the canvas at the Screen boundary instead of relying on the vanilla child-drag path.
+     */
+    @Override
+    public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
+        if (modalMode == ModalMode.NONE && canvas != null && (event.button() == 1 || event.button() == 2)) {
+            return canvas.mouseDragged(event, dx, dy);
+        }
+        return super.mouseDragged(event, dx, dy);
+    }
+
+    @Override
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (canvas != null && (event.button() == 1 || event.button() == 2)) {
+            if (canvas.mouseReleased(event)) return true;
+        }
+        return super.mouseReleased(event);
     }
 
     @Override
@@ -455,7 +574,7 @@ public final class CircuitEditorScreen extends Screen {
             return true;
         }
         if (key == GLFW.GLFW_KEY_F2) {
-            openLibraryEditModal();
+            openF2EditModal();
             return true;
         }
         if (key == GLFW.GLFW_KEY_E) {
@@ -538,6 +657,11 @@ public final class CircuitEditorScreen extends Screen {
         } else if (modalMode == ModalMode.EDIT_LIBRARY_ITEM) {
             graphics.text(this.font, "NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
             graphics.text(this.font, libraryEditKind == LibraryEditKind.CHIP ? "CHIP COLOR" : "FOLDER COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
+        } else if (modalMode == ModalMode.EDIT_IO) {
+            graphics.text(this.font, "PORT NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
+            String kind = pendingIo != null && pendingIo.kind().name().equals("OUTPUT") ? "output" : "input";
+            graphics.text(this.font, "This becomes the reusable chip " + kind + " pin name and appears when that pin is hovered.", modalX + 20, modalY + 83, 0xFF7F8B98, false);
+            graphics.text(this.font, "Leave it blank to use the automatic IN#/OUT# name.", modalX + 20, modalY + 102, 0xFF65717E, false);
         } else if (modalMode == ModalMode.CONFIRM_DELETE) {
             String text = pendingDeletion == null ? "Delete selected item?" : pendingDeletion.description();
             graphics.text(this.font, text, modalX + 20, modalY + 56, 0xFFE6CDD0, false);
@@ -562,6 +686,7 @@ public final class CircuitEditorScreen extends Screen {
             case SAVE_CHIP -> 0xFF55B96B;
             case ADD_FOLDER -> 0xFF4C86D9;
             case EDIT_LIBRARY_ITEM -> modalColor;
+            case EDIT_IO -> pendingIo != null && pendingIo.kind().name().equals("OUTPUT") ? 0xFF7B68D9 : 0xFF4C86D9;
             case CONFIRM_DELETE -> 0xFFE05252;
             case NONE -> 0xFF59636E;
         };
@@ -572,6 +697,7 @@ public final class CircuitEditorScreen extends Screen {
             case SAVE_CHIP -> "SAVE CHIP";
             case ADD_FOLDER -> "ADD FOLDER";
             case EDIT_LIBRARY_ITEM -> libraryEditKind == LibraryEditKind.CHIP ? "EDIT CHIP" : "EDIT FOLDER";
+            case EDIT_IO -> pendingIo != null && pendingIo.kind().name().equals("OUTPUT") ? "NAME OUTPUT" : "NAME INPUT";
             case CONFIRM_DELETE -> "CONFIRM DELETE";
             case NONE -> "";
         };
@@ -579,9 +705,10 @@ public final class CircuitEditorScreen extends Screen {
 
     private String modalSubtitle() {
         return switch (modalMode) {
-            case SAVE_CHIP -> canvas != null && canvas.isNestedView() ? "Edit this saved chip inside the running hierarchy" : "Name, color, and reusable body layout";
+            case SAVE_CHIP -> canvas != null && canvas.isNestedView() ? "Edit this saved chip inside the running hierarchy" : "Name, color, folder, and reusable body layout";
             case ADD_FOLDER -> "Name and color for the new folder";
             case EDIT_LIBRARY_ITEM -> "F2 quick edit";
+            case EDIT_IO -> "F2 names the selected reusable port";
             case CONFIRM_DELETE -> "Connected nodes require confirmation";
             case NONE -> "";
         };
@@ -620,6 +747,7 @@ public final class CircuitEditorScreen extends Screen {
         SAVE_CHIP,
         ADD_FOLDER,
         EDIT_LIBRARY_ITEM,
+        EDIT_IO,
         CONFIRM_DELETE
     }
 
