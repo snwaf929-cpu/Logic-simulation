@@ -15,6 +15,7 @@
     "CircuitCanvasBusWireTextMixin",
     "CircuitEditorProgramMixin",
     "ComponentLibraryClockMixin",
+    "ComponentLibraryStepMixin",
     "CanvasAccess"
   ],
   "injectors": {"defaultRequire": 1}
