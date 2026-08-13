@@ -9,6 +9,7 @@ import net.minecraft.network.chat.Component;
 /** Compact icon-only toolbar button for the circuit editor. */
 public final class EditorIconButton extends AbstractWidget {
     public enum Icon {
+        BACK,
         SAVE,
         NEW,
         DELETE,
@@ -46,6 +47,13 @@ public final class EditorIconButton extends AbstractWidget {
 
     private void drawIcon(GuiGraphicsExtractor g, int cx, int cy, int color) {
         switch (icon) {
+            case BACK -> {
+                g.fill(cx - 7, cy - 1, cx + 6, cy + 2, color);
+                g.fill(cx - 7, cy - 1, cx - 4, cy + 2, color);
+                g.fill(cx - 5, cy - 4, cx - 2, cy + 5, color);
+                g.fill(cx - 3, cy - 6, cx, cy - 3, color);
+                g.fill(cx - 3, cy + 4, cx, cy + 7, color);
+            }
             case SAVE -> {
                 g.outline(cx - 6, cy - 7, 13, 14, color);
                 g.fill(cx - 3, cy - 6, cx + 4, cy - 2, color);
