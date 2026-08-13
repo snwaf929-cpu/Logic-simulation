@@ -34,7 +34,7 @@ processResources {
     inputs.property "version", project.version
 
     filesMatching("fabric.mod.json") {
-        expand "version": project.version
+        expand "version", project.version
     }
 }
 
@@ -55,6 +55,14 @@ tasks.register('selfTest', JavaExec) {
     dependsOn classes
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.foreverspark.logicsim.tools.LogicSelfTest'
+}
+
+tasks.register('clientSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs client-side chip-library persistence regression tests without launching Minecraft.'
+    dependsOn clientClasses
+    classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.client.chip.LibraryPersistenceSelfTest'
 }
 
 tasks.register('benchmark', JavaExec) {
