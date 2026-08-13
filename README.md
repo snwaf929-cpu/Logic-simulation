@@ -15,61 +15,106 @@ A NAND-first digital logic and computer simulation mod for **Minecraft Java 26.2
 
 1. Find **Circuit Block** in the Building Blocks creative tab.
 2. Place it and right-click it with an empty hand.
-3. The editor opens on an empty freeform canvas.
-4. Pick `INPUT`, `OUTPUT`, `NAND`, `SPLITTER`, `MERGER`, or a saved custom chip from the left component library.
-5. Click an output port and then a compatible input port to create a wire/bus.
-6. The document recompiles into the real NAND event-driven simulator after structural changes.
+3. Pick `INPUT`, `OUTPUT`, `NAND`, `SPLITTER`, `MERGER`, or a saved chip from the left library.
+4. Click an output port and then a compatible input port to create a wire/bus.
+5. Structural changes compile into the real NAND event-driven simulator.
 
-### Editor navigation and testing
+### Navigation and keyboard workflow
 
-- **Left-drag empty canvas** — pan around the circuit naturally.
+The editor now separates navigation from editing so panning cannot accidentally drag a chip.
+
+- **Right-drag** — pan the circuit canvas.
 - **Middle-drag** — alternate pan control.
 - **Mouse wheel** — zoom around the cursor from 35% to 250%.
-- **FIT** — frame all nodes automatically.
-- **HOME** — reset pan/zoom.
-- **Left-drag a node** — move it.
-- **Click the visible switch inside an INPUT** — toggle it between `OFF 0` and `ON 1`; multi-bit inputs toggle between zero and all-one bits.
-- **Click OUT port → IN port** — connect a wire/bus.
-- **Right-click a wire** — delete that wire immediately.
-- **Select node/wire + DELETE** — delete the selection.
-- **W- / W+** — change selected Input/Output/Splitter/Merger width through `1/2/4/8/16/32/64` bits. Attached wires are cleared when width changes.
+- **Left-click / left-drag** — select and move nodes only.
+- A small movement threshold prevents hand jitter from moving a selected node.
+- Node placement/movement snaps to a light grid for cleaner layouts.
+- **Ctrl+S** — open the Save Chip modal.
+- **Del / Backspace** — delete the selected node or wire.
+- Deleting a node that has attached wires opens a confirmation modal showing how many connections will also be removed.
+- **F2** — rename/recolor the selected saved chip or folder in the library.
+- **E** — enter/leave route-edit mode for the selected wire.
+- **Esc** — cancel placement/wiring/route-edit mode before closing the screen.
 
-Input, Output, and NAND nodes use a compact cubic layout instead of the original oversized cards. Ports stay square rather than circular.
+The top toolbar uses compact drawn icons for save, new, delete, width down/up, fit, and home. Hovering an icon shows its meaning. Action/error feedback lives in a dedicated **bottom status bar**, not crammed into the top toolbar.
+
+### Direct circuit testing
+
+`INPUT` nodes contain a visible rectangular switch.
+
+- Click it to change `OFF 0` ↔ `ON 1`.
+- Multi-bit inputs toggle between zero and all-one bits.
+- Wire/node colors update from the live simulator state.
+- While creating a wire, compatible target ports are highlighted green and width-mismatched ports red.
+- A live orthogonal wire preview follows the cursor before the connection is committed.
+
+### Organized wire routing
+
+Wire geometry is now editable separately from wire logic.
+
+1. Click a wire to select it.
+2. Press **E** to enter wire-route edit mode.
+3. Square route handles appear.
+4. Drag a corner to reposition the route.
+5. Drag an **interior horizontal/vertical segment** perpendicular to itself; both end corners move together.
+6. Double-click a segment to add a pair of route corners, then drag the new interior segment to create a clean detour.
+7. Press **E** again to finish.
+
+Manual route points are saved with the circuit but are **presentation-only**. They do not alter which ports are electrically connected and do not add hidden logic. The self-test suite explicitly verifies that changing a wire route cannot change circuit behavior.
 
 ### Component library, folders, and colors
 
-The old vertical wall of vanilla buttons has been replaced by a compact mixed component library:
+The sidebar is a compact mixed component library:
 
-- Built-in **PRIMITIVES**: Input, Output, NAND.
-- Built-in **ROUTING**: Splitter, Merger.
-- User-created folders with saved chips nested beneath them.
-- An **OTHER** section for unfiled chips.
+- **PRIMITIVES** — Input, Output, NAND.
+- **ROUTING** — Splitter, Merger.
+- User folders containing reusable chips.
+- **OTHER** for unfiled chips.
 
-Library organization is persisted in `config/logic-simulation/library.json` separately from the circuit files, so old `.logicchip.json` chips remain compatible.
+Controls:
 
-- Enter a folder name and press **+ FOLDER** to create a collection.
+- Click the **+** icon at the bottom to open **Add Folder**.
+- Choose folder name and color in the modal.
 - Click a folder to expand/collapse it.
-- Drag a chip row onto a folder to move it there.
-- Select a folder and use **RENAME** or **DELETE**. Deleting a folder moves its chips to OTHER; it does not delete the chip circuits.
-- Select a folder or chip and click a color swatch to assign a color.
-- Custom chip colors are also shown on instances placed on the circuit canvas.
-- Click a saved chip to place an instance. Right-click a saved chip to open it for editing.
+- Drag a chip row onto a folder to move it.
+- Select a chip/folder and press **F2** to rename/recolor it.
+- Renaming a chip also rewrites references inside already-saved parent chips so a renamed lower-level chip does not silently break higher-level designs.
+- Deleting a folder moves its chips to OTHER; it does not delete their circuit files.
+- Left-click a saved chip to place it; right-click it to open it for editing.
 
-### Buses, splitter, and merger
+Folder/color organization is stored in `config/logic-simulation/library.json`. Circuit files remain under `config/logic-simulation/chips/` as `.logicchip.json` files.
 
-Bus width is part of the port type. A multi-bit connection is rendered as one bus wire and labeled with its width, for example `[16]`.
+### Save Chip modal and reusable body layout
+
+**Ctrl+S** opens a proper save modal instead of relying on fields in the toolbar. It configures:
+
+- chip name,
+- chip color,
+- reusable body width,
+- reusable minimum body height,
+- spacing between exposed input/output pins.
+
+This means a chip with two inputs can intentionally be made taller so the two pins have more visual separation. Saved dimensions are used when that custom chip is placed inside another circuit.
+
+Safe ranges are enforced so corrupted/accidental values cannot create unusable UI geometry:
+
+- width: `72–260`,
+- minimum height: `42–300`,
+- pin spacing: `10–48`.
+
+### Buses, Splitter, and Merger
+
+Bus width is part of the port type. A multi-bit connection is rendered as one bus wire labeled with its width, for example `[16]`.
 
 - `SPLITTER N`: one N-bit bus input → N individual 1-bit outputs.
 - `MERGER N`: N individual 1-bit inputs → one N-bit bus output.
-- Width mismatches are rejected, for example `16-bit → 1-bit` cannot be connected directly.
+- Width mismatches are rejected; for example, `16-bit → 1-bit` cannot be wired directly.
 
-Splitter and Merger are structural wiring primitives; they do not add hidden logic gates.
+Splitter and Merger are structural routing primitives. They do not add hidden logic gates.
 
 ### Reusable custom chips
 
-Enter a name in the top **CHIP** field and press **SAVE**. Saved circuits are stored under `config/logic-simulation/chips/` as `.logicchip.json` files and immediately appear in the component library.
-
-At runtime custom chips are recursively flattened into the NANDs the player actually built; they are not magic prebuilt gates.
+Custom chips remain NAND-authentic. At runtime they are recursively flattened into the NANDs the player actually built; a saved `NOT`, `Adder`, or later `ALU` is not a magic prebuilt gate.
 
 ## Core principles
 
@@ -83,35 +128,35 @@ At runtime custom chips are recursively flattened into the NANDs the player actu
 
 ## Core engine
 
-The repository contains:
+The repository currently contains:
 
 1. `0 / 1 / X` logic values.
 2. NAND nodes.
 3. Event-driven propagation.
-4. Typed 1-64 bit buses with structural split/merge mapping.
-5. Freeform circuit document compiler with width validation.
+4. Typed 1–64-bit buses with structural split/merge mapping.
+5. Freeform circuit compiler with width validation.
 6. Recursive custom-chip flattening to NAND.
-7. Ring-buffer trace recorder.
-8. Self-tests covering NAND logic, buses, Split/Merge, custom chips, and width mismatch rejection.
+7. Persistent presentation-only orthogonal wire routes.
+8. Persistent custom-chip visual dimensions/pin spacing.
+9. Ring-buffer trace recorder.
+10. Self-tests for NAND logic, buses, Split/Merge, custom chips, width mismatches, route/logic separation, chip visual bounds, and world interconnect validation.
 
 ## World interconnect foundation
 
-The physical-computer layer now has both a validated typed topology model and the first placeable cable prototypes.
+The physical-computer layer has a validated typed topology model and the first placeable cable prototypes.
 
 - `SIGNAL` / **Signal Wire**: exactly 1 bit.
-- `BUS` / **Bus Cable**: multi-bit, 2-64 bits.
-- Output → input direction is validated by the interconnect graph.
+- `BUS` / **Bus Cable**: multi-bit, 2–64 bits.
+- Output → input direction is validated.
 - Widths must match exactly; there is no hidden conversion.
 - An input cannot silently acquire multiple drivers.
-- Shared tri-state buses/arbitration are intentionally not faked; they will be implemented as a later explicit layer.
+- Shared tri-state buses/arbitration will be explicit later rather than faked.
 
-`Signal Wire` and `Bus Cable` now exist as separate placeable blocks/items with slim cubic models and collision shapes. They are an **early physical prototype**: they carry the correct cable identity in code, but they are not yet bound to world device ports or propagating virtual signals through adjacent blocks.
-
-Self-tests verify 1-bit signal connections, 16-bit bus connections, wrong-cable rejection, and width-mismatch rejection.
+`Signal Wire` and `Bus Cable` exist as separate placeable blocks/items with slim cubic models and collision shapes. They are still an **early physical prototype**: they have the correct type identity but are not yet bound to world device ports or propagating virtual signals through adjacent blocks.
 
 ## Next hardware milestone
 
-Add world-space device ports and topology discovery, bind placed cable networks to the typed `InterconnectGraph`, then expose saved custom chips as world devices. After that, CPU/RAM/GPU/storage blocks can connect through the same system. These cables remain separate from Minecraft redstone.
+Add world-space device ports and topology discovery, bind placed cable networks to the typed `InterconnectGraph`, then expose saved custom chips as world devices. CPU/RAM/GPU/storage can then connect through the same system without using Minecraft Redstone as the computer bus.
 
 ## Build / run
 
