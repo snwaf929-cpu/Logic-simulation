@@ -2,5 +2,6 @@
   "block.logicsimulation.circuit_block": "Circuit Block",
   "block.logicsimulation.signal_wire": "Signal Wire",
   "block.logicsimulation.bus_cable": "Bus Cable",
+  "block.logicsimulation.display_panel": "Display Panel 16x16",
   "screen.logicsimulation.circuit_editor": "Circuit Editor"
 }
