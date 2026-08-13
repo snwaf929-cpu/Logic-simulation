@@ -28,6 +28,7 @@ public abstract class ComponentLibraryClockMixin {
 
     @Inject(method = "extractWidgetRenderState", at = @At("TAIL"))
     private void logic$drawClockButton(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+        EditorClockRuntime.attach(canvas);
         ComponentLibraryWidget self = (ComponentLibraryWidget)(Object)this;
         int x = self.getX() + self.getWidth() - 66;
         int y = self.getY() + self.getHeight() - 25;
