@@ -1,18 +1,36 @@
 package com.foreverspark.logicsim.block;
 
+import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
-import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.BaseEntityBlock;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
-/** Compact physical socket used between a device port and a typed cable. */
-public final class IoConnectorBlock extends Block {
+/** Compact physical socket used between one named circuit port and one typed cable run. */
+public final class IoConnectorBlock extends BaseEntityBlock {
     private static final VoxelShape SHAPE = box(3, 3, 3, 13, 13, 13);
 
     public IoConnectorBlock(Properties properties) {
         super(properties);
+    }
+
+    @Override
+    protected MapCodec<? extends BaseEntityBlock> codec() {
+        return simpleCodec(IoConnectorBlock::new);
+    }
+
+    @Override
+    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
+        return new CircuitPortBlockEntity(pos, state);
+    }
+
+    @Override
+    protected RenderShape getRenderShape(BlockState state) {
+        return RenderShape.MODEL;
     }
 
     @Override
