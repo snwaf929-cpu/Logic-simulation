@@ -1,5 +1,5 @@
 {
   "variants": {
-    "": { "model": "logicsimulation:block/display_block" }
+    "": { "model": "logicsimulation:block/circuit_block" }
   }
 }
