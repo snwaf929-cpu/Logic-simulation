@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.client.screen;
 
 import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.core.LogicValue;
+import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -18,6 +19,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -33,14 +35,22 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     private static final double NODE_GRID = 12.0;
     private static final double ROUTE_GRID = 6.0;
     private static final double EPSILON = 0.001;
+    private static final double COPY_OFFSET = 24.0;
     private static final int[] WIDTHS = {1, 2, 4, 8, 16, 32, 64};
 
     private final ClientChipLibrary chips;
     private final Consumer<String> status;
+    private final Consumer<NavigationState> navigationChanged;
     private final Map<Integer, Long> inputStates = new HashMap<>();
+    private final List<ViewFrame> navigationStack = new ArrayList<>();
 
+    /** Current document being displayed/edited. */
     private CircuitDocument document;
+    /** Root document whose one flattened runtime powers all nested live-inspection views. */
+    private CircuitDocument runtimeRootDocument;
     private CompiledCircuit runtime;
+    private String runtimeScopePath = CompiledCircuit.ROOT_SCOPE;
+    private String currentChipName;
     private String compileError;
 
     private NodeKind placementKind;
@@ -62,6 +72,11 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     private boolean wireEditMode;
     private Integer draggingRoutePointIndex;
     private Integer draggingSegmentIndex;
+    private double lastWireClickX = Double.NaN;
+    private double lastWireClickY = Double.NaN;
+
+    private NodeClipboard clipboard;
+    private int pasteSerial;
 
     public CircuitCanvasWidget(
             int x,
@@ -72,12 +87,30 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             ClientChipLibrary chips,
             Consumer<String> status
     ) {
+        this(x, y, width, height, document, null, chips, status, ignored -> {});
+    }
+
+    public CircuitCanvasWidget(
+            int x,
+            int y,
+            int width,
+            int height,
+            CircuitDocument document,
+            String rootChipName,
+            ClientChipLibrary chips,
+            Consumer<String> status,
+            Consumer<NavigationState> navigationChanged
+    ) {
         super(x, y, width, height, Component.literal("Circuit canvas"));
         this.document = document == null ? new CircuitDocument() : document;
         this.document.normalize();
+        this.runtimeRootDocument = this.document;
+        this.currentChipName = normalizeChipName(rootChipName);
         this.chips = chips;
-        this.status = status;
-        recompile();
+        this.status = status == null ? ignored -> {} : status;
+        this.navigationChanged = navigationChanged == null ? ignored -> {} : navigationChanged;
+        recompileRoot();
+        notifyNavigationChanged();
     }
 
     public CircuitDocument document() {
@@ -88,21 +121,86 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         return compileError;
     }
 
+    public String currentChipName() {
+        return currentChipName;
+    }
+
+    public String runtimeScopePath() {
+        return runtimeScopePath;
+    }
+
+    public boolean isNestedView() {
+        return !navigationStack.isEmpty();
+    }
+
+    public boolean canNavigateBack() {
+        return !navigationStack.isEmpty();
+    }
+
+    public String breadcrumb() {
+        List<String> parts = new ArrayList<>();
+        for (ViewFrame frame : navigationStack) {
+            parts.add(frame.chipName == null || frame.chipName.isBlank() ? "ROOT" : frame.chipName);
+        }
+        parts.add(currentChipName == null || currentChipName.isBlank() ? "ROOT" : currentChipName);
+        return String.join("  >  ", parts);
+    }
+
+    public void setCurrentChipName(String name) {
+        currentChipName = normalizeChipName(name);
+        notifyNavigationChanged();
+    }
+
     public void setDocument(CircuitDocument document) {
+        setDocument(document, null);
+    }
+
+    public void setDocument(CircuitDocument document, String rootChipName) {
         this.document = document == null ? new CircuitDocument() : document;
         this.document.normalize();
+        this.runtimeRootDocument = this.document;
+        this.runtimeScopePath = CompiledCircuit.ROOT_SCOPE;
+        this.currentChipName = normalizeChipName(rootChipName);
+        navigationStack.clear();
         inputStates.clear();
         clearSelection();
         cancelPlacement();
         wireEditMode = false;
-        recompile();
+        recompileRoot();
         fitView();
+        notifyNavigationChanged();
     }
 
     public void newDocument() {
-        setDocument(new CircuitDocument());
+        setDocument(new CircuitDocument(), null);
         resetView();
         status.accept("New empty circuit");
+    }
+
+    /** Rebuild the root runtime after a nested saved-chip edit so the open instance updates live. */
+    public void refreshLiveRuntime() {
+        recompileRoot();
+        notifyNavigationChanged();
+    }
+
+    /** Navigate one level back out of a double-clicked custom-chip instance. */
+    public boolean navigateBack() {
+        if (navigationStack.isEmpty()) {
+            status.accept("Already at the top circuit");
+            return false;
+        }
+        ViewFrame frame = navigationStack.removeLast();
+        document = frame.document;
+        runtimeScopePath = frame.scopePath;
+        currentChipName = frame.chipName;
+        panX = frame.panX;
+        panY = frame.panY;
+        zoom = frame.zoom;
+        clearSelection();
+        cancelPlacement();
+        notifyNavigationChanged();
+        status.accept("Back to " + breadcrumb());
+        return true;
     }
 
     public void setPlacement(NodeKind kind) {
@@ -110,7 +208,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         placementChipName = null;
         wireStart = null;
         wireEditMode = false;
-        status.accept("Place " + kind.name() + " — left-click the canvas. Right-drag to pan.");
+        status.accept("Place " + kind.name() + " — left-click the canvas. Right/middle-drag to pan.");
     }
 
     public void setCustomChipPlacement(String chipName) {
@@ -122,7 +220,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         placementChipName = chipName.trim();
         wireStart = null;
         wireEditMode = false;
-        status.accept("Place " + placementChipName + " — left-click the canvas. F2 renames the library chip.");
+        status.accept("Place " + placementChipName + " — left-click. Double-click the placed chip to inspect inside it.");
     }
 
     public void cancelPlacement() {
@@ -168,6 +266,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             document.removeWire(selectedWire);
             selectedWire = null;
             wireEditMode = false;
+            recompile();
             status.accept("Wire deleted");
             return;
         }
@@ -176,7 +275,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             EditorNode node = document.node(id);
             int connections = document.connectionCount(id);
             document.removeNode(id);
-            inputStates.remove(id);
+            if (runtimeScopePath.equals(CompiledCircuit.ROOT_SCOPE)) {
+                inputStates.remove(id);
+            }
             selectedNodeId = null;
             wireStart = null;
             wireEditMode = false;
@@ -185,6 +286,58 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             return;
         }
         status.accept("Nothing selected");
+    }
+
+    public boolean copySelection() {
+        if (selectedNodeId == null) {
+            status.accept("Ctrl+C copies a selected component; select a node first");
+            return false;
+        }
+        EditorNode node = document.node(selectedNodeId);
+        clipboard = NodeClipboard.from(node);
+        pasteSerial = 0;
+        status.accept("Copied " + node.displayName());
+        return true;
+    }
+
+    public boolean pasteClipboard() {
+        if (clipboard == null) {
+            status.accept("Clipboard is empty — select a component and press Ctrl+C first");
+            return false;
+        }
+        pasteSerial++;
+        double offset = COPY_OFFSET * pasteSerial;
+        EditorNode pasted = pasteNode(clipboard, clipboard.x + offset, clipboard.y + offset);
+        selectedNodeId = pasted.id;
+        selectedWire = null;
+        wireEditMode = false;
+        recompile();
+        status.accept("Pasted " + pasted.displayName() + " — connections are intentionally not copied");
+        return true;
+    }
+
+    public boolean duplicateSelection() {
+        if (selectedNodeId == null) {
+            status.accept("Ctrl+D duplicates a selected component; select a node first");
+            return false;
+        }
+        EditorNode source = document.node(selectedNodeId);
+        NodeClipboard copy = NodeClipboard.from(source);
+        EditorNode duplicated = pasteNode(copy, source.x + COPY_OFFSET, source.y + COPY_OFFSET);
+        selectedNodeId = duplicated.id;
+        selectedWire = null;
+        wireEditMode = false;
+        recompile();
+        status.accept("Duplicated " + source.displayName() + " — connections are not duplicated");
+        return true;
+    }
+
+    private EditorNode pasteNode(NodeClipboard copy, double x, double y) {
+        EditorNode node = document.addNode(copy.kind, snap(x, NODE_GRID), snap(y, NODE_GRID));
+        node.width = copy.width;
+        node.label = copy.label;
+        node.chipName = copy.chipName;
+        return node;
     }
 
     public void changeSelectedWidth(int direction) {
@@ -210,7 +363,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         int removedConnections = document.connectionCount(node.id);
         node.width = WIDTHS[next];
         document.removeWiresForNode(node.id);
-        inputStates.put(node.id, 0L);
+        if (runtimeScopePath.equals(CompiledCircuit.ROOT_SCOPE)) {
+            inputStates.put(node.id, 0L);
+        }
         wireStart = null;
         selectedWire = null;
         wireEditMode = false;
@@ -261,7 +416,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         wireEditMode = !wireEditMode;
         if (wireEditMode) {
             ensureEditableRoute(selectedWire);
-            status.accept("WIRE EDIT: drag square corners or interior segments; double-click a segment to add corners; E to finish");
+            status.accept("WIRE EDIT: drag corners/segments; + adds one route point; double-click adds a dogleg; E to finish");
         } else {
             draggingRoutePointIndex = null;
             draggingSegmentIndex = null;
@@ -270,24 +425,78 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         return wireEditMode;
     }
 
+    public boolean addRoutePointToSelection() {
+        if (selectedWire == null) {
+            status.accept("Select a wire first, then press + to add a route point");
+            return false;
+        }
+        ensureEditableRoute(selectedWire);
+        List<Point> points = directWirePoints(selectedWire);
+        if (points.size() < 2) return false;
+
+        int segmentIndex = -1;
+        if (Double.isFinite(lastWireClickX) && Double.isFinite(lastWireClickY)) {
+            SegmentHit hit = directSegmentAt(selectedWire, lastWireClickX, lastWireClickY);
+            if (hit != null) segmentIndex = hit.index;
+        }
+        if (segmentIndex < 0) {
+            double longest = -1.0;
+            for (int i = 0; i < points.size() - 1; i++) {
+                Point a = points.get(i);
+                Point b = points.get(i + 1);
+                double length = Math.hypot(b.x - a.x, b.y - a.y);
+                if (length > longest) {
+                    longest = length;
+                    segmentIndex = i;
+                }
+            }
+        }
+        if (segmentIndex < 0 || segmentIndex >= points.size() - 1) return false;
+
+        Point a = points.get(segmentIndex);
+        Point b = points.get(segmentIndex + 1);
+        RoutePoint point = new RoutePoint(
+                snap((a.x + b.x) * 0.5, ROUTE_GRID),
+                snap((a.y + b.y) * 0.5, ROUTE_GRID)
+        );
+        int insertionIndex = Math.max(0, Math.min(selectedWire.routePoints().size(), segmentIndex));
+        selectedWire.routePoints().add(insertionIndex, point);
+        wireEditMode = true;
+        snapRoute(selectedWire);
+        status.accept("Added wire route point — drag the square handle to shape a long organized route");
+        return true;
+    }
+
     public boolean isWireEditMode() {
         return wireEditMode;
     }
 
     public void renameCustomChipReferences(String oldName, String newName) {
+        boolean changed = updateChipReferences(document, oldName, newName);
+        if (runtimeRootDocument != document) {
+            changed |= updateChipReferences(runtimeRootDocument, oldName, newName);
+        }
+        for (ViewFrame frame : navigationStack) {
+            changed |= updateChipReferences(frame.document, oldName, newName);
+        }
+        if (changed) {
+            recompileRoot();
+        }
+        if (placementKind == NodeKind.CUSTOM_CHIP && oldName.equals(placementChipName)) {
+            placementChipName = newName;
+        }
+    }
+
+    private static boolean updateChipReferences(CircuitDocument target, String oldName, String newName) {
+        if (target == null) return false;
         boolean changed = false;
-        for (EditorNode node : document.nodes) {
+        for (EditorNode node : target.nodes) {
             if (node.kind == NodeKind.CUSTOM_CHIP && oldName.equals(node.chipName)) {
                 node.chipName = newName;
                 changed = true;
             }
         }
-        if (changed) {
-            recompile();
-        }
-        if (placementKind == NodeKind.CUSTOM_CHIP && oldName.equals(placementChipName)) {
-            placementChipName = newName;
-        }
+        return changed;
     }
 
     @Override
@@ -307,10 +516,16 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
 
         String mode = placementKind == null
-                ? wireStart == null ? wireEditMode ? "WIRE EDIT" : "SELECT" : "WIRE"
+                ? wireStart == null ? wireEditMode ? "WIRE EDIT" : isNestedView() ? "LIVE INSPECT" : "SELECT" : "WIRE"
                 : placementKind == NodeKind.CUSTOM_CHIP ? "PLACE " + placementChipName : "PLACE " + placementKind;
-        graphics.text(font(), mode + "   " + Math.round(zoom * 100) + "%", left + 8, top + 8, wireEditMode ? 0xFF79C4FF : 0xFF84909E, false);
-        graphics.text(font(), "RMB drag: pan   Del: delete   E: wire route   Ctrl+S: save", left + 8, top + height - 15, 0xFF5F6B78, false);
+        graphics.text(font(), mode + "   " + Math.round(zoom * 100) + "%", left + 8, top + 8, isNestedView() ? 0xFF63C8FF : wireEditMode ? 0xFF79C4FF : 0xFF84909E, false);
+        graphics.text(font(), "RMB/MMB drag: pan   DblClick chip: inspect   Ctrl+D/C/V   +: wire point", left + 8, top + height - 15, 0xFF5F6B78, false);
+    }
+
+    @Override
+    protected boolean isValidClickButton(MouseButtonInfo buttonInfo) {
+        int button = buttonInfo.button();
+        return button == 0 || button == 1 || button == 2;
     }
 
     @Override
@@ -320,7 +535,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         int button = event.button();
         if (!contains(mouseX, mouseY)) return;
 
-        // Navigation is intentionally separated from left-click editing so panning cannot move a chip by accident.
+        // Right and middle mouse navigation now work because isValidClickButton accepts them.
         if (button == 1 || button == 2) {
             beginPan(button);
             return;
@@ -363,10 +578,14 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             Integer routePoint = routePointAt(selectedWire, mouseX, mouseY);
             if (routePoint != null) {
                 draggingRoutePointIndex = routePoint;
+                lastWireClickX = mouseX;
+                lastWireClickY = mouseY;
                 return;
             }
             SegmentHit segment = directSegmentAt(selectedWire, mouseX, mouseY);
             if (segment != null) {
+                lastWireClickX = mouseX;
+                lastWireClickY = mouseY;
                 if (doubleClick) {
                     addDoglegCorners(selectedWire, segment.index, worldX(mouseX), worldY(mouseY));
                     return;
@@ -380,11 +599,20 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
 
         EditorNode node = nodeAt(mouseX, mouseY);
+        if (node != null && doubleClick && node.kind == NodeKind.CUSTOM_CHIP) {
+            openNestedChip(node);
+            return;
+        }
+
         if (node != null && node.kind == NodeKind.INPUT && inputToggleHit(node, mouseX, mouseY)) {
             selectedNodeId = node.id;
             selectedWire = null;
             wireEditMode = false;
-            toggleInput(node);
+            if (isNestedView()) {
+                status.accept("This INPUT is driven by the parent instance. Go back to change its source while live-inspecting.");
+            } else {
+                toggleInput(node);
+            }
             return;
         }
 
@@ -403,7 +631,9 @@ public final class CircuitCanvasWidget extends AbstractWidget {
             selectedWire = wire;
             selectedNodeId = null;
             wireEditMode = false;
-            status.accept("Wire selected — Del/Backspace deletes; E edits route");
+            lastWireClickX = mouseX;
+            lastWireClickY = mouseY;
+            status.accept("Wire selected — Del deletes; E edits route; + adds a point");
             return;
         }
 
@@ -432,7 +662,6 @@ public final class CircuitCanvasWidget extends AbstractWidget {
 
         if (draggingNodeId != null) {
             nodeDragDistance += Math.abs(dx) + Math.abs(dy);
-            // Small click/hand jitter should select a node, not visibly move it.
             if (nodeDragDistance < 4.0) return;
             EditorNode node = document.node(draggingNodeId);
             node.x += dx / zoom;
@@ -492,6 +721,31 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         draggingSegmentIndex = null;
     }
 
+    private void openNestedChip(EditorNode node) {
+        String chipName = node.chipName == null ? "" : node.chipName.trim();
+        ChipDefinition definition = chips.find(chipName);
+        if (definition == null || definition.circuit == null) {
+            status.accept("ERROR: Cannot inspect missing chip " + chipName);
+            return;
+        }
+
+        String childScope = CompiledCircuit.childScopePath(runtimeScopePath, node.id, chipName);
+        navigationStack.add(new ViewFrame(document, runtimeScopePath, currentChipName, panX, panY, zoom));
+        document = chips.copyDocument(definition.circuit);
+        runtimeScopePath = childScope;
+        currentChipName = definition.name;
+        clearSelection();
+        cancelPlacement();
+        fitView();
+        notifyNavigationChanged();
+
+        if (runtime != null && runtime.hasScope(childScope)) {
+            status.accept("LIVE INSTANCE: " + breadcrumb() + " — signals are from the same running parent runtime; Ctrl+S saves edits");
+        } else {
+            status.accept("Opened " + breadcrumb() + " for editing, but live instance signals are unavailable until the parent compiles successfully");
+        }
+    }
+
     private void connectWire(PortHit target) {
         try {
             EditorNode source = document.node(wireStart.nodeId());
@@ -534,9 +788,26 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     }
 
     private void recompile() {
+        if (runtimeScopePath.equals(CompiledCircuit.ROOT_SCOPE)) {
+            recompileRoot();
+            return;
+        }
+
+        // Nested editor changes are validated immediately. The shared live parent runtime is kept
+        // intact until Ctrl+S writes the child definition, after which refreshLiveRuntime rebuilds it.
         try {
-            runtime = CircuitCompiler.compile(document, chips);
-            for (EditorNode input : document.inputNodes()) {
+            CircuitCompiler.compile(document, chips);
+            compileError = null;
+        } catch (RuntimeException exception) {
+            compileError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+            status.accept("ERROR: " + compileError);
+        }
+    }
+
+    private void recompileRoot() {
+        try {
+            runtime = CircuitCompiler.compile(runtimeRootDocument, chips);
+            for (EditorNode input : runtimeRootDocument.inputNodes()) {
                 runtime.driveInputUnsigned(input.id, inputStates.getOrDefault(input.id, 0L));
             }
             compileError = null;
@@ -547,6 +818,11 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         }
     }
 
+    private void notifyNavigationChanged() {
+        boolean live = runtime != null && runtime.hasScope(runtimeScopePath);
+        navigationChanged.accept(new NavigationState(currentChipName, breadcrumb(), navigationStack.size(), live));
+    }
+
     private void clearSelection() {
         selectedNodeId = null;
         selectedWire = null;
@@ -555,6 +831,8 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         wireEditMode = false;
         draggingRoutePointIndex = null;
         draggingSegmentIndex = null;
+        lastWireClickX = Double.NaN;
+        lastWireClickY = Double.NaN;
     }
 
     private void drawGrid(GuiGraphicsExtractor graphics) {
@@ -627,11 +905,21 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     }
 
     private void drawInputSwitch(GuiGraphicsExtractor graphics, EditorNode node, int x, int y, int w, int h) {
-        long value = inputStates.getOrDefault(node.id, 0L);
         int boxX = x + 5;
         int boxY = y + h - Math.max(18, (int) Math.round(19 * zoom));
         int boxW = Math.max(30, w - 10);
         int boxH = Math.max(13, (int) Math.round(14 * zoom));
+
+        if (isNestedView()) {
+            LogicValue[] values = scopedOutputValues(node.id, 0);
+            int valueColor = valueColor(values);
+            graphics.fill(boxX, boxY, boxX + boxW, boxY + boxH, darken(valueColor, 0.55));
+            graphics.outline(boxX, boxY, boxW, boxH, valueColor);
+            graphics.text(font(), "IN " + formatValues(values), boxX + 4, boxY + 3, 0xFFFFFFFF, false);
+            return;
+        }
+
+        long value = inputStates.getOrDefault(node.id, 0L);
         int col = value == 0L ? 0xFF7D3539 : 0xFF2F8B48;
         graphics.fill(boxX, boxY, boxX + boxW, boxY + boxH, col);
         graphics.outline(boxX, boxY, boxW, boxH, value == 0L ? 0xFFB85A5E : 0xFF58C56F);
@@ -747,10 +1035,20 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         return node.displayName();
     }
 
+    private LogicValue[] scopedInputValues(int nodeId, int port) {
+        if (runtime == null) return new LogicValue[0];
+        return runtime.inputValues(runtimeScopePath, nodeId, port);
+    }
+
+    private LogicValue[] scopedOutputValues(int nodeId, int port) {
+        if (runtime == null) return new LogicValue[0];
+        return runtime.outputValues(runtimeScopePath, nodeId, port);
+    }
+
     private int portColor(EditorNode node, int port, boolean input) {
         if (runtime == null) return 0xFF777777;
         try {
-            LogicValue[] values = input ? runtime.inputValues(node.id, port) : runtime.outputValues(node.id, port);
+            LogicValue[] values = input ? scopedInputValues(node.id, port) : scopedOutputValues(node.id, port);
             return valueColor(values);
         } catch (RuntimeException ignored) {
             return 0xFF777777;
@@ -760,7 +1058,7 @@ public final class CircuitCanvasWidget extends AbstractWidget {
     private int wireColor(WireConnection wire) {
         if (runtime == null) return 0xFF6B7280;
         try {
-            return valueColor(runtime.outputValues(wire.sourceNodeId(), wire.sourcePort()));
+            return valueColor(scopedOutputValues(wire.sourceNodeId(), wire.sourcePort()));
         } catch (RuntimeException ignored) {
             return 0xFF6B7280;
         }
@@ -770,11 +1068,11 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         if (runtime == null) return new LogicValue[]{LogicValue.UNKNOWN};
         try {
             return switch (node.kind) {
-                case INPUT, NAND, MERGER -> runtime.outputValues(node.id, 0);
-                case OUTPUT, SPLITTER -> runtime.inputValues(node.id, 0);
+                case INPUT, NAND, MERGER -> scopedOutputValues(node.id, 0);
+                case OUTPUT, SPLITTER -> scopedInputValues(node.id, 0);
                 case CUSTOM_CHIP -> safeOutputs(node).isEmpty()
-                        ? (safeInputs(node).isEmpty() ? new LogicValue[]{LogicValue.UNKNOWN} : runtime.inputValues(node.id, 0))
-                        : runtime.outputValues(node.id, 0);
+                        ? (safeInputs(node).isEmpty() ? new LogicValue[]{LogicValue.UNKNOWN} : scopedInputValues(node.id, 0))
+                        : scopedOutputValues(node.id, 0);
             };
         } catch (RuntimeException ignored) {
             return new LogicValue[]{LogicValue.UNKNOWN};
@@ -1254,7 +1552,46 @@ public final class CircuitCanvasWidget extends AbstractWidget {
         return value.length() <= max ? value : value.substring(0, Math.max(0, max - 1)) + "…";
     }
 
+    private static String normalizeChipName(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
     public record DeletionIntent(boolean hasSelection, boolean confirmationRequired, String description) {
+    }
+
+    public record NavigationState(String currentChipName, String breadcrumb, int depth, boolean liveRuntime) {
+    }
+
+    private record ViewFrame(
+            CircuitDocument document,
+            String scopePath,
+            String chipName,
+            double panX,
+            double panY,
+            double zoom
+    ) {
+    }
+
+    private record NodeClipboard(
+            NodeKind kind,
+            int width,
+            String label,
+            String chipName,
+            double x,
+            double y
+    ) {
+        static NodeClipboard from(EditorNode node) {
+            return new NodeClipboard(
+                    node.kind,
+                    node.width,
+                    node.label == null ? "" : node.label,
+                    node.chipName == null ? "" : node.chipName,
+                    node.x,
+                    node.y
+            );
+        }
     }
 
     private record Point(double x, double y) {
