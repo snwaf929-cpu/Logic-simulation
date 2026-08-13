@@ -23,6 +23,7 @@ public final class CircuitEditorScreen extends Screen {
     private static final int SIDEBAR_WIDTH = 186;
     private static final int MODAL_WIDTH = 330;
     private static final int MODAL_HEIGHT = 214;
+    private static final int TOOLBAR_RESERVED_WIDTH = 238;
 
     private final ClientChipLibrary library = new ClientChipLibrary();
     private final List<EditorIconButton> toolbarButtons = new ArrayList<>();
@@ -32,6 +33,7 @@ public final class CircuitEditorScreen extends Screen {
     private String currentChipName;
     private String breadcrumb = "ROOT";
     private boolean liveNestedRuntime;
+    private int toolbarStartX = 154;
     private String status = "Ready — right/middle-drag to pan. Double-click a custom chip to inspect it.";
 
     private ModalMode modalMode = ModalMode.NONE;
@@ -93,7 +95,9 @@ public final class CircuitEditorScreen extends Screen {
             componentLibrary.selectChip(currentChipName);
         }
 
-        int x = 154;
+        // Keep the hierarchy breadcrumb readable by anchoring the tool group to the right.
+        toolbarStartX = Math.max(154, this.width - TOOLBAR_RESERVED_WIDTH);
+        int x = toolbarStartX;
         x = addToolbarButton(x, EditorIconButton.Icon.BACK, 0xFF63A9D8, "Back one chip level  Alt+Left", canvas::navigateBack);
         x = addToolbarButton(x, EditorIconButton.Icon.SAVE, 0xFF55B96B, "Save chip  Ctrl+S", this::openSaveModal);
         x = addToolbarButton(x, EditorIconButton.Icon.NEW, 0xFF7B8796, "New circuit", this::newCircuit);
@@ -477,11 +481,10 @@ public final class CircuitEditorScreen extends Screen {
         String path = breadcrumb == null || breadcrumb.isBlank()
                 ? currentChipName == null ? "ROOT" : currentChipName
                 : breadcrumb;
+        String topPath = (liveNestedRuntime ? "LIVE  /  " : "/  ") + path;
+        int maxPathChars = Math.max(8, (toolbarStartX - 52) / 6);
         int pathColor = liveNestedRuntime ? 0xFF63C8FF : currentChipName == null ? 0xFF6F7A87 : 0xFF9DA8B5;
-        graphics.text(this.font, "/  " + truncate(path, 44), 48, 13, pathColor, false);
-        if (liveNestedRuntime) {
-            graphics.text(this.font, "LIVE", Math.max(8, this.width - 34), 13, 0xFF55D96B, true);
-        }
+        graphics.text(this.font, truncate(topPath, maxPathChars), 48, 13, pathColor, false);
 
         boolean error = isErrorStatus(status);
         graphics.fill(8, this.height - 17, 13, this.height - 12, error ? 0xFFE05252 : 0xFF55B96B);
