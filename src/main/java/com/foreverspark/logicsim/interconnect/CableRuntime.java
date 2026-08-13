@@ -1,67 +1,55 @@
 package com.foreverspark.logicsim.interconnect;
 
-import com.foreverspark.logicsim.block.CableBlock;
 import com.foreverspark.logicsim.block.CircuitPortBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import com.foreverspark.logicsim.block.DisplayPorts;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.WeakHashMap;
-
-/** Event-driven world cable values. No cable BlockEntity and no dependence on Minecraft's 20 TPS. */
+/** Event-driven world cable values backed by cached physical nets. */
 public final class CableRuntime {
-    private static final int MAX_SEGMENTS = 8192;
-    private static final Map<Level, Map<BlockPos, Long>> VALUES = new WeakHashMap<>();
-
     private CableRuntime() {}
 
     public static synchronized void setValue(Level level, BlockPos start, long value) {
-        if (level == null || start == null) return;
-        BlockState state = level.getBlockState(start);
-        if (!(state.getBlock() instanceof CableBlock cable)) return;
-
-        long normalized = value & mask(cable.bitWidth());
-        Set<BlockPos> run = CableRun.collect(level, start, MAX_SEGMENTS);
-        Map<BlockPos, Long> values = VALUES.computeIfAbsent(level, ignored -> new HashMap<>());
-        boolean changed = false;
-        for (BlockPos pos : run) {
-            Long previous = values.put(pos.immutable(), normalized);
-            if (previous == null || previous.longValue() != normalized) changed = true;
-        }
-        if (!changed) return;
-        notifyDevices(level, run, cable, normalized);
+        CableNetworkCache.Network network = CableNetworkCache.network(level, start);
+        if (network == null) return;
+        long normalized = value & mask(network.width());
+        boolean changed = !network.initialized() || network.value() != normalized;
+        boolean needsRefresh = network.fresh();
+        if (!changed && !needsRefresh) return;
+        network.store(normalized);
+        notifyDevices(level, network, normalized);
     }
 
     public static synchronized long value(Level level, BlockPos pos) {
-        Map<BlockPos, Long> values = VALUES.get(level);
-        return values == null ? 0L : values.getOrDefault(pos, 0L);
+        CableNetworkCache.Network network = CableNetworkCache.network(level, pos);
+        if (network == null) return 0L;
+        if (network.fresh() && network.initialized()) notifyDevices(level, network, network.value());
+        return network.value();
     }
 
-    private static void notifyDevices(Level level, Set<BlockPos> run, CableBlock cable, long value) {
-        for (BlockPos cablePos : run) {
-            for (Direction direction : Direction.values()) {
-                BlockPos neighborPos = cablePos.relative(direction);
-                if (run.contains(neighborPos)) continue;
-                BlockState neighbor = level.getBlockState(neighborPos);
+    public static void invalidateTopology(Level level, BlockPos changedPos) {
+        CableNetworkCache.invalidateAround(level, changedPos);
+    }
 
-                if (neighbor.getBlock() instanceof DisplayBlock) {
-                    Direction displayFace = direction.getOpposite();
-                    if (DisplayPorts.widthAt(neighbor, displayFace) == cable.bitWidth()
-                            && level.getBlockEntity(neighborPos) instanceof DisplayBlockEntity display) {
-                        display.acceptCableValue(displayFace, value);
-                    }
-                    continue;
+    private static void notifyDevices(Level level, CableNetworkCache.Network network, long value) {
+        network.markObserved();
+        for (CableNetworkCache.Endpoint endpoint : network.endpoints()) {
+            switch (endpoint.kind()) {
+                case CIRCUIT_SOCKET -> {
+                    if (!(level.getBlockEntity(endpoint.devicePos()) instanceof CircuitPortBlockEntity socket)) continue;
+                    PhysicalPortBinding binding = socket.binding();
+                    if (binding != null && binding.accepts(network.kind(), network.width())) socket.acceptCableValue(value);
                 }
-
-                if (level.getBlockEntity(neighborPos) instanceof CircuitPortBlockEntity socket && socket.accepts(cable)) {
-                    socket.acceptCableValue(value);
+                case DISPLAY -> {
+                    BlockState state = level.getBlockState(endpoint.devicePos());
+                    if (!(state.getBlock() instanceof DisplayBlock)) continue;
+                    if (DisplayPorts.widthAt(state, endpoint.deviceFace()) != network.width()) continue;
+                    if (level.getBlockEntity(endpoint.devicePos()) instanceof DisplayBlockEntity display) {
+                        display.acceptCableValue(endpoint.deviceFace(), value);
+                    }
                 }
             }
         }
