@@ -6,6 +6,15 @@ import com.foreverspark.logicsim.core.LogicCircuit;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TraceRecorder;
+import com.foreverspark.logicsim.editor.model.ChipDefinition;
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.runtime.CircuitCompileException;
+import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
+import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
+
+import java.util.Map;
 
 public final class LogicSelfTest {
     private LogicSelfTest() {}
@@ -16,7 +25,11 @@ public final class LogicSelfTest {
         testAndFromNandOnly();
         testBusSplitMerge();
         testTraceRingBuffer();
-        System.out.println("Logic core self-test: PASS");
+        testFreeformNotCompiler();
+        testFreeformBusSplitMerge();
+        testCustomChipFlattening();
+        testWidthMismatchRejected();
+        System.out.println("Logic core + editor compiler self-test: PASS");
     }
 
     private static void testNandTruthTable() {
@@ -100,6 +113,89 @@ public final class LogicSelfTest {
         check(trace.size() == 3, "trace capacity");
         check(trace.snapshot().get(0).sequence() == 2L, "trace overwrites oldest event");
         check(trace.snapshot().get(2).sequence() == 4L, "trace keeps newest event");
+    }
+
+    private static void testFreeformNotCompiler() {
+        CircuitDocument document = makeNotDocument();
+        EditorNode input = document.inputNodes().getFirst();
+        EditorNode output = document.outputNodes().getFirst();
+        CompiledCircuit compiled = CircuitCompiler.compile(document, name -> null);
+
+        compiled.driveInputUnsigned(input.id, 0);
+        check(compiled.inputUnsigned(output.id, 0) == 1L, "freeform NOT 0");
+        compiled.driveInputUnsigned(input.id, 1);
+        check(compiled.inputUnsigned(output.id, 0) == 0L, "freeform NOT 1");
+    }
+
+    private static void testFreeformBusSplitMerge() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode input = document.addNode(NodeKind.INPUT, 0, 0);
+        input.width = 8;
+        EditorNode splitter = document.addNode(NodeKind.SPLITTER, 100, 0);
+        splitter.width = 8;
+        EditorNode merger = document.addNode(NodeKind.MERGER, 200, 0);
+        merger.width = 8;
+        EditorNode output = document.addNode(NodeKind.OUTPUT, 300, 0);
+        output.width = 8;
+
+        document.connect(input.id, 0, splitter.id, 0);
+        for (int bit = 0; bit < 8; bit++) {
+            document.connect(splitter.id, bit, merger.id, bit);
+        }
+        document.connect(merger.id, 0, output.id, 0);
+
+        CompiledCircuit compiled = CircuitCompiler.compile(document, name -> null);
+        compiled.driveInputUnsigned(input.id, 0xA5L);
+        check(compiled.inputUnsigned(output.id, 0) == 0xA5L, "editor split/merge roundtrip");
+    }
+
+    private static void testCustomChipFlattening() {
+        CircuitDocument notDocument = makeNotDocument();
+        ChipDefinition notChip = new ChipDefinition("NOT", notDocument);
+        Map<String, ChipDefinition> chips = Map.of("NOT", notChip);
+
+        CircuitDocument parent = new CircuitDocument();
+        EditorNode input = parent.addNode(NodeKind.INPUT, 0, 0);
+        EditorNode custom = parent.addCustomChip("NOT", 100, 0);
+        EditorNode output = parent.addNode(NodeKind.OUTPUT, 200, 0);
+        parent.connect(input.id, 0, custom.id, 0);
+        parent.connect(custom.id, 0, output.id, 0);
+
+        CompiledCircuit compiled = CircuitCompiler.compile(parent, chips::get);
+        compiled.driveInputUnsigned(input.id, 0);
+        check(compiled.inputUnsigned(output.id, 0) == 1L, "custom NOT 0");
+        compiled.driveInputUnsigned(input.id, 1);
+        check(compiled.inputUnsigned(output.id, 0) == 0L, "custom NOT 1");
+    }
+
+    private static void testWidthMismatchRejected() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode input = document.addNode(NodeKind.INPUT, 0, 0);
+        input.width = 8;
+        EditorNode output = document.addNode(NodeKind.OUTPUT, 100, 0);
+        output.width = 1;
+        document.connect(input.id, 0, output.id, 0);
+
+        boolean rejected = false;
+        try {
+            CircuitCompiler.compile(document, name -> null);
+        } catch (CircuitCompileException expected) {
+            rejected = expected.getMessage().contains("Width mismatch");
+        }
+        check(rejected, "width mismatch must be rejected");
+    }
+
+    private static CircuitDocument makeNotDocument() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode input = document.addNode(NodeKind.INPUT, 0, 0);
+        input.label = "A";
+        EditorNode nand = document.addNode(NodeKind.NAND, 100, 0);
+        EditorNode output = document.addNode(NodeKind.OUTPUT, 200, 0);
+        output.label = "OUT";
+        document.connect(input.id, 0, nand.id, 0);
+        document.connect(input.id, 0, nand.id, 1);
+        document.connect(nand.id, 0, output.id, 0);
+        return document;
     }
 
     private static void check(boolean condition, String message) {
