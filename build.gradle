@@ -81,9 +81,18 @@ tasks.register('physicalCableSelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.tools.PhysicalCableSelfTest'
 }
 
+tasks.register('timingSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates virtual clock frequency, backlog, stepping, and NAND propagation.'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.tools.TimingDomainSelfTest'
+}
+
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
     dependsOn tasks.named('physicalCableSelfTest')
+    dependsOn tasks.named('timingSelfTest')
 }
 
 tasks.register('clientSelfTest', JavaExec) {
