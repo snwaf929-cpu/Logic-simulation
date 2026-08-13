@@ -4,7 +4,6 @@ import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 
-/** One-shot client placement intent for the CLOCK infrastructure source. */
 public final class ClockPlacementState {
     public static final long DEFAULT_FREQUENCY_HZ = 1_000L;
     private static boolean armed;
@@ -24,11 +23,7 @@ public final class ClockPlacementState {
         armed = target != null;
     }
 
-    /** Compatibility overload for callers that arm before supplying a canvas. */
-    public static void arm() {
-        armed = true;
-    }
-
+    public static void arm() { armed = true; }
     public static boolean armed() { return armed; }
     public static long frequencyHz() { return frequencyHz; }
 
@@ -54,6 +49,7 @@ public final class ClockPlacementState {
         node.width = 1;
         node.constantValue = 0L;
         canvas.refreshLiveRuntime();
+        EditorClockRuntime.attach(canvas);
         disarm();
     }
 }
