@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "logicsimulation:block/display_panel"
+    }
+  }
+}
