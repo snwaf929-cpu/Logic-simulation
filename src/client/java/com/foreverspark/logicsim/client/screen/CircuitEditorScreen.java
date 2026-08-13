@@ -25,8 +25,8 @@ public final class CircuitEditorScreen extends Screen {
     private static final int TOP_BAR_HEIGHT = 34;
     private static final int STATUS_BAR_HEIGHT = 24;
     private static final int SIDEBAR_WIDTH = 186;
-    private static final int MODAL_WIDTH = 330;
-    private static final int MODAL_HEIGHT = 214;
+    private static final int MODAL_WIDTH = 390;
+    private static final int MODAL_HEIGHT = 326;
     private static final int TOOLBAR_RESERVED_WIDTH = 238;
 
     private final ClientChipLibrary library = new ClientChipLibrary();
@@ -52,10 +52,9 @@ public final class CircuitEditorScreen extends Screen {
     private String suppressedScreenshotKey;
 
     private EditBox modalNameBox;
-    private EditBox modalWidthBox;
-    private EditBox modalHeightBox;
-    private EditBox modalGapBox;
+    private ChipPreviewWidget modalChipPreview;
     private ColorPaletteWidget modalPalette;
+    private FlatActionButton modalAutoFitButton;
     private FlatActionButton modalApplyButton;
     private FlatActionButton modalCancelButton;
 
@@ -164,31 +163,39 @@ public final class CircuitEditorScreen extends Screen {
 
     private void initModalWidgets() {
         int modalX = (this.width - MODAL_WIDTH) / 2;
-        int modalY = Math.max(44, (this.height - 220) / 2);
+        int modalY = modalY();
 
         modalNameBox = new EditBox(this.font, modalX + 20, modalY + 52, MODAL_WIDTH - 40, 18, Component.literal("Name"));
         modalNameBox.setMaxLength(48);
         this.addRenderableWidget(modalNameBox);
 
-        int fieldWidth = 82;
-        modalWidthBox = new EditBox(this.font, modalX + 20, modalY + 93, fieldWidth, 18, Component.literal("Width"));
-        modalWidthBox.setMaxLength(8);
-        this.addRenderableWidget(modalWidthBox);
+        modalChipPreview = new ChipPreviewWidget(
+                modalX + 20,
+                modalY + 82,
+                MODAL_WIDTH - 40,
+                148,
+                () -> modalNameBox == null ? "" : modalNameBox.getValue(),
+                () -> modalColor
+        );
+        this.addRenderableWidget(modalChipPreview);
 
-        modalHeightBox = new EditBox(this.font, modalX + 124, modalY + 93, fieldWidth, 18, Component.literal("Height"));
-        modalHeightBox.setMaxLength(8);
-        this.addRenderableWidget(modalHeightBox);
+        modalAutoFitButton = new FlatActionButton(
+                modalX + MODAL_WIDTH - 88,
+                modalY + 236,
+                68,
+                18,
+                "AUTO FIT",
+                0xFF4FA6A0,
+                () -> modalChipPreview.autoFit()
+        );
+        this.addRenderableWidget(modalAutoFitButton);
 
-        modalGapBox = new EditBox(this.font, modalX + 228, modalY + 93, fieldWidth, 18, Component.literal("Pin gap"));
-        modalGapBox.setMaxLength(8);
-        this.addRenderableWidget(modalGapBox);
-
-        modalPalette = new ColorPaletteWidget(modalX + 20, modalY + 137, MODAL_WIDTH - 40, 16, modalColor, color -> modalColor = color);
+        modalPalette = new ColorPaletteWidget(modalX + 20, modalY + 270, MODAL_WIDTH - 40, 16, modalColor, color -> modalColor = color);
         this.addRenderableWidget(modalPalette);
 
-        modalApplyButton = new FlatActionButton(modalX + MODAL_WIDTH - 138, modalY + 174, 58, 20, "APPLY", 0xFF55B96B, this::applyModal);
+        modalApplyButton = new FlatActionButton(modalX + MODAL_WIDTH - 138, modalY + 296, 58, 20, "APPLY", 0xFF55B96B, this::applyModal);
         this.addRenderableWidget(modalApplyButton);
-        modalCancelButton = new FlatActionButton(modalX + MODAL_WIDTH - 74, modalY + 174, 54, 20, "CANCEL", 0xFF7B8796, this::closeModal);
+        modalCancelButton = new FlatActionButton(modalX + MODAL_WIDTH - 74, modalY + 296, 54, 20, "CANCEL", 0xFF7B8796, this::closeModal);
         this.addRenderableWidget(modalCancelButton);
     }
 
@@ -214,9 +221,11 @@ public final class CircuitEditorScreen extends Screen {
         modalColor = currentChipName == null ? ClientChipLibrary.DEFAULT_CHIP_COLOR : library.chipColor(currentChipName);
 
         modalNameBox.setValue(name);
-        modalWidthBox.setValue(formatNumber(visual.width));
-        modalHeightBox.setValue(formatNumber(visual.minHeight));
-        modalGapBox.setValue(formatNumber(visual.portSpacing));
+        modalChipPreview.setPortCounts(canvas.document().inputNodes().size(), canvas.document().outputNodes().size());
+        modalChipPreview.setVisual(visual);
+        if (currentChipName == null) {
+            modalChipPreview.autoFit();
+        }
         modalPalette.setSelectedColor(modalColor);
         configureModalWidgets();
         setEditorEnabled(false);
@@ -357,11 +366,7 @@ public final class CircuitEditorScreen extends Screen {
             throw new IllegalArgumentException("A chip named '" + name + "' already exists. Open it first or choose another name.");
         }
 
-        double width = parseNumber(modalWidthBox.getValue(), "Width");
-        double height = parseNumber(modalHeightBox.getValue(), "Height");
-        double gap = parseNumber(modalGapBox.getValue(), "Pin gap");
-        ChipVisualSettings visual = new ChipVisualSettings(width, height, gap);
-
+        ChipVisualSettings visual = modalChipPreview.visualSettings();
         CircuitCompiler.compile(canvas.document(), library);
 
         String targetFolder;
@@ -385,7 +390,7 @@ public final class CircuitEditorScreen extends Screen {
         String folderText = targetFolder == null || targetFolder.isBlank() ? "OTHER" : targetFolder;
         setStatus(nested
                 ? "Saved " + name + " in " + folderText + " and rebuilt the running parent"
-                : "Saved " + name + " in " + folderText + "  |  body " + formatNumber(visual.width) + "×" + formatNumber(visual.minHeight) + "  pin gap " + formatNumber(visual.portSpacing));
+                : "Saved " + name + " in " + folderText + "  |  body " + formatNumber(visual.width) + "×" + formatNumber(visual.minHeight) + "  automatic pin spacing");
     }
 
     private void applyAddFolder() throws IOException {
@@ -459,15 +464,14 @@ public final class CircuitEditorScreen extends Screen {
 
     private void configureModalWidgets() {
         boolean hasName = modalMode != ModalMode.CONFIRM_DELETE && modalMode != ModalMode.NONE;
-        boolean saveLayoutFields = modalMode == ModalMode.SAVE_CHIP;
+        boolean savePreview = modalMode == ModalMode.SAVE_CHIP;
         boolean hasPalette = modalMode == ModalMode.SAVE_CHIP || modalMode == ModalMode.ADD_FOLDER || modalMode == ModalMode.EDIT_LIBRARY_ITEM;
         if (modalNameBox != null && modalMode != ModalMode.EDIT_IO) {
             modalNameBox.setMaxLength(modalMode == ModalMode.ADD_FOLDER || (modalMode == ModalMode.EDIT_LIBRARY_ITEM && libraryEditKind == LibraryEditKind.FOLDER) ? 32 : 48);
         }
         setWidgetVisible(modalNameBox, hasName);
-        setWidgetVisible(modalWidthBox, saveLayoutFields);
-        setWidgetVisible(modalHeightBox, saveLayoutFields);
-        setWidgetVisible(modalGapBox, saveLayoutFields);
+        setWidgetVisible(modalChipPreview, savePreview);
+        setWidgetVisible(modalAutoFitButton, savePreview);
         setWidgetVisible(modalPalette, hasPalette);
         setWidgetVisible(modalApplyButton, modalMode != ModalMode.NONE);
         setWidgetVisible(modalCancelButton, modalMode != ModalMode.NONE);
@@ -475,9 +479,8 @@ public final class CircuitEditorScreen extends Screen {
 
     private void hideModalWidgets() {
         setWidgetVisible(modalNameBox, false);
-        setWidgetVisible(modalWidthBox, false);
-        setWidgetVisible(modalHeightBox, false);
-        setWidgetVisible(modalGapBox, false);
+        setWidgetVisible(modalChipPreview, false);
+        setWidgetVisible(modalAutoFitButton, false);
         setWidgetVisible(modalPalette, false);
         setWidgetVisible(modalApplyButton, false);
         setWidgetVisible(modalCancelButton, false);
@@ -639,7 +642,7 @@ public final class CircuitEditorScreen extends Screen {
         graphics.fill(0, TOP_BAR_HEIGHT, this.width, this.height - STATUS_BAR_HEIGHT, 0xAA05070A);
 
         int modalX = (this.width - MODAL_WIDTH) / 2;
-        int modalY = Math.max(44, (this.height - 220) / 2);
+        int modalY = modalY();
         graphics.fill(modalX, modalY, modalX + MODAL_WIDTH, modalY + MODAL_HEIGHT, 0xFF151A20);
         graphics.outline(modalX, modalY, MODAL_WIDTH, MODAL_HEIGHT, 0xFF4A5663);
         graphics.fill(modalX, modalY, modalX + 4, modalY + MODAL_HEIGHT, modalAccent());
@@ -649,20 +652,15 @@ public final class CircuitEditorScreen extends Screen {
 
         if (modalMode == ModalMode.SAVE_CHIP) {
             graphics.text(this.font, "NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
-            graphics.text(this.font, "WIDTH", modalX + 20, modalY + 83, 0xFF8B96A3, false);
-            graphics.text(this.font, "HEIGHT", modalX + 124, modalY + 83, 0xFF8B96A3, false);
-            graphics.text(this.font, "PIN GAP", modalX + 228, modalY + 83, 0xFF8B96A3, false);
-            graphics.text(this.font, "CHIP COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
-            graphics.text(this.font, canvas != null && canvas.isNestedView()
-                            ? "Saving rebuilds the parent runtime so this exact instance becomes live again."
-                            : "Height + pin gap control spacing between exposed inputs/outputs.",
-                    modalX + 20, modalY + 158, 0xFF65717E, false);
+            graphics.text(this.font, "Drag the preview body itself — no size numbers to guess.", modalX + 20, modalY + 238, 0xFF71808E, false);
+            graphics.text(this.font, "Pin spacing follows the body height automatically and stays on the routing grid.", modalX + 20, modalY + 251, 0xFF65717E, false);
+            graphics.text(this.font, "CHIP COLOR", modalX + 20, modalY + 260, 0xFF8B96A3, false);
         } else if (modalMode == ModalMode.ADD_FOLDER) {
             graphics.text(this.font, "NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
-            graphics.text(this.font, "FOLDER COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
+            graphics.text(this.font, "FOLDER COLOR", modalX + 20, modalY + 260, 0xFF8B96A3, false);
         } else if (modalMode == ModalMode.EDIT_LIBRARY_ITEM) {
             graphics.text(this.font, "NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
-            graphics.text(this.font, libraryEditKind == LibraryEditKind.CHIP ? "CHIP COLOR" : "FOLDER COLOR", modalX + 20, modalY + 124, 0xFF8B96A3, false);
+            graphics.text(this.font, libraryEditKind == LibraryEditKind.CHIP ? "CHIP COLOR" : "FOLDER COLOR", modalX + 20, modalY + 260, 0xFF8B96A3, false);
         } else if (modalMode == ModalMode.EDIT_IO) {
             graphics.text(this.font, "PORT NAME", modalX + 20, modalY + 43, 0xFF8B96A3, false);
             String kind = pendingIo != null && pendingIo.kind() == NodeKind.OUTPUT ? "output" : "input";
@@ -675,16 +673,22 @@ public final class CircuitEditorScreen extends Screen {
         }
 
         if (!modalError.isBlank()) {
-            graphics.text(this.font, "! " + truncate(modalError, 50), modalX + 20, modalY + MODAL_HEIGHT - 34, 0xFFFF7878, false);
+            graphics.text(this.font, "! " + truncate(modalError, 58), modalX + 20, modalY + MODAL_HEIGHT - 34, 0xFFFF7878, false);
         }
 
         if (modalNameBox.visible) modalNameBox.extractRenderState(graphics, mouseX, mouseY, delta);
-        if (modalWidthBox.visible) modalWidthBox.extractRenderState(graphics, mouseX, mouseY, delta);
-        if (modalHeightBox.visible) modalHeightBox.extractRenderState(graphics, mouseX, mouseY, delta);
-        if (modalGapBox.visible) modalGapBox.extractRenderState(graphics, mouseX, mouseY, delta);
+        if (modalChipPreview.visible) modalChipPreview.extractRenderState(graphics, mouseX, mouseY, delta);
+        if (modalAutoFitButton.visible) modalAutoFitButton.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalPalette.visible) modalPalette.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalApplyButton.visible) modalApplyButton.extractRenderState(graphics, mouseX, mouseY, delta);
         if (modalCancelButton.visible) modalCancelButton.extractRenderState(graphics, mouseX, mouseY, delta);
+    }
+
+    private int modalY() {
+        int availableTop = TOP_BAR_HEIGHT + 6;
+        int availableBottom = this.height - STATUS_BAR_HEIGHT - 6;
+        int availableHeight = Math.max(MODAL_HEIGHT, availableBottom - availableTop);
+        return availableTop + Math.max(0, (availableHeight - MODAL_HEIGHT) / 2);
     }
 
     private int modalAccent() {
@@ -711,7 +715,9 @@ public final class CircuitEditorScreen extends Screen {
 
     private String modalSubtitle() {
         return switch (modalMode) {
-            case SAVE_CHIP -> canvas != null && canvas.isNestedView() ? "Edit this saved chip inside the running hierarchy" : "Name, color, folder, and reusable body layout";
+            case SAVE_CHIP -> canvas != null && canvas.isNestedView()
+                    ? "Edit this saved chip inside the running hierarchy"
+                    : "Name, color, and resize the exact reusable body you will place";
             case ADD_FOLDER -> "Name and color for the new folder";
             case EDIT_LIBRARY_ITEM -> "F2 quick edit";
             case EDIT_IO -> "F2 names the selected reusable port";
@@ -724,14 +730,6 @@ public final class CircuitEditorScreen extends Screen {
         if (status == null) return false;
         String upper = status.toUpperCase();
         return upper.contains("ERROR") || upper.contains("FAILED") || upper.contains("MISMATCH") || upper.contains("INVALID");
-    }
-
-    private static double parseNumber(String value, String label) {
-        try {
-            return Double.parseDouble(value.trim());
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException(label + " must be a number");
-        }
     }
 
     private static String formatNumber(double value) {
