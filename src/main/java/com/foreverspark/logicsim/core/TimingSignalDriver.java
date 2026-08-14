@@ -6,6 +6,7 @@ public final class TimingSignalDriver {
     private final CircuitSimulator simulator;
     private final Signal signal;
     private final int signalId;
+    private final int[] acyclicCone;
     private final long settleBudget;
 
     public TimingSignalDriver(long frequencyHz, CircuitSimulator simulator, Signal signal, long settleBudget) {
@@ -15,6 +16,7 @@ public final class TimingSignalDriver {
         this.simulator = simulator;
         this.signal = signal;
         this.signalId = signal.id();
+        this.acyclicCone = simulator.compileAcyclicCone(signalId);
         this.settleBudget = settleBudget;
         simulator.driveLevel(signalId, false);
         simulator.runUntilStable(settleBudget);
@@ -22,14 +24,16 @@ public final class TimingSignalDriver {
 
     public TimingDomain timing() { return timing; }
     public Signal signal() { return signal; }
+    public boolean queueFreeTurboAvailable() { return acyclicCone != null; }
+    public int compiledConeGateCount() { return acyclicCone == null ? -1 : acyclicCone.length; }
 
     public long advanceNanos(long elapsedNanos, long edgeBudget) {
         return advanceNanos(elapsedNanos, edgeBudget, null);
     }
 
     /**
-     * Compiled clock hot path. Physical turbo mode uses only compile-validated primitive ids and the direct turbo
-     * NAND settle loop; no per-edge simulator mode dispatch, Signal object write, or tracing branch remains here.
+     * Physical acyclic circuits take the queue-free compiled cone path. Feedback circuits retain the primitive event
+     * engine. The choice is made once per edge batch, not rediscovered in the NAND inner loop.
      */
     public long advanceNanos(long elapsedNanos, long edgeBudget, Runnable afterSettledEdge) {
         timing.queueElapsedNanos(elapsedNanos);
@@ -40,7 +44,14 @@ public final class TimingSignalDriver {
         boolean turbo = simulator.turboMode();
         long completed = 0L;
         try {
-            if (turbo) {
+            if (turbo && acyclicCone != null) {
+                while (completed < executable) {
+                    level = !level;
+                    simulator.driveAndSettleAcyclicFast(signalId, level, acyclicCone, settleBudget);
+                    completed++;
+                    if (afterSettledEdge != null) afterSettledEdge.run();
+                }
+            } else if (turbo) {
                 while (completed < executable) {
                     level = !level;
                     simulator.driveLevelFast(signalId, level);
@@ -75,7 +86,14 @@ public final class TimingSignalDriver {
         boolean turbo = simulator.turboMode();
         long completed = 0L;
         try {
-            if (turbo) {
+            if (turbo && acyclicCone != null) {
+                while (completed < edges) {
+                    level = !level;
+                    simulator.driveAndSettleAcyclicFast(signalId, level, acyclicCone, settleBudget);
+                    completed++;
+                    if (afterSettledEdge != null) afterSettledEdge.run();
+                }
+            } else if (turbo) {
                 while (completed < edges) {
                     level = !level;
                     simulator.driveLevelFast(signalId, level);
