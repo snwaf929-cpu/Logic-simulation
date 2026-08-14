@@ -17,9 +17,10 @@ import org.jetbrains.annotations.Nullable;
 /**
  * GPU-textured physical display renderer.
  *
- * The old renderer rebuilt horizontal color runs by scanning every logical pixel on every frame and then emitted one
- * quad per run. A random 1024x1024 wall could therefore approach a million quads per frame. Each physical display
- * tile is now one cached 64x64 DynamicTexture and exactly one screen-face quad, independent of image entropy.
+ * All tiles in one connected wall share a single GPU texture. Each block submits only one face quad with the UV slice
+ * belonging to that physical tile. This preserves normal Minecraft per-block frustum culling while allowing the
+ * renderer to batch the entire visible wall under one texture/render type instead of switching among hundreds or
+ * thousands of DynamicTextures.
  */
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     /** Vanilla packed block-light 15 + sky-light 15. */
@@ -42,7 +43,15 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         BlockEntityRenderer.super.extractRenderState(blockEntity, state, tickProgress, cameraPos, crumblingOverlay);
         state.facing = DisplayPorts.front(blockEntity.getBlockState());
         state.hasPixels = !blockEntity.framebuffer().isBlack();
-        state.textureId = state.hasPixels ? DisplayTextureCache.textureFor(blockEntity) : null;
+        if (state.hasPixels) {
+            DisplayTextureCache.prepare(blockEntity, state);
+        } else {
+            state.textureId = null;
+            state.u0 = 0.0f;
+            state.v0 = 0.0f;
+            state.u1 = 1.0f;
+            state.v1 = 1.0f;
+        }
     }
 
     @Override
@@ -55,15 +64,15 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         pose.translate(-0.5, -0.5, screenFaceZ() - 0.5);
 
         queue.submitCustomGeometry(pose, RenderTypes.text(state.textureId), (matrix, consumer) -> {
-            // NativeImage row 0 is the logical top row. Keep V=0 at the top of the display quad.
+            // NativeImage row 0 is the logical top row. Each tile samples its precompiled slice of the wall texture.
             consumer.addVertex(matrix, SCREEN_MIN, SCREEN_MAX, 0.0f)
-                    .setColor(0xFFFFFFFF).setUv(0.0f, 0.0f).setLight(FULL_BRIGHT);
+                    .setColor(0xFFFFFFFF).setUv(state.u0, state.v0).setLight(FULL_BRIGHT);
             consumer.addVertex(matrix, SCREEN_MAX, SCREEN_MAX, 0.0f)
-                    .setColor(0xFFFFFFFF).setUv(1.0f, 0.0f).setLight(FULL_BRIGHT);
+                    .setColor(0xFFFFFFFF).setUv(state.u1, state.v0).setLight(FULL_BRIGHT);
             consumer.addVertex(matrix, SCREEN_MAX, SCREEN_MIN, 0.0f)
-                    .setColor(0xFFFFFFFF).setUv(1.0f, 1.0f).setLight(FULL_BRIGHT);
+                    .setColor(0xFFFFFFFF).setUv(state.u1, state.v1).setLight(FULL_BRIGHT);
             consumer.addVertex(matrix, SCREEN_MIN, SCREEN_MIN, 0.0f)
-                    .setColor(0xFFFFFFFF).setUv(0.0f, 1.0f).setLight(FULL_BRIGHT);
+                    .setColor(0xFFFFFFFF).setUv(state.u0, state.v1).setLight(FULL_BRIGHT);
         });
 
         pose.popPose();
