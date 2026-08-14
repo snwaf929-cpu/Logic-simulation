@@ -21,6 +21,10 @@ import org.jetbrains.annotations.Nullable;
  * belonging to that physical tile. This preserves normal Minecraft per-block frustum culling while allowing the
  * renderer to batch the entire visible wall under one texture/render type instead of switching among hundreds or
  * thousands of DynamicTextures.
+ *
+ * In an integrated client, RealtimeDisplaySurface is preferred over the synchronized block-entity framebuffer. That
+ * transient framebuffer is driven directly by the simulation worker and sampled by the renderer, so display motion no
+ * longer inherits integrated-server tick stalls. Dedicated/remote clients keep the normal synchronized fallback.
  */
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     /** Vanilla packed block-light 15 + sky-light 15. */
@@ -42,16 +46,33 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                                    Vec3 cameraPos, @Nullable ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         BlockEntityRenderer.super.extractRenderState(blockEntity, state, tickProgress, cameraPos, crumblingOverlay);
         state.facing = DisplayPorts.front(blockEntity.getBlockState());
+
+        // A local realtime wall is newer than the client block-entity snapshot. Keep redstone power semantics, but
+        // source pixels directly from the simulation-worker surface rather than waiting for a server tick/packet.
+        if (RealtimeDisplaySurface.tileView(blockEntity.getBlockPos()) != null) {
+            if (blockEntity.wallPowered()) {
+                RealtimeDisplayTextureCache.prepare(blockEntity, state);
+            } else {
+                clearRenderState(state);
+            }
+            return;
+        }
+
         state.hasPixels = !blockEntity.framebuffer().isBlack();
         if (state.hasPixels) {
             DisplayTextureCache.prepare(blockEntity, state);
         } else {
-            state.textureId = null;
-            state.u0 = 0.0f;
-            state.v0 = 0.0f;
-            state.u1 = 1.0f;
-            state.v1 = 1.0f;
+            clearRenderState(state);
         }
+    }
+
+    private static void clearRenderState(DisplayWorldRenderState state) {
+        state.hasPixels = false;
+        state.textureId = null;
+        state.u0 = 0.0f;
+        state.v0 = 0.0f;
+        state.u1 = 1.0f;
+        state.v1 = 1.0f;
     }
 
     @Override
