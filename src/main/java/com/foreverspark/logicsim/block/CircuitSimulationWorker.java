@@ -27,8 +27,14 @@ public final class CircuitSimulationWorker {
 
     /** Idle workers may sleep; an active MHz worker should stay hot on its CPU/cache. */
     private static final long IDLE_PARK_NANOS = 500_000L;
-    /** Rare cooperative scheduler handoff. Normal OS pre-emption supplies the actual game-thread fairness. */
-    private static final int HARD_HANDOFF_EVERY_BUSY_SLICES = 64;
+    /**
+     * A worker slice may hold a CircuitBlockEntity runtime monitor for a few milliseconds. When a circuit saturates a
+     * core, immediately reacquiring that monitor forever can make the integrated server wait far longer than the raw
+     * CPU load warrants. A short deterministic handoff every few busy slices gives server/world I/O a scheduling and
+     * monitor-acquisition window while costing well below 1% of sustained simulator wall time.
+     */
+    private static final int COOPERATIVE_HANDOFF_EVERY_BUSY_SLICES = 4;
+    private static final long COOPERATIVE_HANDOFF_NANOS = 50_000L;
 
     private CircuitSimulationWorker() {}
 
@@ -47,10 +53,12 @@ public final class CircuitSimulationWorker {
         if (!STARTED.compareAndSet(false, true)) return;
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK WORKERS] processors={} workers={} priority={} pacing=cache-hot-sharded minecraftTickIndependent=true",
+                "[CLOCK WORKERS] processors={} workers={} priority={} pacing=cache-hot-sharded-fair handoffEvery={} handoffNanos={} minecraftTickIndependent=true",
                 PROCESSORS,
                 WORKER_COUNT,
-                WORKER_PRIORITY
+                WORKER_PRIORITY,
+                COOPERATIVE_HANDOFF_EVERY_BUSY_SLICES,
+                COOPERATIVE_HANDOFF_NANOS
         );
 
         for (int shard = 0; shard < WORKER_COUNT; shard++) {
@@ -81,9 +89,9 @@ public final class CircuitSimulationWorker {
 
             if (didWork) {
                 consecutiveBusySlices++;
-                if (consecutiveBusySlices >= HARD_HANDOFF_EVERY_BUSY_SLICES) {
+                if (consecutiveBusySlices >= COOPERATIVE_HANDOFF_EVERY_BUSY_SLICES) {
                     consecutiveBusySlices = 0;
-                    LockSupport.parkNanos(1L);
+                    LockSupport.parkNanos(COOPERATIVE_HANDOFF_NANOS);
                 } else {
                     Thread.onSpinWait();
                 }
