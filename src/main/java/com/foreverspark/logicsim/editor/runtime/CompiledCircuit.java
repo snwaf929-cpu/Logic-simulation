@@ -36,7 +36,7 @@ public final class CompiledCircuit {
         Signal[] signals = rootInputs.get(nodeId);
         if (signals == null) throw new IllegalArgumentException("Node " + nodeId + " is not a root input");
         for (int bit = 0; bit < signals.length; bit++) {
-            simulator.drive(signals[bit], LogicValue.fromBoolean(((value >>> bit) & 1L) != 0));
+            simulator.driveLevel(signals[bit], ((value >>> bit) & 1L) != 0L);
         }
         simulator.runUntilStable(settleBudget);
     }
@@ -143,10 +143,10 @@ public final class CompiledCircuit {
         return Map.copyOf(result);
     }
 
-    private static LogicValue[] values(Signal[] signals) {
+    private LogicValue[] values(Signal[] signals) {
         if (signals == null) return new LogicValue[0];
         LogicValue[] result = new LogicValue[signals.length];
-        for (int i = 0; i < signals.length; i++) result[i] = signals[i].value();
+        for (int i = 0; i < signals.length; i++) result[i] = simulator.read(signals[i]);
         return result;
     }
 }
