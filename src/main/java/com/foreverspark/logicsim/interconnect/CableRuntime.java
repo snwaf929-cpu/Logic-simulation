@@ -46,7 +46,7 @@ public final class CableRuntime {
                 case DISPLAY -> {
                     BlockState state = level.getBlockState(endpoint.devicePos());
                     if (!(state.getBlock() instanceof DisplayBlock)) continue;
-                    if (DisplayPorts.widthAt(state, endpoint.deviceFace()) != network.width()) continue;
+                    if (!DisplayPorts.accepts(state, endpoint.deviceFace(), network.kind(), network.width())) continue;
                     if (level.getBlockEntity(endpoint.devicePos()) instanceof DisplayBlockEntity display) {
                         display.acceptCableValue(endpoint.deviceFace(), value);
                     }
