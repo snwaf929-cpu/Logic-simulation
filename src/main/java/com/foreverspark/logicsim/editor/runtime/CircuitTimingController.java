@@ -43,10 +43,8 @@ public final class CircuitTimingController {
     private final CompiledCircuit compiled;
     private final CircuitSimulator simulator;
     private final Map<ClockAddress, TimingSignalDriver> clocks = new LinkedHashMap<>();
-    /** Only clocks with a physically wired ENABLE input appear here. Signal ids are cached once. */
     private final Map<ClockAddress, Integer> clockEnableSignalIds = new LinkedHashMap<>();
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
-    /** Flat array avoids a Map.values() iterator on every MHz clock edge. */
     private RandomState[] randomRuntime = new RandomState[0];
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
@@ -58,7 +56,6 @@ public final class CircuitTimingController {
         randomRuntime = randomSources.values().toArray(RandomState[]::new);
     }
 
-    /** Stable read-only views; constructing Set.copyOf on every worker slice was unnecessary allocation. */
     public Set<ClockAddress> clocks() { return Collections.unmodifiableSet(clocks.keySet()); }
     public boolean hasClock(String scopePath, int nodeId) { return clocks.containsKey(address(scopePath, nodeId)); }
     public long frequencyHz(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().frequencyHz(); }
@@ -77,7 +74,7 @@ public final class CircuitTimingController {
         ClockAddress address = address(scopePath, nodeId);
         require(scopePath, nodeId);
         Integer enableId = clockEnableSignalIds.get(address);
-        return enableId == null || simulator.isHigh(enableId);
+        return enableId == null || (simulator.turboMode() ? simulator.isHighFast(enableId) : simulator.isHigh(enableId));
     }
 
     public boolean active(String scopePath, int nodeId) {
@@ -103,13 +100,14 @@ public final class CircuitTimingController {
         if (elapsedNanos < 0L) throw new IllegalArgumentException("elapsedNanos must be >= 0");
         if (edgeBudgetPerClock < 0L) throw new IllegalArgumentException("edgeBudgetPerClock must be >= 0");
         Runnable callback = sourceCallback(afterSettledEdge);
+        boolean turbo = simulator.turboMode();
         long emitted = 0L;
         for (Map.Entry<ClockAddress, TimingSignalDriver> entry : clocks.entrySet()) {
             ClockAddress address = entry.getKey();
             TimingSignalDriver clock = entry.getValue();
             if (!clock.timing().running()) continue;
             Integer enableId = clockEnableSignalIds.get(address);
-            if (enableId != null && !simulator.isHigh(enableId)) continue;
+            if (enableId != null && !(turbo ? simulator.isHighFast(enableId) : simulator.isHigh(enableId))) continue;
             long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, callback);
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
@@ -117,40 +115,44 @@ public final class CircuitTimingController {
     }
 
     /**
-     * Samples every RANDOM source only on a trigger LOW -> HIGH transition.
-     * Runtime sources are a flat primitive-handle array; no iterator, Signal.value(), or ThreadLocalRandom lookup is
-     * performed in the MHz path.
+     * RANDOM hot path uses only primitive ids once the physical runtime enters turbo mode. Its xorshift state is
+     * stored directly per source, avoiding ThreadLocalRandom and object/port lookups at MHz rates.
      */
     public int processRandomSources() {
         RandomState[] states = randomRuntime;
         if (states.length == 0) return 0;
 
+        boolean turbo = simulator.turboMode();
         int fired = 0;
         int maxPasses = Math.max(4, states.length * 4 + 4);
         for (int pass = 0; pass < maxPasses; pass++) {
             boolean outputChanged = false;
             for (int index = 0; index < states.length; index++) {
                 RandomState state = states[index];
-                boolean high = simulator.isHigh(state.triggerSignalId);
+                boolean high = turbo ? simulator.isHighFast(state.triggerSignalId) : simulator.isHigh(state.triggerSignalId);
                 boolean rising = high && !state.lastHigh;
                 state.lastHigh = high;
                 if (!rising) continue;
 
                 fired++;
-                outputChanged |= simulator.driveLevel(state.outputSignalId, sampleHigh(state));
+                boolean nextHigh = sampleHigh(state);
+                outputChanged |= turbo
+                        ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
+                        : simulator.driveLevel(state.outputSignalId, nextHigh);
             }
             if (!outputChanged) break;
-            simulator.runUntilStable(EDGE_SETTLE_BUDGET);
+            if (turbo) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
+            else simulator.runUntilStable(EDGE_SETTLE_BUDGET);
         }
         return fired;
     }
 
-    /** Aligns RANDOM edge memory to the current trigger levels without emitting a new value. */
     public void synchronizeRandomInputs() {
         RandomState[] states = randomRuntime;
+        boolean turbo = simulator.turboMode();
         for (int index = 0; index < states.length; index++) {
             RandomState state = states[index];
-            state.lastHigh = simulator.isHigh(state.triggerSignalId);
+            state.lastHigh = turbo ? simulator.isHighFast(state.triggerSignalId) : simulator.isHigh(state.triggerSignalId);
         }
     }
 
@@ -215,7 +217,6 @@ public final class CircuitTimingController {
         if (chancePercent <= 0) return false;
         if (chancePercent >= 100) return true;
 
-        // xorshift64: tiny state, no ThreadLocal lookup, and more than adequate for a simulated RANDOM component.
         long x = state.rngState;
         x ^= x << 13;
         x ^= x >>> 7;
