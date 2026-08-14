@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
+import com.foreverspark.logicsim.client.screen.EditorScreenContext;
 import com.foreverspark.logicsim.client.screen.SourceConfigScreen;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
@@ -28,7 +29,7 @@ public abstract class CircuitCanvasSourceConfigMixin {
         if (node == null || node.kind != NodeKind.CONSTANT) return;
 
         CircuitCanvasWidget canvas = (CircuitCanvasWidget)(Object)this;
-        var parent = Minecraft.getInstance().gui.getScreen();
+        var parent = EditorScreenContext.current();
 
         if (node.clockSource) {
             Minecraft.getInstance().gui.setScreen(SourceConfigScreen.clock(parent, node.clockFrequencyHz, hz -> {
