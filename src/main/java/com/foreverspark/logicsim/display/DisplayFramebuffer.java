@@ -89,6 +89,46 @@ public final class DisplayFramebuffer {
 
     public int pixelArgb(int x, int y) { return rgb565ToArgb(pixelRgb565(x, y)); }
 
+    /**
+     * Compact persistence/network representation: two RGB565 pixels per int. A 64x64 tile therefore needs only
+     * 2048 ints (8 KiB) instead of thousands of separately named NBT entries.
+     */
+    public int[] packedRgb565() {
+        int[] packed = new int[(pixels.length + 1) >>> 1];
+        for (int pixel = 0, out = 0; pixel < pixels.length; pixel += 2, out++) {
+            int low = pixels[pixel] & 0xFFFF;
+            int high = pixel + 1 < pixels.length ? (pixels[pixel + 1] & 0xFFFF) : 0;
+            packed[out] = low | (high << 16);
+        }
+        return packed;
+    }
+
+    /**
+     * Loads a compact snapshot in one pass and advances revision exactly once. This is intentionally authoritative:
+     * client block-entity packets may replace the whole framebuffer and render caches must notice even when the
+     * resulting pixel count happens to match the previous frame.
+     */
+    public void loadPackedRgb565(int[] packed) {
+        Arrays.fill(pixels, 0);
+        nonZeroPixels = 0;
+        if (packed != null) {
+            int count = Math.min(packed.length, (pixels.length + 1) >>> 1);
+            for (int in = 0, pixel = 0; in < count && pixel < pixels.length; in++) {
+                int pair = packed[in];
+                int low = pair & 0xFFFF;
+                pixels[pixel++] = low;
+                if (low != 0) nonZeroPixels++;
+                if (pixel < pixels.length) {
+                    int high = (pair >>> 16) & 0xFFFF;
+                    pixels[pixel++] = high;
+                    if (high != 0) nonZeroPixels++;
+                }
+            }
+        }
+        revision++;
+        markDirty(0, 0, width - 1, height - 1);
+    }
+
     public DirtyRegion consumeDirtyRegion() {
         if (dirtyMaxX < dirtyMinX || dirtyMaxY < dirtyMinY) return null;
         DirtyRegion region = new DirtyRegion(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY, revision);
