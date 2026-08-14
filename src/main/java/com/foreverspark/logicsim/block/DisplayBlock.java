@@ -77,11 +77,15 @@ public final class DisplayBlock extends BaseEntityBlock {
     private static void logic$showScreenInfo(Level level, BlockPos pos, BlockState state, Player player, boolean changed) {
         DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(level, pos, state);
         if (info == null) return;
+        DisplayBlockEntity.WallSignalInfo signal = DisplayBlockEntity.wallSignalInfo(level, pos, state);
 
         if (changed) {
             player.sendSystemMessage(Component.literal(
                     "Screen changed: " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " pixels per block"
                             + " -> " + info.pixelWidth() + "x" + info.pixelHeight() + " total pixels."
+            ));
+            player.sendSystemMessage(Component.literal(
+                    "Framebuffer preserved: changing resolution no longer clears existing pixels."
             ));
             player.sendSystemMessage(Component.literal(
                     "Cable does NOT change with resolution: always use one Bus Cable [64] on any side/back display block."
@@ -95,13 +99,16 @@ public final class DisplayBlock extends BaseEntityBlock {
                         + " | " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " pixels/block"
         ));
         player.sendSystemMessage(Component.literal(
+                "Power: " + (signal != null && signal.powered() ? "ON" : "OFF")
+                        + " | Redstone power on ANY connected display tile powers the whole wall; OFF clears the framebuffer."
+        ));
+        player.sendSystemMessage(Component.literal(
                 "Front/screen face: " + state.getValue(FACING) + " | Connection: one Bus Cable [64] on any side/back face."
         ));
         player.sendSystemMessage(Component.literal(
-                "Shift+Right Click changes pixels/block; screen resolution never changes the 64-bit cable width."
+                "Shift+Right Click changes pixels/block without clearing memory; screen resolution never changes the 64-bit cable width."
         ));
 
-        DisplayBlockEntity.WallSignalInfo signal = DisplayBlockEntity.wallSignalInfo(level, pos, state);
         if (signal == null || !signal.hasReceivedData()) {
             player.sendSystemMessage(Component.literal(
                     "DATA64 diagnostic: NO signal has reached this screen yet. Check that the Circuit Block is programmed and the 64-bit bus is connected."
