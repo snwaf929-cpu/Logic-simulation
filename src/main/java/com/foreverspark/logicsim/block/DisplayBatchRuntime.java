@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.display.DisplayCommandCodec;
+import com.foreverspark.logicsim.display.DisplayFramebuffer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
@@ -14,11 +15,9 @@ import java.util.Set;
 /**
  * Server-thread fast path for high-rate simulated display output.
  *
- * The circuit simulator may produce hundreds of thousands of DATA64 commands per second. Sending every command
- * through CableRuntime and rebuilding the display wall for every pixel makes the visible screen run at Minecraft
- * I/O speed instead of simulation speed. This helper resolves the wall once, then applies a whole coalesced
- * framebuffer batch directly to the physical display backing stores. Client synchronization remains naturally
- * coalesced by DisplayBlockEntity's normal tick.
+ * The simulation worker already coalesces repeated writes to the same global pixel. This class now resolves the
+ * physical wall exactly once per Minecraft flush, builds a flat tile lookup, decodes raw DATA64 bits without
+ * allocating Command records, writes framebuffer memory directly, and marks each dirty tile changed only once.
  */
 public final class DisplayBatchRuntime {
     private static final int MAX_WALL_BLOCKS = 4096;
@@ -48,56 +47,93 @@ public final class DisplayBatchRuntime {
         int screenWidth = columns * density;
         int screenHeight = rows * density;
 
+        // Resolve every physical tile once. The hot pixel loop below contains no world/hash/block-entity lookup.
+        DisplayBlockEntity[] tiles = new DisplayBlockEntity[columns * rows];
+        boolean[] dirtyTiles = new boolean[tiles.length];
+        for (BlockPos pos : wall.blocks()) {
+            int dx = pos.getX() - touchedTile.getX();
+            int dz = pos.getZ() - touchedTile.getZ();
+            int horizontal = dx * wall.right().getStepX() + dz * wall.right().getStepZ();
+            int tileX = horizontal - wall.minHorizontal();
+            int tileY = wall.maxY() - pos.getY();
+            if (tileX < 0 || tileX >= columns || tileY < 0 || tileY >= rows) continue;
+            if (level.getBlockEntity(pos) instanceof DisplayBlockEntity display) {
+                tiles[tileY * columns + tileX] = display;
+            }
+        }
+
         int applied = 0;
         int cleared = 0;
         int rejected = 0;
+        int backingScale = DisplayBlockEntity.MAX_WIDTH / Math.max(1, density);
 
         for (long raw : commands) {
-            DisplayCommandCodec.Command command = DisplayCommandCodec.decode(raw);
-            if (command.isClear()) {
-                for (BlockPos pos : wall.blocks()) {
-                    if (level.getBlockEntity(pos) instanceof DisplayBlockEntity display) display.clearScreen();
+            int opcode = (int) ((raw >>> 48) & 0xFFL);
+            if (opcode == DisplayCommandCodec.OP_CLEAR) {
+                for (int tileIndex = 0; tileIndex < tiles.length; tileIndex++) {
+                    DisplayBlockEntity display = tiles[tileIndex];
+                    if (display == null) continue;
+                    DisplayFramebuffer framebuffer = display.framebuffer();
+                    long before = framebuffer.revision();
+                    framebuffer.clear(0);
+                    if (framebuffer.revision() != before) dirtyTiles[tileIndex] = true;
                 }
                 cleared++;
                 continue;
             }
-            if (!command.isPixel()) {
+            if (opcode != DisplayCommandCodec.OP_PIXEL) {
                 rejected++;
                 continue;
             }
 
-            int globalX = command.x();
-            int globalY = command.y();
+            int globalX = (int) ((raw >>> 16) & 0xFFFFL);
+            int globalY = (int) ((raw >>> 32) & 0xFFFFL);
             if (globalX < 0 || globalY < 0 || globalX >= screenWidth || globalY >= screenHeight) {
                 rejected++;
                 continue;
             }
 
-            BlockPos target = targetForGlobalPixel(wall, touchedTile, density, globalX, globalY);
-            if (target == null || !wall.blocks().contains(target)) {
-                rejected++;
-                continue;
-            }
-            if (!(level.getBlockEntity(target) instanceof DisplayBlockEntity display)) {
+            int tileX = globalX / density;
+            int tileY = globalY / density;
+            int tileIndex = tileY * columns + tileX;
+            DisplayBlockEntity display = tiles[tileIndex];
+            if (display == null) {
                 rejected++;
                 continue;
             }
 
-            display.writePixel(globalX % density, globalY % density, command.rgb565());
+            int localX = globalX - tileX * density;
+            int localY = globalY - tileY * density;
+            int rgb565 = (int) (raw & 0xFFFFL);
+            DisplayFramebuffer framebuffer = display.framebuffer();
+            long before = framebuffer.revision();
+
+            if (backingScale == 1) {
+                framebuffer.writePixel(localX, localY, rgb565);
+            } else {
+                int minX = localX * backingScale;
+                int minY = localY * backingScale;
+                framebuffer.fillRect(
+                        minX,
+                        minY,
+                        minX + backingScale - 1,
+                        minY + backingScale - 1,
+                        rgb565
+                );
+            }
+
+            if (framebuffer.revision() != before) dirtyTiles[tileIndex] = true;
             applied++;
         }
 
-        return new Result(applied, cleared, rejected);
-    }
+        // One chunk-dirty/client-sync request per changed tile, never one per simulated pixel.
+        for (int tileIndex = 0; tileIndex < tiles.length; tileIndex++) {
+            if (!dirtyTiles[tileIndex]) continue;
+            DisplayBlockEntity display = tiles[tileIndex];
+            if (display != null) display.setChanged();
+        }
 
-    private static BlockPos targetForGlobalPixel(DisplayWall wall, BlockPos origin, int density, int globalX, int globalY) {
-        int targetHorizontal = wall.minHorizontal() + globalX / density;
-        int targetY = wall.maxY() - globalY / density;
-        return origin.offset(
-                wall.right().getStepX() * targetHorizontal,
-                targetY - origin.getY(),
-                wall.right().getStepZ() * targetHorizontal
-        );
+        return new Result(applied, cleared, rejected);
     }
 
     private static DisplayWall collectWall(Level level, BlockPos start, BlockState startState) {
