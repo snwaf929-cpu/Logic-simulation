@@ -30,30 +30,49 @@ public final class CircuitTimingController {
         private final int outputSignalId;
         private final int triggerSignalId;
         private int chancePercent;
-        private long rngState;
 
-        private RandomState(int outputSignalId, int triggerSignalId, int chancePercent, long seed) {
+        private RandomState(int outputSignalId, int triggerSignalId, int chancePercent) {
             this.outputSignalId = outputSignalId;
             this.triggerSignalId = triggerSignalId;
             this.chancePercent = chancePercent;
-            this.rngState = seed == 0L ? RNG_NONZERO_FALLBACK : seed;
         }
     }
 
     /**
-     * RANDOM blocks very commonly share one CLOCK. Wires are flattened to identical Signal ids by the compiler, so
-     * checking that trigger once per group is equivalent to checking it once for every RANDOM block but dramatically
-     * cheaper at MHz rates.
+     * RANDOM blocks very commonly share one CLOCK. One trigger check serves the entire group. The group also owns
+     * one xorshift stream; every generated 64-bit word supplies four independent 16-bit probability samples, cutting
+     * PRNG state transitions by ~4x for wide RANDOM buses while retaining fine probability resolution.
      */
     private static final class RandomTriggerGroup {
         private final int triggerSignalId;
         private final RandomState[] sources;
         private boolean lastHigh;
+        private long rngState;
+        private long samplePool;
+        private int samplesRemaining;
 
-        private RandomTriggerGroup(int triggerSignalId, RandomState[] sources, boolean lastHigh) {
+        private RandomTriggerGroup(int triggerSignalId, RandomState[] sources, boolean lastHigh, long seed) {
             this.triggerSignalId = triggerSignalId;
             this.sources = sources;
             this.lastHigh = lastHigh;
+            this.rngState = seed == 0L ? RNG_NONZERO_FALLBACK : seed;
+        }
+
+        private int nextUnsigned16() {
+            if (samplesRemaining == 0) {
+                long x = rngState;
+                x ^= x << 13;
+                x ^= x >>> 7;
+                x ^= x << 17;
+                if (x == 0L) x = RNG_NONZERO_FALLBACK;
+                rngState = x;
+                samplePool = x;
+                samplesRemaining = 4;
+            }
+            int sample = (int) (samplePool & 0xFFFFL);
+            samplePool >>>= 16;
+            samplesRemaining--;
+            return sample;
         }
     }
 
@@ -63,7 +82,6 @@ public final class CircuitTimingController {
     private final Map<ClockAddress, Integer> clockEnableSignalIds = new LinkedHashMap<>();
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
     private RandomTriggerGroup[] randomGroups = new RandomTriggerGroup[0];
-    private int randomSourceCount;
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
@@ -133,8 +151,7 @@ public final class CircuitTimingController {
     }
 
     /**
-     * RANDOM hot path checks each distinct trigger signal once per pass, then samples only that trigger's sources on
-     * LOW -> HIGH. If 32 RANDOM blocks share one clock, falling edges now perform one signal read instead of 32.
+     * RANDOM hot path checks each distinct trigger once, then samples only that trigger's outputs on LOW -> HIGH.
      */
     public int processRandomSources() {
         RandomTriggerGroup[] groups = randomGroups;
@@ -145,7 +162,6 @@ public final class CircuitTimingController {
         int maxPasses = Math.max(4, groups.length * 4 + 4);
         for (int pass = 0; pass < maxPasses; pass++) {
             boolean outputChanged = false;
-            boolean sawRising = false;
 
             for (int groupIndex = 0; groupIndex < groups.length; groupIndex++) {
                 RandomTriggerGroup group = groups[groupIndex];
@@ -156,12 +172,11 @@ public final class CircuitTimingController {
                 group.lastHigh = high;
                 if (!rising) continue;
 
-                sawRising = true;
                 RandomState[] sources = group.sources;
                 fired += sources.length;
                 for (int sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
                     RandomState state = sources[sourceIndex];
-                    boolean nextHigh = sampleHigh(state);
+                    boolean nextHigh = sampleHigh(group, state.chancePercent);
                     outputChanged |= turbo
                             ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
                             : simulator.driveLevel(state.outputSignalId, nextHigh);
@@ -171,9 +186,6 @@ public final class CircuitTimingController {
             if (!outputChanged) break;
             if (turbo) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
             else simulator.runUntilStable(EDGE_SETTLE_BUDGET);
-
-            // No source rose in this pass means the settled RANDOM outputs cannot create a cascading trigger edge.
-            if (!sawRising) break;
         }
         return fired;
     }
@@ -200,7 +212,6 @@ public final class CircuitTimingController {
     private void compileRandomGroups() {
         if (randomSources.isEmpty()) {
             randomGroups = new RandomTriggerGroup[0];
-            randomSourceCount = 0;
             return;
         }
 
@@ -211,16 +222,14 @@ public final class CircuitTimingController {
 
         RandomTriggerGroup[] groups = new RandomTriggerGroup[byTrigger.size()];
         int out = 0;
-        int sourceCount = 0;
         for (Map.Entry<Integer, List<RandomState>> entry : byTrigger.entrySet()) {
             RandomState[] sources = entry.getValue().toArray(RandomState[]::new);
-            sourceCount += sources.length;
             int triggerSignalId = entry.getKey();
             boolean high = simulator.isHigh(triggerSignalId);
-            groups[out++] = new RandomTriggerGroup(triggerSignalId, sources, high);
+            long seed = mix64(System.nanoTime() ^ ((long) triggerSignalId << 32) ^ sources.length ^ out);
+            groups[out++] = new RandomTriggerGroup(triggerSignalId, sources, high, seed);
         }
         randomGroups = groups;
-        randomSourceCount = sourceCount;
     }
 
     private void collect(CircuitDocument document, ChipLookup chips, String scope, Set<String> chipStack) {
@@ -236,12 +245,10 @@ public final class CircuitTimingController {
                 Signal trigger = compiled.inputSignal(scope, node.id, 0, 0);
                 if (trigger == null) throw new IllegalStateException("Compiled RANDOM trigger not found: " + scope + "/" + node.id);
                 RandomAddress randomAddress = new RandomAddress(scope, node.id);
-                long seed = mix64(System.nanoTime() ^ ((long) output.id() << 32) ^ trigger.id() ^ node.id);
                 randomSources.put(randomAddress, new RandomState(
                         output.id(),
                         trigger.id(),
-                        node.randomChancePercent,
-                        seed
+                        node.randomChancePercent
                 ));
             } else if (node.kind == NodeKind.CONSTANT && node.clockSource) {
                 node.width = 1;
@@ -270,21 +277,13 @@ public final class CircuitTimingController {
         }
     }
 
-    private static boolean sampleHigh(RandomState state) {
-        int chancePercent = state.chancePercent;
+    private static boolean sampleHigh(RandomTriggerGroup group, int chancePercent) {
         if (chancePercent <= 0) return false;
         if (chancePercent >= 100) return true;
-
-        long x = state.rngState;
-        x ^= x << 13;
-        x ^= x >>> 7;
-        x ^= x << 17;
-        if (x == 0L) x = RNG_NONZERO_FALLBACK;
-        state.rngState = x;
-
-        long unsigned32 = (x >>> 32) & 0xFFFF_FFFFL;
-        int bucket0to99 = (int) ((unsigned32 * 100L) >>> 32);
-        return bucket0to99 < chancePercent;
+        int sample = group.nextUnsigned16();
+        // threshold is 0..65535; error versus an exact integer percentage is below 0.0016 percentage points.
+        int threshold = (chancePercent * 65_536) / 100;
+        return sample < threshold;
     }
 
     private static long mix64(long z) {
