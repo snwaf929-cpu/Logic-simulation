@@ -27,6 +27,15 @@ public final class DisplayFramebufferSelfTest {
         check(fb.fillRect(0, 0, 1, 1, 0), "black rectangle fill accepted");
         check(fb.nonZeroPixelCount() == 2, "black rectangle fill decrements lit counter");
 
+        // Compact snapshot packs two RGB565 pixels into one int and must restore state exactly.
+        int[] packed = fb.packedRgb565();
+        check(packed.length == (32 * 18 + 1) / 2, "packed snapshot is two pixels per int");
+        DisplayFramebuffer restored = new DisplayFramebuffer(32, 18);
+        restored.loadPackedRgb565(packed);
+        check(restored.pixelRgb565(7, 5) == 0xF800, "packed snapshot restores red pixel");
+        check(restored.pixelRgb565(31, 17) == 0x07E0, "packed snapshot restores green pixel");
+        check(restored.nonZeroPixelCount() == 2, "packed snapshot restores lit counter");
+
         fb.clear(0);
         check(fb.isBlack(), "black clear restores blank fast path");
         check(fb.nonZeroPixelCount() == 0, "black clear resets lit counter");
