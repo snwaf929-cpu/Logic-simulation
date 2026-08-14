@@ -1,15 +1,17 @@
 package com.foreverspark.logicsim.core;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Event-driven NAND simulator with a compiled primitive hot path.
+ * Event-driven NAND simulator with compiled turbo paths.
  *
- * Editable/debug circuits keep Signal objects mirrored for inspection. Programmed physical circuits switch to
- * turbo mode: primitive byte state is authoritative and the MHz worker runs a separate propagation loop with no
- * trace, enum conversion, Signal writes, or transition-sequence accounting in the inner gate loop.
+ * Debug/editor circuits retain exact object-level behavior. Programmed circuits use primitive state. When the NAND
+ * graph is acyclic, clock source fanout is compiled once into a topologically ordered cone and evaluated with a tight
+ * array loop: no event-queue push/pop, queued flags, fanout scheduling, Signal writes, tracing, or enum conversion.
+ * Feedback/latch circuits automatically fall back to the primitive event engine.
  */
 public final class CircuitSimulator {
     private static final byte LOW = 0;
@@ -29,8 +31,9 @@ public final class CircuitSimulator {
     private final boolean[] queued;
     private final int[] queue;
     private final Map<String, Signal> signalsByPath;
-    /** Optional 64-bit dirty-watch fanout for compiled boundary ports. */
     private final long[] dirtyWatchBitsBySignal;
+    /** Null means the gate graph contains feedback/multiple drivers and must use event propagation. */
+    private final int[] topologicalGateOrder;
 
     private int queueHead;
     private int queueTail;
@@ -80,6 +83,7 @@ public final class CircuitSimulator {
             gateInputB[gateId] = gate.inputB().id();
             gateOutput[gateId] = gate.output().id();
         }
+        this.topologicalGateOrder = compileTopologicalOrder();
 
         this.queued = new boolean[gates.length];
         this.queue = new int[Math.max(1, gates.length)];
@@ -89,7 +93,6 @@ public final class CircuitSimulator {
         this(circuit, null);
     }
 
-    /** Physical programmed circuits call this after compile/initialization. */
     public void enableTurboMode() {
         if (traceRecorder != null) return;
         mirrorSignalObjects = false;
@@ -97,6 +100,10 @@ public final class CircuitSimulator {
 
     public boolean turboMode() {
         return !mirrorSignalObjects && traceRecorder == null;
+    }
+
+    public boolean acyclicTurboAvailable() {
+        return topologicalGateOrder != null;
     }
 
     public void scheduleAll() {
@@ -120,7 +127,6 @@ public final class CircuitSimulator {
         return turboMode() ? updateSignalTurbo(signalId, high ? HIGH : LOW) : updateSignalDetailed(signalId, high ? HIGH : LOW);
     }
 
-    /** Compile-validated MHz source drive: no explicit id check and no detailed-mode branch. */
     public boolean driveLevelFast(int signalId, boolean high) {
         return updateSignalTurbo(signalId, high ? HIGH : LOW);
     }
@@ -134,7 +140,6 @@ public final class CircuitSimulator {
         return values[signalId] == HIGH;
     }
 
-    /** Compile-validated MHz read. */
     public boolean isHighFast(int signalId) {
         return values[signalId] == HIGH;
     }
@@ -157,6 +162,75 @@ public final class CircuitSimulator {
         int[] ids = new int[bus.length];
         for (int bit = 0; bit < bus.length; bit++) ids[bit] = requireSignalId(bus[bit]);
         return ids;
+    }
+
+    /**
+     * Compile the exact downstream gate cone of a source signal. Null means feedback exists, so callers must use
+     * event propagation. An empty array is a valid acyclic source with no NAND consumers.
+     */
+    public int[] compileAcyclicCone(int sourceSignalId) {
+        requireSignalId(sourceSignalId);
+        if (topologicalGateOrder == null) return null;
+        if (gateInputA.length == 0) return new int[0];
+
+        boolean[] reachable = new boolean[gateInputA.length];
+        int[] work = new int[gateInputA.length];
+        int head = 0;
+        int tail = 0;
+        int reachableCount = 0;
+
+        int start = consumerOffsets[sourceSignalId];
+        int end = consumerOffsets[sourceSignalId + 1];
+        for (int index = start; index < end; index++) {
+            int gateId = consumerGateIds[index];
+            if (!reachable[gateId]) {
+                reachable[gateId] = true;
+                work[tail++] = gateId;
+                reachableCount++;
+            }
+        }
+
+        while (head < tail) {
+            int gateId = work[head++];
+            int outputSignalId = gateOutput[gateId];
+            start = consumerOffsets[outputSignalId];
+            end = consumerOffsets[outputSignalId + 1];
+            for (int index = start; index < end; index++) {
+                int consumer = consumerGateIds[index];
+                if (!reachable[consumer]) {
+                    reachable[consumer] = true;
+                    work[tail++] = consumer;
+                    reachableCount++;
+                }
+            }
+        }
+
+        int[] cone = new int[reachableCount];
+        int out = 0;
+        for (int gateId : topologicalGateOrder) {
+            if (reachable[gateId]) cone[out++] = gateId;
+        }
+        return cone;
+    }
+
+    /**
+     * Fastest source-edge path: set one compile-validated source and evaluate only its acyclic downstream cone once.
+     * This is the preferred programmed-clock path and bypasses the event queue completely.
+     */
+    public long driveAndSettleAcyclicFast(int sourceSignalId, boolean high, int[] cone, long maxGateEvaluations) {
+        if (cone == null) throw new IllegalArgumentException("acyclic cone is required");
+        if (cone.length > maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
+
+        setSignalTurboNoSchedule(sourceSignalId, high ? HIGH : LOW);
+        for (int index = 0; index < cone.length; index++) {
+            int gateId = cone[index];
+            byte a = values[gateInputA[gateId]];
+            byte b = values[gateInputB[gateId]];
+            byte next = (a == LOW || b == LOW) ? HIGH : (a == HIGH && b == HIGH ? LOW : UNKNOWN);
+            setSignalTurboNoSchedule(gateOutput[gateId], next);
+        }
+        totalGateEvaluations += cone.length;
+        return cone.length;
     }
 
     public void watchDirtyBit(int bitIndex, int[] signalIds) {
@@ -207,16 +281,31 @@ public final class CircuitSimulator {
 
     public long runUntilStable(long maxGateEvaluations) {
         if (maxGateEvaluations <= 0L) throw new IllegalArgumentException("maxGateEvaluations must be > 0");
-        return turboMode() ? runUntilStableTurboInternal(maxGateEvaluations) : runUntilStableDetailed(maxGateEvaluations);
+        return turboMode() ? runUntilStableFast(maxGateEvaluations) : runUntilStableDetailed(maxGateEvaluations);
     }
 
-    /** Compile-validated programmed-hardware settle path; skips the mode dispatch on every clock edge. */
     public long runUntilStableFast(long maxGateEvaluations) {
         if (maxGateEvaluations <= 0L) throw new IllegalArgumentException("maxGateEvaluations must be > 0");
-        return runUntilStableTurboInternal(maxGateEvaluations);
+        if (topologicalGateOrder != null) return runTopologicalFullPass(maxGateEvaluations);
+        return runEventTurbo(maxGateEvaluations);
     }
 
-    private long runUntilStableTurboInternal(long maxGateEvaluations) {
+    private long runTopologicalFullPass(long maxGateEvaluations) {
+        if (topologicalGateOrder.length > maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
+        // Turbo DAG updates never queue consumers; defensive reset handles any queue left by pre-turbo initialization.
+        clearScheduledQueue();
+        for (int index = 0; index < topologicalGateOrder.length; index++) {
+            int gateId = topologicalGateOrder[index];
+            byte a = values[gateInputA[gateId]];
+            byte b = values[gateInputB[gateId]];
+            byte next = (a == LOW || b == LOW) ? HIGH : (a == HIGH && b == HIGH ? LOW : UNKNOWN);
+            setSignalTurboNoSchedule(gateOutput[gateId], next);
+        }
+        totalGateEvaluations += topologicalGateOrder.length;
+        return topologicalGateOrder.length;
+    }
+
+    private long runEventTurbo(long maxGateEvaluations) {
         long evaluations = 0L;
         while (queueSize > 0) {
             if (evaluations >= maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
@@ -261,6 +350,7 @@ public final class CircuitSimulator {
     public long transitionSequence() { return transitionSequence; }
 
     private boolean updateSignalTurbo(int signalId, byte next) {
+        if (topologicalGateOrder != null) return setSignalTurboNoSchedule(signalId, next);
         if (values[signalId] == next) return false;
         values[signalId] = next;
         if (dirtyWatchEnabled) dirtyWatchBits |= dirtyWatchBitsBySignal[signalId];
@@ -268,6 +358,13 @@ public final class CircuitSimulator {
         int start = consumerOffsets[signalId];
         int end = consumerOffsets[signalId + 1];
         for (int index = start; index < end; index++) schedule(consumerGateIds[index]);
+        return true;
+    }
+
+    private boolean setSignalTurboNoSchedule(int signalId, byte next) {
+        if (values[signalId] == next) return false;
+        values[signalId] = next;
+        if (dirtyWatchEnabled) dirtyWatchBits |= dirtyWatchBitsBySignal[signalId];
         return true;
     }
 
@@ -297,12 +394,67 @@ public final class CircuitSimulator {
         return true;
     }
 
+    private int[] compileTopologicalOrder() {
+        int gateCount = gateInputA.length;
+        if (gateCount == 0) return new int[0];
+
+        int[] producerBySignal = new int[signals.length];
+        Arrays.fill(producerBySignal, -1);
+        for (int gateId = 0; gateId < gateCount; gateId++) {
+            int outputSignal = gateOutput[gateId];
+            if (producerBySignal[outputSignal] != -1) return null; // multiple NAND drivers on one net
+            producerBySignal[outputSignal] = gateId;
+        }
+
+        int[] indegree = new int[gateCount];
+        for (int gateId = 0; gateId < gateCount; gateId++) {
+            int producerA = producerBySignal[gateInputA[gateId]];
+            int producerB = producerBySignal[gateInputB[gateId]];
+            if (producerA >= 0) indegree[gateId]++;
+            if (producerB >= 0 && producerB != producerA) indegree[gateId]++;
+        }
+
+        int[] ready = new int[gateCount];
+        int readyHead = 0;
+        int readyTail = 0;
+        for (int gateId = 0; gateId < gateCount; gateId++) {
+            if (indegree[gateId] == 0) ready[readyTail++] = gateId;
+        }
+
+        int[] order = new int[gateCount];
+        int orderSize = 0;
+        while (readyHead < readyTail) {
+            int gateId = ready[readyHead++];
+            order[orderSize++] = gateId;
+            int outputSignal = gateOutput[gateId];
+            int start = consumerOffsets[outputSignal];
+            int end = consumerOffsets[outputSignal + 1];
+            for (int index = start; index < end; index++) {
+                int consumer = consumerGateIds[index];
+                if (--indegree[consumer] == 0) ready[readyTail++] = consumer;
+            }
+        }
+
+        return orderSize == gateCount ? order : null;
+    }
+
     private void schedule(int gateId) {
         if (queued[gateId]) return;
         queued[gateId] = true;
         queue[queueTail] = gateId;
         if (++queueTail == queue.length) queueTail = 0;
         queueSize++;
+    }
+
+    private void clearScheduledQueue() {
+        while (queueSize > 0) {
+            int gateId = queue[queueHead];
+            if (++queueHead == queue.length) queueHead = 0;
+            queueSize--;
+            queued[gateId] = false;
+        }
+        queueHead = 0;
+        queueTail = 0;
     }
 
     private int requireSignalId(Signal signal) {
