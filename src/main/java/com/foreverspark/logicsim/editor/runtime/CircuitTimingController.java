@@ -31,11 +31,14 @@ public final class CircuitTimingController {
     private static final class RandomState {
         private final int outputSignalId;
         private final int triggerSignalId;
+        /** Structural fallback when a direct CLOCK -> RANDOM wire aliases unexpectedly through compiled routing. */
+        private final ClockAddress directClock;
         private int chancePercent;
 
-        private RandomState(int outputSignalId, int triggerSignalId, int chancePercent) {
+        private RandomState(int outputSignalId, int triggerSignalId, ClockAddress directClock, int chancePercent) {
             this.outputSignalId = outputSignalId;
             this.triggerSignalId = triggerSignalId;
+            this.directClock = directClock;
             this.chancePercent = chancePercent;
         }
     }
@@ -55,6 +58,8 @@ public final class CircuitTimingController {
         private final int triggerSignalId;
         private final int sourceCount;
         private final RandomChanceBucket[] buckets;
+        /** Non-null only when every RANDOM in this trigger group is structurally wired from the same CLOCK. */
+        private final ClockAddress directClock;
         private boolean lastHigh;
         private long rng0;
         private long rng1;
@@ -63,12 +68,14 @@ public final class CircuitTimingController {
                 int triggerSignalId,
                 int sourceCount,
                 RandomChanceBucket[] buckets,
+                ClockAddress directClock,
                 boolean lastHigh,
                 long seed
         ) {
             this.triggerSignalId = triggerSignalId;
             this.sourceCount = sourceCount;
             this.buckets = buckets;
+            this.directClock = directClock;
             this.lastHigh = lastHigh;
 
             // xoroshiro128++ needs a non-zero 128-bit state. SplitMix-style seeding keeps neighboring trigger ids
@@ -97,6 +104,7 @@ public final class CircuitTimingController {
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
     private RandomTriggerGroup[] randomGroups = new RandomTriggerGroup[0];
     private Map<Integer, RandomTriggerGroup> randomGroupByTriggerSignal = Map.of();
+    private Map<ClockAddress, RandomTriggerGroup> randomGroupByDirectClock = Map.of();
     /** Signals participating in physical streams where intermediate transitions must never be collapsed. */
     private Set<Integer> losslessBoundarySignalIds = Set.of();
 
@@ -146,6 +154,16 @@ public final class CircuitTimingController {
 
     public long pendingEdges(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().pendingEdges(); }
 
+    /** Diagnostic/test hook: reports whether this CLOCK can use the direct rising-edge pulse-batch engine. */
+    public boolean pulseBatchEligible(String scopePath, int nodeId) {
+        ClockAddress address = address(scopePath, nodeId);
+        TimingSignalDriver clock = require(scopePath, nodeId);
+        return randomGroups.length == 1
+                && directRandomGroup(address, clock) != null
+                && clock.compiledConeGateCount() == 0
+                && pulseBatchBoundarySafe(clock.signalId());
+    }
+
     public long stepEdges(String scopePath, int nodeId, long edges) {
         return stepEdges(scopePath, nodeId, edges, null);
     }
@@ -173,9 +191,8 @@ public final class CircuitTimingController {
             Integer enableId = clockEnableSignalIds.get(address);
             if (enableId != null && !(turbo ? simulator.isHighFast(enableId) : simulator.isHigh(enableId))) continue;
 
-            RandomTriggerGroup directRandom = randomGroupByTriggerSignal.get(clock.signalId());
+            RandomTriggerGroup directRandom = directRandomGroup(address, clock);
             boolean pulseBatch = turbo
-                    && enableId == null
                     && randomGroups.length == 1
                     && directRandom != null
                     && clock.compiledConeGateCount() == 0
@@ -183,8 +200,9 @@ public final class CircuitTimingController {
 
             long next;
             if (pulseBatch) {
-                // Falling levels are irrelevant to RANDOM (which samples LOW->HIGH only) and to ordinary sampled
-                // world outputs. Consume H/L clock bookkeeping in O(1), then execute only useful rising-edge work.
+                // ENABLE is sampled once per worker chunk just like the normal timing path. While it is HIGH, falling
+                // clock levels are irrelevant to RANDOM and ordinary sampled outputs, so consume H/L bookkeeping in
+                // O(1) and execute only useful rising-edge device work.
                 next = clock.advanceNanosPulseBatch(elapsedNanos, edgeBudgetPerClock);
                 long risingEdges = clock.lastPulseRisingEdges();
                 for (long cycle = 0L; cycle < risingEdges; cycle++) {
@@ -289,6 +307,11 @@ public final class CircuitTimingController {
         if (!simulator.dirtyWatchEnabledFast() || simulator.hasDirtyWatchBitsFast()) afterSettledEdge.run();
     }
 
+    private RandomTriggerGroup directRandomGroup(ClockAddress address, TimingSignalDriver clock) {
+        RandomTriggerGroup direct = randomGroupByTriggerSignal.get(clock.signalId());
+        return direct != null ? direct : randomGroupByDirectClock.get(address);
+    }
+
     private boolean pulseBatchBoundarySafe(int clockSignalId) {
         return !losslessBoundarySignalIds.contains(clockSignalId);
     }
@@ -297,6 +320,7 @@ public final class CircuitTimingController {
         if (randomSources.isEmpty()) {
             randomGroups = new RandomTriggerGroup[0];
             randomGroupByTriggerSignal = Map.of();
+            randomGroupByDirectClock = Map.of();
             return;
         }
 
@@ -307,12 +331,14 @@ public final class CircuitTimingController {
 
         RandomTriggerGroup[] groups = new RandomTriggerGroup[byTrigger.size()];
         Map<Integer, RandomTriggerGroup> byTriggerSignal = new LinkedHashMap<>();
+        Map<ClockAddress, RandomTriggerGroup> byDirectClock = new LinkedHashMap<>();
         int out = 0;
         for (Map.Entry<Integer, List<RandomState>> entry : byTrigger.entrySet()) {
             List<RandomState> sourceList = entry.getValue();
             int triggerSignalId = entry.getKey();
             boolean high = simulator.isHigh(triggerSignalId);
 
+            ClockAddress directClock = commonDirectClock(sourceList);
             Map<Integer, List<RandomState>> byChance = new LinkedHashMap<>();
             for (RandomState source : sourceList) {
                 byChance.computeIfAbsent(source.chancePercent, ignored -> new ArrayList<>()).add(source);
@@ -333,14 +359,27 @@ public final class CircuitTimingController {
                     triggerSignalId,
                     sourceList.size(),
                     buckets,
+                    directClock,
                     high,
                     seed
             );
             groups[out++] = group;
             byTriggerSignal.put(triggerSignalId, group);
+            if (directClock != null) byDirectClock.putIfAbsent(directClock, group);
         }
         randomGroups = groups;
         randomGroupByTriggerSignal = Map.copyOf(byTriggerSignal);
+        randomGroupByDirectClock = Map.copyOf(byDirectClock);
+    }
+
+    private static ClockAddress commonDirectClock(List<RandomState> sourceList) {
+        ClockAddress direct = null;
+        for (RandomState source : sourceList) {
+            if (source.directClock == null) return null;
+            if (direct == null) direct = source.directClock;
+            else if (!direct.equals(source.directClock)) return null;
+        }
+        return direct;
     }
 
     private void logCompileTopology() {
@@ -348,6 +387,9 @@ public final class CircuitTimingController {
         int feedbackClocks = 0;
         int pulseBatchClocks = 0;
         int pulseBatchBoundaryBlocked = 0;
+        int pulseBatchEnableWired = 0;
+        int pulseBatchStructuralFallbacks = 0;
+        int pulseBatchNoDirectRandom = 0;
         long totalConeGates = 0L;
         int maxConeGates = 0;
         int chanceBuckets = 0;
@@ -362,21 +404,24 @@ public final class CircuitTimingController {
                 feedbackClocks++;
             }
 
-            boolean directPulseCandidate = clockEnableSignalIds.get(entry.getKey()) == null
-                    && randomGroups.length == 1
-                    && randomGroupByTriggerSignal.containsKey(driver.signalId())
-                    && cone == 0;
+            RandomTriggerGroup exactDirect = randomGroupByTriggerSignal.get(driver.signalId());
+            RandomTriggerGroup direct = exactDirect != null ? exactDirect : randomGroupByDirectClock.get(entry.getKey());
+            boolean directPulseCandidate = randomGroups.length == 1 && direct != null && cone == 0;
             if (directPulseCandidate) {
+                if (clockEnableSignalIds.containsKey(entry.getKey())) pulseBatchEnableWired++;
+                if (exactDirect == null) pulseBatchStructuralFallbacks++;
                 if (pulseBatchBoundarySafe(driver.signalId())) pulseBatchClocks++;
                 else pulseBatchBoundaryBlocked++;
+            } else if (randomGroups.length == 1 && cone == 0 && direct == null) {
+                pulseBatchNoDirectRandom++;
             }
         }
         for (RandomTriggerGroup group : randomGroups) chanceBuckets += group.buckets.length;
         LogicSimulationMod.LOGGER.info(
-                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} pulseBatchBoundaryBlocked={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={} losslessBoundarySignals={}",
-                clocks.size(), queueFreeClocks, pulseBatchClocks, pulseBatchBoundaryBlocked, feedbackClocks,
-                totalConeGates, maxConeGates, randomSources.size(), randomGroups.length, chanceBuckets,
-                losslessBoundarySignalIds.size()
+                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} pulseBatchBoundaryBlocked={} pulseBatchEnableWired={} pulseBatchStructuralFallbacks={} pulseBatchNoDirectRandom={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={} losslessBoundarySignals={}",
+                clocks.size(), queueFreeClocks, pulseBatchClocks, pulseBatchBoundaryBlocked, pulseBatchEnableWired,
+                pulseBatchStructuralFallbacks, pulseBatchNoDirectRandom, feedbackClocks, totalConeGates, maxConeGates,
+                randomSources.size(), randomGroups.length, chanceBuckets, losslessBoundarySignalIds.size()
         );
     }
 
@@ -396,6 +441,7 @@ public final class CircuitTimingController {
                 randomSources.put(randomAddress, new RandomState(
                         output.id(),
                         trigger.id(),
+                        directClockSource(document, scope, node.id),
                         node.randomChancePercent
                 ));
             } else if (node.kind == NodeKind.CONSTANT && node.clockSource) {
@@ -423,6 +469,20 @@ public final class CircuitTimingController {
             nestedStack.add(chipName);
             collect(definition.circuit, chips, CompiledCircuit.childScopePath(scope, node.id, chipName), Set.copyOf(nestedStack));
         }
+    }
+
+    private static ClockAddress directClockSource(CircuitDocument document, String scope, int randomNodeId) {
+        for (WireConnection wire : document.wires) {
+            if (wire.targetNodeId() != randomNodeId || wire.targetPort() != 0 || wire.sourcePort() != 0) continue;
+            for (EditorNode source : document.nodes) {
+                if (source.id != wire.sourceNodeId()) continue;
+                if (source.kind == NodeKind.CONSTANT && source.clockSource && !source.randomSource) {
+                    return new ClockAddress(scope, source.id);
+                }
+                return null;
+            }
+        }
+        return null;
     }
 
     private static long sampleMask(RandomTriggerGroup group, int chancePercent, int count) {

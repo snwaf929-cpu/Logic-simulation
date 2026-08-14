@@ -15,6 +15,8 @@ public final class RandomSourceSelfTest {
     public static void main(String[] args) {
         manualRisingEdgeCheck();
         clockRisingEdgeCheck();
+        pulseBatchEligibilityCheck();
+        wiredEnablePulseBatchCheck();
         System.out.println("RandomSourceSelfTest OK");
     }
 
@@ -78,6 +80,50 @@ public final class RandomSourceSelfTest {
         require(compiled.inputUnsigned(output.id, 0) == 1L, "Clock falling edge must not sample RANDOM");
         timing.stepEdges(CompiledCircuit.ROOT_SCOPE, clock.id, 1L); // next rising edge
         require(compiled.inputUnsigned(output.id, 0) == 0L, "Next clock rising edge must sample updated RANDOM chance");
+    }
+
+    private static void pulseBatchEligibilityCheck() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode clock = document.addNode(NodeKind.CONSTANT, 0, 0);
+        clock.clockSource = true;
+        clock.clockFrequencyHz = 5_000_000L;
+        clock.width = 1;
+        EditorNode random = document.addNode(NodeKind.CONSTANT, 30, 0);
+        random.randomSource = true;
+        random.randomChancePercent = 50;
+        random.width = 1;
+        EditorNode output = document.addNode(NodeKind.OUTPUT, 60, 0);
+        output.width = 1;
+        document.connect(clock.id, 0, random.id, 0);
+        document.connect(random.id, 0, output.id, 0);
+
+        CompiledCircuit compiled = CircuitCompiler.compile(document, ChipLookup.empty());
+        CircuitTimingController timing = new CircuitTimingController(compiled, document, ChipLookup.empty());
+        require(timing.pulseBatchEligible(CompiledCircuit.ROOT_SCOPE, clock.id),
+                "Direct CLOCK -> RANDOM should qualify for pulse batching");
+    }
+
+    private static void wiredEnablePulseBatchCheck() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode enable = document.addNode(NodeKind.CONSTANT, -30, 0);
+        enable.width = 1;
+        enable.constantValue = 1L;
+        EditorNode clock = document.addNode(NodeKind.CONSTANT, 0, 0);
+        clock.clockSource = true;
+        clock.clockFrequencyHz = 5_000_000L;
+        clock.width = 1;
+        EditorNode random = document.addNode(NodeKind.CONSTANT, 30, 0);
+        random.randomSource = true;
+        random.randomChancePercent = 50;
+        random.width = 1;
+        document.connect(enable.id, 0, clock.id, 0);
+        document.connect(clock.id, 0, random.id, 0);
+
+        CompiledCircuit compiled = CircuitCompiler.compile(document, ChipLookup.empty());
+        CircuitTimingController timing = new CircuitTimingController(compiled, document, ChipLookup.empty());
+        require(timing.enabled(CompiledCircuit.ROOT_SCOPE, clock.id), "Wired HIGH clock ENABLE should be active");
+        require(timing.pulseBatchEligible(CompiledCircuit.ROOT_SCOPE, clock.id),
+                "Wired HIGH ENABLE must not automatically disable direct pulse batching");
     }
 
     private static void require(boolean condition, String message) {
