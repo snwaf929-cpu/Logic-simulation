@@ -30,6 +30,9 @@ import java.util.Map;
  */
 @Mixin(CircuitBlockEntity.class)
 public abstract class CircuitBlockRealtimeDisplayMixin {
+    @Unique private static final long LOGIC_GENERIC_EDGE_CHUNK = 4_096L;
+    @Unique private static final long LOGIC_BULK_EDGE_CHUNK = 65_536L;
+
     @Shadow private volatile CircuitProgramRuntime runtime;
 
     @Unique private static final Field logic$displayTargetsField = logic$findDisplayTargetsField();
@@ -135,16 +138,16 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
         }
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK BULK] circuit={} active=true outputIndex={} randomLanes={} mode=packed-direct-boundary batchPublication=true",
-                self.getBlockPos(), outputIndex, current.directRandomBoundaryRandomLanes(outputIndex)
+                "[CLOCK BULK] circuit={} active=true outputIndex={} randomLanes={} mode=packed-direct-boundary maxEdgeChunk={} batchPublication=true",
+                self.getBlockPos(), outputIndex, current.directRandomBoundaryRandomLanes(outputIndex), LOGIC_BULK_EDGE_CHUNK
         );
     }
 
     /**
      * Both clock-worker calls (queue elapsed time with budget 0, then consume fixed chunks) pass through here. The
      * compiled direct plan keeps exact virtual edge accounting but emits one primitive DATA64 array per rising-edge
-     * chunk. No per-edge Runnable, dirty-mask scan, boundary read, DisplayCommandBuffer write or volatile texture
-     * publication remains in the hot path.
+     * chunk. Generic circuits keep their 4K fairness chunk; this single-clock zero-gate path can safely amortize the
+     * same bookkeeping over a much larger 64K chunk.
      */
     @WrapOperation(
             method = "runClockWorkerSlice",
@@ -167,9 +170,13 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
                 && current == runtime
                 && current.outputPortCount() == 1
                 && current.directRandomBoundaryBatchEligible(outputIndex)) {
+            long bulkBudget = edgeBudget;
+            if (edgeBudget >= LOGIC_GENERIC_EDGE_CHUNK) {
+                bulkBudget = Math.min(LOGIC_BULK_EDGE_CHUNK, edgeBudget << 4);
+            }
             long emitted = current.advanceDirectRandomBoundaryNanos(
                     elapsedNanos,
-                    edgeBudget,
+                    bulkBudget,
                     outputIndex,
                     surface::recordBatch
             );
