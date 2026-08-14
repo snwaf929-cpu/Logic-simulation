@@ -18,6 +18,11 @@ import java.util.Arrays;
 
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     private static final String PIXEL = "█";
+    /**
+     * The model's visible screen starts at z=0.75/16 on its NORTH/front side.
+     * Keep pixels just in front of that surface so they are flush without z-fighting or visibly floating.
+     */
+    private static final double SCREEN_FACE_Z = (0.75 / 16.0) - 0.001;
     private final Font font;
 
     public DisplayBlockEntityRenderer(BlockEntityRendererProvider.Context context) {
@@ -48,6 +53,8 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
     public void submit(DisplayWorldRenderState state, PoseStack matrices, SubmitNodeCollector queue, CameraRenderState cameraState) {
         matrices.pushPose();
         matrices.translate(0.5, 0.5, 0.5);
+        // Match the blockstate model rotation exactly. The old EAST/WEST signs were reversed,
+        // putting pixels on the wrong physical face for those orientations.
         matrices.mulPose(Axis.YP.rotationDegrees(rotationDegrees(state.facing)));
         matrices.translate(-0.5, -0.5, -0.5);
 
@@ -55,7 +62,8 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         float scaleX = 0.998f / Math.max(1.0f, state.pixelWidth * glyphWidth);
         float scaleY = 0.998f / Math.max(1.0f, state.pixelHeight * 9.0f);
 
-        matrices.translate(0.001, 0.999, -0.002);
+        // Local NORTH is the model's screen face. Render almost flush with the actual screen surface.
+        matrices.translate(0.001, 0.999, SCREEN_FACE_Z);
         matrices.scale(scaleX, -scaleY, scaleX);
 
         for (int y = 0; y < state.pixelHeight; y++) {
@@ -68,7 +76,9 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                         y * 9.0f,
                         Component.literal(PIXEL).getVisualOrderText(),
                         false,
-                        Font.DisplayMode.SEE_THROUGH,
+                        // NORMAL participates in the world depth buffer. SEE_THROUGH made pixels visible
+                        // through the display itself and through unrelated solid blocks.
+                        Font.DisplayMode.NORMAL,
                         state.lightCoords,
                         color,
                         0,
@@ -79,12 +89,13 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         matrices.popPose();
     }
 
-    private static float rotationDegrees(net.minecraft.core.Direction facing) {
+    /** Same rotations used by display_block.json: north=0, east=90, south=180, west=270. */
+    static float rotationDegrees(net.minecraft.core.Direction facing) {
         return switch (facing) {
             case NORTH -> 0.0f;
-            case EAST -> -90.0f;
+            case EAST -> 90.0f;
             case SOUTH -> 180.0f;
-            case WEST -> 90.0f;
+            case WEST -> 270.0f;
             default -> 0.0f;
         };
     }
