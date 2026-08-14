@@ -8,6 +8,7 @@ import com.foreverspark.logicsim.interconnect.CircuitPortCatalog;
 import com.foreverspark.logicsim.interconnect.CircuitPortLinks;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
+import com.foreverspark.logicsim.interconnect.DirectPortResolver;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.core.BlockPos;
@@ -46,13 +47,17 @@ public final class CircuitBlockEntity extends BlockEntity {
         long now = System.nanoTime();
         if (circuit.lastClockNanos == 0L) {
             circuit.lastClockNanos = now;
+            if (circuit.runtime != null) circuit.publishOutputs();
             return;
         }
         long elapsed = Math.max(0L, now - circuit.lastClockNanos);
         circuit.lastClockNanos = now;
-        if (circuit.runtime == null || elapsed == 0L) return;
+        if (circuit.runtime == null) return;
         try {
-            circuit.advanceClocksAdaptive(elapsed);
+            if (elapsed > 0L) circuit.advanceClocksAdaptive(elapsed);
+            // Static/combinational outputs must physically drive adjacent cables too.  Do not rely on
+            // a display or another device to lazily pull the Circuit Block value from the cable cache.
+            circuit.publishOutputs();
             circuit.runtimeError = "";
         } catch (RuntimeException error) {
             circuit.runtimeError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
@@ -194,6 +199,32 @@ public final class CircuitBlockEntity extends BlockEntity {
         if (runtime == null || level == null) return;
         for (BlockPos socketPos : CircuitPortLinks.sockets(level, worldPosition)) {
             if (level.getBlockEntity(socketPos) instanceof CircuitPortBlockEntity socket) publishSocket(socket);
+        }
+        publishDirectOutputs();
+    }
+
+    /**
+     * If the Circuit Block has exactly one compatible external port for an adjacent cable width, the
+     * direct physical connection is real electrically as well as visually.  OUTPUT ports drive the cable
+     * every server tick; INPUT ports continue to be driven from CableRuntime.notifyDevices().
+     */
+    private void publishDirectOutputs() {
+        for (Direction direction : Direction.values()) {
+            BlockPos cablePos = worldPosition.relative(direction);
+            BlockState state = level.getBlockState(cablePos);
+            if (!(state.getBlock() instanceof CableBlock cable)) continue;
+
+            PortSpec port = DirectPortResolver.unique(this, cable.cableKind(), cable.bitWidth());
+            if (port == null || port.direction() != PortDirection.OUTPUT) continue;
+
+            long value;
+            try {
+                value = runtime.outputValue(port.name());
+            } catch (RuntimeException ignored) {
+                continue;
+            }
+            long normalized = cable.bitWidth() >= 64 ? value : value & ((1L << cable.bitWidth()) - 1L);
+            CableRuntime.setValue(level, cablePos, normalized);
         }
     }
 
