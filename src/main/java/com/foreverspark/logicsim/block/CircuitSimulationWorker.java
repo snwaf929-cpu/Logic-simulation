@@ -16,6 +16,12 @@ public final class CircuitSimulationWorker {
     private static final Set<CircuitBlockEntity> CIRCUITS = ConcurrentHashMap.newKeySet();
     private static final AtomicBoolean STARTED = new AtomicBoolean();
     private static final long IDLE_PARK_NANOS = 250_000L;
+    /**
+     * Thread.yield() alone is only a scheduler hint and on Windows the same hot worker can immediately run again.
+     * Every few busy slices perform a real park/handoff. A 1 ns request is intentional: we want to leave the CPU,
+     * not sleep for a simulated-clock interval. The OS may round it upward, so do this infrequently.
+     */
+    private static final int HARD_HANDOFF_EVERY_BUSY_SLICES = 8;
 
     private CircuitSimulationWorker() {}
 
@@ -35,13 +41,14 @@ public final class CircuitSimulationWorker {
                 .daemon(true)
                 .name("LogicSimulation-ClockWorker")
                 .unstarted(CircuitSimulationWorker::runLoop);
-        // Keep the simulation below normal-priority Minecraft server/render work. On a many-core PC it can still
-        // consume otherwise-idle CPU, but it should not win when the game itself needs a core.
-        worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+        // Lowest Java priority is deliberate: spare CPU belongs to the virtual computer, but Minecraft's server,
+        // render, networking and chunk work must pre-empt it whenever they need time.
+        worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
     }
 
     private static void runLoop() {
+        int consecutiveBusySlices = 0;
         while (true) {
             boolean didWork = false;
             long now = System.nanoTime();
@@ -54,14 +61,16 @@ public final class CircuitSimulationWorker {
             }
 
             if (didWork) {
-                /*
-                 * A pure spin loop let the worker immediately reacquire CircuitBlockEntity's runtime monitor after
-                 * every slice. At overloaded MHz rates that starved the server thread for seconds (program installs
-                 * measured 3+ seconds and Minecraft reported hundreds of ticks behind). yield() releases our time
-                 * slice without the inaccurate millisecond-scale oversleep of Windows micro-sleeps.
-                 */
-                Thread.yield();
+                consecutiveBusySlices++;
+                if (consecutiveBusySlices >= HARD_HANDOFF_EVERY_BUSY_SLICES) {
+                    consecutiveBusySlices = 0;
+                    // Force an actual scheduler handoff so a saturated simulator cannot starve Minecraft for seconds.
+                    LockSupport.parkNanos(1L);
+                } else {
+                    Thread.yield();
+                }
             } else {
+                consecutiveBusySlices = 0;
                 LockSupport.parkNanos(IDLE_PARK_NANOS);
             }
         }
