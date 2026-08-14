@@ -9,6 +9,7 @@
     "CircuitCanvasCompactRenderMixin",
     "CircuitCanvasRoutingWidthMixin",
     "CircuitCanvasTerminalInteractionMixin",
+    "CircuitCanvasPersistentInputMixin",
     "CircuitCanvasTerminalRenderMixin",
     "CircuitCanvasCustomChipTextMixin",
     "CircuitCanvasDisplayPlacementMixin",
