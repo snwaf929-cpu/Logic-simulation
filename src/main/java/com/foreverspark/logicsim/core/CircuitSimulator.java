@@ -7,9 +7,9 @@ import java.util.Map;
 /**
  * Event-driven NAND simulator with a compiled primitive hot path.
  *
- * Editable/debug circuits can keep Signal objects mirrored for inspection. Programmed physical circuits switch to
- * turbo mode: primitive byte state is authoritative and the MHz worker no longer writes editor Signal objects on
- * every transition. Fanout is stored as flat CSR arrays for better cache locality than one int[] object per signal.
+ * Editable/debug circuits keep Signal objects mirrored for inspection. Programmed physical circuits switch to
+ * turbo mode: primitive byte state is authoritative and the MHz worker runs a separate propagation loop with no
+ * trace, enum conversion, Signal writes, or transition-sequence accounting in the inner gate loop.
  */
 public final class CircuitSimulator {
     private static final byte LOW = 0;
@@ -89,17 +89,14 @@ public final class CircuitSimulator {
         this(circuit, null);
     }
 
-    /**
-     * Physical programmed circuits call this after compile/initialization. Primitive state remains authoritative;
-     * editor/debug Signal objects are no longer dirtied millions of times per second.
-     */
+    /** Physical programmed circuits call this after compile/initialization. */
     public void enableTurboMode() {
         if (traceRecorder != null) return; // tracing requires object-level transition metadata
         mirrorSignalObjects = false;
     }
 
     public boolean turboMode() {
-        return !mirrorSignalObjects;
+        return !mirrorSignalObjects && traceRecorder == null;
     }
 
     public void scheduleAll() {
@@ -108,19 +105,25 @@ public final class CircuitSimulator {
 
     public boolean drive(Signal signal, LogicValue value) {
         if (signal == null || value == null) throw new IllegalArgumentException("signal and value are required");
-        return updateSignal(requireSignalId(signal), encode(value));
+        int signalId = requireSignalId(signal);
+        return turboMode() ? updateSignalTurbo(signalId, encode(value)) : updateSignalDetailed(signalId, encode(value));
     }
 
-    /** Fast 1-bit source drive used by virtual clocks/random devices. */
+    /** Safe 1-bit source drive with id validation. */
     public boolean driveLevel(Signal signal, boolean high) {
         if (signal == null) throw new IllegalArgumentException("signal is required");
-        return updateSignal(requireSignalId(signal), high ? HIGH : LOW);
+        int signalId = requireSignalId(signal);
+        return turboMode() ? updateSignalTurbo(signalId, high ? HIGH : LOW) : updateSignalDetailed(signalId, high ? HIGH : LOW);
     }
 
-    /** Fast 1-bit source drive when the signal id was cached at compile time. */
     public boolean driveLevel(int signalId, boolean high) {
         requireSignalId(signalId);
-        return updateSignal(signalId, high ? HIGH : LOW);
+        return turboMode() ? updateSignalTurbo(signalId, high ? HIGH : LOW) : updateSignalDetailed(signalId, high ? HIGH : LOW);
+    }
+
+    /** Compile-validated MHz source drive: no explicit id check and no detailed-mode branch. */
+    public boolean driveLevelFast(int signalId, boolean high) {
+        return updateSignalTurbo(signalId, high ? HIGH : LOW);
     }
 
     public boolean isHigh(Signal signal) {
@@ -129,6 +132,11 @@ public final class CircuitSimulator {
 
     public boolean isHigh(int signalId) {
         requireSignalId(signalId);
+        return values[signalId] == HIGH;
+    }
+
+    /** Compile-validated MHz read. */
+    public boolean isHighFast(int signalId) {
         return values[signalId] == HIGH;
     }
 
@@ -169,17 +177,12 @@ public final class CircuitSimulator {
         dirtyWatchEnabled = true;
     }
 
-    /** Returns and clears output dirtiness accumulated during the previous propagation. */
     public long consumeDirtyWatchBits() {
         long result = dirtyWatchBits;
         dirtyWatchBits = 0L;
         return result;
     }
 
-    /**
-     * Packs an already-compiled bus directly from the simulator's primitive value array.
-     * Signal membership checks are appropriate for editor/debug callers that have not cached primitive ids.
-     */
     public long readUnsigned(Signal[] bus) {
         if (bus == null) throw new IllegalArgumentException("bus is required");
         long result = 0L;
@@ -193,9 +196,13 @@ public final class CircuitSimulator {
         return result;
     }
 
-    /** MHz boundary read: signal ids were validated once during compile, so there are no per-bit object checks. */
     public long readUnsigned(int[] signalIds) {
         if (signalIds == null) throw new IllegalArgumentException("signal ids are required");
+        return readUnsignedFast(signalIds);
+    }
+
+    /** Compile-validated MHz bus read. */
+    public long readUnsignedFast(int[] signalIds) {
         long result = 0L;
         int bits = Math.min(64, signalIds.length);
         for (int bit = 0; bit < bits; bit++) {
@@ -207,48 +214,75 @@ public final class CircuitSimulator {
     }
 
     public long runUntilStable(long maxGateEvaluations) {
-        if (maxGateEvaluations <= 0) {
-            throw new IllegalArgumentException("maxGateEvaluations must be > 0");
-        }
+        if (maxGateEvaluations <= 0L) throw new IllegalArgumentException("maxGateEvaluations must be > 0");
+        return turboMode()
+                ? runUntilStableTurbo(maxGateEvaluations)
+                : runUntilStableDetailed(maxGateEvaluations);
+    }
 
+    private long runUntilStableTurbo(long maxGateEvaluations) {
         long evaluations = 0L;
         while (queueSize > 0) {
             if (evaluations >= maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
 
             int gateId = queue[queueHead];
-            queueHead++;
-            if (queueHead == queue.length) queueHead = 0;
+            if (++queueHead == queue.length) queueHead = 0;
             queueSize--;
             queued[gateId] = false;
             evaluations++;
 
             byte a = values[gateInputA[gateId]];
             byte b = values[gateInputB[gateId]];
-            byte next = (a == LOW || b == LOW)
-                    ? HIGH
-                    : (a == HIGH && b == HIGH ? LOW : UNKNOWN);
-            updateSignal(gateOutput[gateId], next);
+            byte next = (a == LOW || b == LOW) ? HIGH : (a == HIGH && b == HIGH ? LOW : UNKNOWN);
+            int outputId = gateOutput[gateId];
+            if (values[outputId] != next) updateSignalTurbo(outputId, next);
         }
         totalGateEvaluations += evaluations;
         return evaluations;
     }
 
-    public long totalGateEvaluations() {
-        return totalGateEvaluations;
+    private long runUntilStableDetailed(long maxGateEvaluations) {
+        long evaluations = 0L;
+        while (queueSize > 0) {
+            if (evaluations >= maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
+
+            int gateId = queue[queueHead];
+            if (++queueHead == queue.length) queueHead = 0;
+            queueSize--;
+            queued[gateId] = false;
+            evaluations++;
+
+            byte a = values[gateInputA[gateId]];
+            byte b = values[gateInputB[gateId]];
+            byte next = (a == LOW || b == LOW) ? HIGH : (a == HIGH && b == HIGH ? LOW : UNKNOWN);
+            updateSignalDetailed(gateOutput[gateId], next);
+        }
+        totalGateEvaluations += evaluations;
+        return evaluations;
     }
 
-    public long transitionSequence() {
-        return transitionSequence;
+    public long totalGateEvaluations() { return totalGateEvaluations; }
+    public long transitionSequence() { return transitionSequence; }
+
+    /** Minimal programmed-hardware transition path. */
+    private boolean updateSignalTurbo(int signalId, byte next) {
+        if (values[signalId] == next) return false;
+        values[signalId] = next;
+        if (dirtyWatchEnabled) dirtyWatchBits |= dirtyWatchBitsBySignal[signalId];
+
+        int start = consumerOffsets[signalId];
+        int end = consumerOffsets[signalId + 1];
+        for (int index = start; index < end; index++) schedule(consumerGateIds[index]);
+        return true;
     }
 
-    private boolean updateSignal(int signalId, byte next) {
+    private boolean updateSignalDetailed(int signalId, byte next) {
         byte previous = values[signalId];
         if (previous == next) return false;
 
         values[signalId] = next;
         transitionSequence++;
         if (dirtyWatchEnabled) dirtyWatchBits |= dirtyWatchBitsBySignal[signalId];
-
         if (mirrorSignalObjects) signals[signalId].setValue(decode(next));
 
         if (traceRecorder != null) {
@@ -272,8 +306,7 @@ public final class CircuitSimulator {
         if (queued[gateId]) return;
         queued[gateId] = true;
         queue[queueTail] = gateId;
-        queueTail++;
-        if (queueTail == queue.length) queueTail = 0;
+        if (++queueTail == queue.length) queueTail = 0;
         queueSize++;
     }
 
