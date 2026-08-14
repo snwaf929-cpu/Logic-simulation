@@ -32,9 +32,15 @@ public final class DisplayBlockEntity extends BlockEntity {
     public static final int OP_PIXEL = DisplayCommandCodec.OP_PIXEL;
     public static final int OP_CLEAR = DisplayCommandCodec.OP_CLEAR;
 
+    private static final int FRAMEBUFFER_VERSION = 2;
     private static final int[] PIXEL_WIDTHS = {1, 2, 4, 8, 16, 32, 64};
     private static final int MAX_WALL_BLOCKS = 4096;
 
+    /**
+     * The backing store is ALWAYS 64x64, independent of the selected visible density.
+     * A low-resolution logical pixel occupies a rectangle inside this backing store. That means changing
+     * 1 -> 2 -> 4 ... never destroys the image; higher resolutions simply reveal more of the same memory.
+     */
     private final DisplayFramebuffer framebuffer = new DisplayFramebuffer(MAX_WIDTH, MAX_HEIGHT);
     private int pixelWidth = DEFAULT_PIXEL_WIDTH;
     private boolean syncPending;
@@ -47,6 +53,11 @@ public final class DisplayBlockEntity extends BlockEntity {
     private long lastReceivedData;
     private String lastActionStatus = "No DRAW/CLEAR command accepted yet";
 
+    /** Redstone is wall-wide: one directly powered tile powers every same-facing connected display tile. */
+    private boolean powerInitialized;
+    private boolean localRedstonePowered;
+    private boolean wallPowered;
+
     public DisplayBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.DISPLAY, pos, state);
     }
@@ -54,6 +65,7 @@ public final class DisplayBlockEntity extends BlockEntity {
     public DisplayFramebuffer framebuffer() { return framebuffer; }
     public int pixelWidth() { return pixelWidth; }
     public int pixelHeight() { return pixelHeightFor(pixelWidth); }
+    public boolean wallPowered() { return wallPowered; }
     public static int pixelHeightFor(int width) { return width; }
 
     public static int nextPixelWidth(int current) {
@@ -71,17 +83,13 @@ public final class DisplayBlockEntity extends BlockEntity {
         return DisplayCommandCodec.clear(sequence);
     }
 
+    /** Changes only the visible logical density. The 64x64 backing framebuffer is deliberately preserved. */
     public void setPixelWidth(int width) {
         int normalized = normalizePixelWidth(width);
         if (normalized == pixelWidth) return;
         pixelWidth = normalized;
-        framebuffer.clear(0);
         framebuffer.markAllDirty();
-        lastWallCommand = Long.MIN_VALUE;
-        lastCableValue = Long.MIN_VALUE;
-        hasReceivedData = false;
-        lastReceivedData = 0L;
-        lastActionStatus = "Resolution changed; waiting for DATA64";
+        lastActionStatus = "Resolution changed to " + normalized + "x" + normalized + "; framebuffer preserved";
         setChanged();
     }
 
@@ -127,11 +135,12 @@ public final class DisplayBlockEntity extends BlockEntity {
         return new WallSignalInfo(
                 controller.hasReceivedData,
                 controller.lastReceivedData,
-                controller.lastActionStatus
+                controller.lastActionStatus,
+                controller.wallPowered
         );
     }
 
-    /** Returns the authoritative server RGB565 value for a global screen coordinate, or -1 when invalid/missing. */
+    /** Returns the visible logical RGB565 value for a global screen coordinate, or -1 when invalid/missing. */
     public static int wallPixelRgb565(Level level, BlockPos start, BlockState startState, int globalX, int globalY) {
         DisplayWall wall = collectWall(level, start, startState);
         if (wall == null || wall.blocks().isEmpty()) return -1;
@@ -145,13 +154,19 @@ public final class DisplayBlockEntity extends BlockEntity {
         BlockPos target = targetForGlobalPixel(wall, start, density, globalX, globalY);
         if (target == null || !wall.blocks().contains(target)) return -1;
         if (!(level.getBlockEntity(target) instanceof DisplayBlockEntity display)) return -1;
-        return display.framebuffer.pixelRgb565(globalX % density, globalY % density);
+        return display.logicalPixelRgb565(globalX % density, globalY % density);
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, DisplayBlockEntity display) {
         if (level.isClientSide()) return;
 
-        // Chunk/block-entity sync must not depend on another DRAW changing the framebuffer.  This sends the
+        // Redstone is evaluated before DATA64, so an OFF wall cannot accidentally draw for one tick.
+        boolean locallyPowered = level.hasNeighborSignal(pos);
+        if (!display.powerInitialized || locallyPowered != display.localRedstonePowered) {
+            refreshWallPower(level, pos, state);
+        }
+
+        // Chunk/block-entity sync must not depend on another DRAW changing the framebuffer. This sends the
         // saved framebuffer once after load, preventing a valid server pixel from appearing black client-side.
         if (!display.initialClientSyncSent) {
             display.initialClientSyncSent = true;
@@ -172,6 +187,58 @@ public final class DisplayBlockEntity extends BlockEntity {
         display.flushClientSync(level);
     }
 
+    /**
+     * Recomputes one connected wall from the actual world redstone state. A lever/wire/repeater may touch ANY
+     * tile; if any tile has neighbor power then every tile in that same-facing wall is ON. Going OFF clears the
+     * backing framebuffer, exactly like switching a real display off in this simulation.
+     */
+    private static void refreshWallPower(Level level, BlockPos touchedTile, BlockState touchedState) {
+        DisplayWall wall = collectWall(level, touchedTile, touchedState);
+        if (wall == null || wall.blocks().isEmpty()) return;
+
+        boolean powered = false;
+        for (BlockPos pos : wall.blocks()) {
+            if (level.hasNeighborSignal(pos)) {
+                powered = true;
+                break;
+            }
+        }
+
+        BlockPos controllerPos = controllerPos(wall, touchedTile);
+        DisplayBlockEntity controller = level.getBlockEntity(controllerPos) instanceof DisplayBlockEntity display
+                ? display
+                : null;
+        boolean wallStateChanged = controller == null || !controller.powerInitialized || controller.wallPowered != powered;
+
+        for (BlockPos pos : wall.blocks()) {
+            if (!(level.getBlockEntity(pos) instanceof DisplayBlockEntity display)) continue;
+            boolean tileWasInitialized = display.powerInitialized;
+            boolean tileStateChanged = !tileWasInitialized || display.wallPowered != powered;
+
+            display.localRedstonePowered = level.hasNeighborSignal(pos);
+            display.powerInitialized = true;
+            display.wallPowered = powered;
+
+            if (tileStateChanged) {
+                // Force the current DATA64 command to be observed again after the next power-on transition.
+                display.lastCableValue = Long.MIN_VALUE;
+                display.lastWallCommand = Long.MIN_VALUE;
+                if (!powered) {
+                    display.clearScreen();
+                } else {
+                    display.setChanged();
+                }
+            }
+        }
+
+        if (controller != null && wallStateChanged) {
+            controller.lastActionStatus = powered
+                    ? "Display wall powered ON"
+                    : "Display wall powered OFF; framebuffer cleared";
+            controller.setChanged();
+        }
+    }
+
     /** One 64-bit bus touching any non-front face of any tile controls the entire connected wall. */
     public void acceptCableValue(Direction face, long value) {
         if (level == null || level.isClientSide()) return;
@@ -190,6 +257,12 @@ public final class DisplayBlockEntity extends BlockEntity {
         if (!(level.getBlockEntity(controllerPos) instanceof DisplayBlockEntity controller)) return;
         controller.hasReceivedData = true;
         controller.lastReceivedData = command;
+
+        if (!controller.wallPowered) {
+            controller.lastActionStatus = "DATA64 received but display wall is OFF (no redstone power)";
+            controller.setChanged();
+            return;
+        }
 
         if (controller.lastWallCommand == command) return;
         controller.lastWallCommand = command;
@@ -298,16 +371,53 @@ public final class DisplayBlockEntity extends BlockEntity {
         return new DisplayWall(Set.copyOf(blocks), right, minHorizontal, maxHorizontal, minY, maxY);
     }
 
+    /**
+     * Writes one visible logical pixel into its complete backing-store cell. Example: at 1x1 density, pixel
+     * (0,0) fills all 64x64 backing samples; switching to 2x2 therefore keeps the same full-face image instead
+     * of clearing it. At 64x64 density, one logical pixel is exactly one backing sample.
+     */
     public void writePixel(int x, int y, int rgb565) {
         if (x < 0 || x >= pixelWidth || y < 0 || y >= pixelHeight()) return;
+        int scaleX = MAX_WIDTH / pixelWidth;
+        int scaleY = MAX_HEIGHT / pixelHeight();
+        int minX = x * scaleX;
+        int minY = y * scaleY;
+        int maxX = minX + scaleX - 1;
+        int maxY = minY + scaleY - 1;
+
         long before = framebuffer.revision();
-        if (!framebuffer.writePixel(x, y, rgb565)) return;
+        if (!framebuffer.fillRect(minX, minY, maxX, maxY, rgb565)) return;
         if (framebuffer.revision() != before) {
             setChanged();
         } else {
             // Re-sending an already-equal pixel is still a valid opportunity to repair a stale client copy.
             syncPending = true;
         }
+    }
+
+    /** Visible logical pixel sampled from persistent 64x64 backing memory. */
+    public int logicalPixelRgb565(int x, int y) {
+        if (x < 0 || x >= pixelWidth || y < 0 || y >= pixelHeight()) return 0;
+        int scaleX = MAX_WIDTH / pixelWidth;
+        int scaleY = MAX_HEIGHT / pixelHeight();
+        int minX = x * scaleX;
+        int minY = y * scaleY;
+        int maxX = minX + scaleX;
+        int maxY = minY + scaleY;
+
+        // If a higher-resolution image is viewed at a lower density, keep a lit pixel visible rather than
+        // destroying or averaging it into black. The untouched high-resolution backing data remains intact.
+        for (int backingY = minY; backingY < maxY; backingY++) {
+            for (int backingX = minX; backingX < maxX; backingX++) {
+                int value = framebuffer.pixelRgb565(backingX, backingY);
+                if (value != 0) return value;
+            }
+        }
+        return 0;
+    }
+
+    public int logicalPixelArgb(int x, int y) {
+        return DisplayFramebuffer.rgb565ToArgb(logicalPixelRgb565(x, y));
     }
 
     public void clearScreen() {
@@ -323,10 +433,9 @@ public final class DisplayBlockEntity extends BlockEntity {
     @Override
     protected void saveAdditional(ValueOutput output) {
         output.putInt("pixelWidth", pixelWidth);
-        int width = pixelWidth;
-        int height = pixelHeight();
-        for (int index = 0; index < width * height; index++) {
-            int value = framebuffer.pixelRgb565(index % width, index / width);
+        output.putInt("framebufferVersion", FRAMEBUFFER_VERSION);
+        for (int index = 0; index < MAX_WIDTH * MAX_HEIGHT; index++) {
+            int value = framebuffer.pixelRgb565(index % MAX_WIDTH, index / MAX_WIDTH);
             if (value != 0) output.putInt("p" + index, value);
         }
         super.saveAdditional(output);
@@ -337,19 +446,40 @@ public final class DisplayBlockEntity extends BlockEntity {
         super.loadAdditional(input);
         pixelWidth = normalizePixelWidth(input.getIntOr("pixelWidth", DEFAULT_PIXEL_WIDTH));
         framebuffer.clear(0);
-        int width = pixelWidth;
-        int height = pixelHeight();
-        for (int index = 0; index < width * height; index++) {
-            int value = input.getIntOr("p" + index, 0);
-            if (value != 0) framebuffer.writePixel(index % width, index / width, value);
+
+        int version = input.getIntOr("framebufferVersion", 1);
+        if (version >= FRAMEBUFFER_VERSION) {
+            for (int index = 0; index < MAX_WIDTH * MAX_HEIGHT; index++) {
+                int value = input.getIntOr("p" + index, 0);
+                if (value != 0) framebuffer.writePixel(index % MAX_WIDTH, index / MAX_WIDTH, value);
+            }
+        } else {
+            // Upgrade old saves that stored only the active NxN logical framebuffer.
+            int oldWidth = pixelWidth;
+            int oldHeight = pixelHeight();
+            int scaleX = MAX_WIDTH / oldWidth;
+            int scaleY = MAX_HEIGHT / oldHeight;
+            for (int index = 0; index < oldWidth * oldHeight; index++) {
+                int value = input.getIntOr("p" + index, 0);
+                if (value == 0) continue;
+                int x = index % oldWidth;
+                int y = index / oldWidth;
+                int minX = x * scaleX;
+                int minY = y * scaleY;
+                framebuffer.fillRect(minX, minY, minX + scaleX - 1, minY + scaleY - 1, value);
+            }
         }
+
         framebuffer.markAllDirty();
         initialClientSyncSent = false;
         lastWallCommand = Long.MIN_VALUE;
         lastCableValue = Long.MIN_VALUE;
         hasReceivedData = false;
         lastReceivedData = 0L;
-        lastActionStatus = "Loaded screen; waiting for DATA64";
+        lastActionStatus = "Loaded screen; waiting for redstone power and DATA64";
+        powerInitialized = false;
+        localRedstonePowered = false;
+        wallPowered = false;
     }
 
     @Override
@@ -381,6 +511,6 @@ public final class DisplayBlockEntity extends BlockEntity {
     }
 
     public record WallInfo(int tileCount, int columns, int rows, int pixelsPerTile, int pixelWidth, int pixelHeight, int dataBusWidth) {}
-    public record WallSignalInfo(boolean hasReceivedData, long lastReceivedData, String lastActionStatus) {}
+    public record WallSignalInfo(boolean hasReceivedData, long lastReceivedData, String lastActionStatus, boolean powered) {}
     private record DisplayWall(Set<BlockPos> blocks, Direction right, int minHorizontal, int maxHorizontal, int minY, int maxY) {}
 }
