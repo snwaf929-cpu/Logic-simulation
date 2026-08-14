@@ -23,11 +23,11 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeWidth", at = @At("HEAD"), cancellable = true)
     private void logic$compactWidth(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            // I/O terminals and RANDOM are deliberately tiny one-bit controls. 18x12 lets sixteen
-            // terminals stack exactly on the 12-unit bit rows of a 16-bit splitter/merger.
+            // I/O terminals are tiny one-bit controls. RANDOM is still one row tall, but wider so
+            // its probability can be read without turning it into a full-size chip card.
             case INPUT, OUTPUT -> cir.setReturnValue(18.0);
             case NAND -> cir.setReturnValue(66.0);
-            case CONSTANT -> cir.setReturnValue(node.randomSource ? 18.0 : 66.0);
+            case CONSTANT -> cir.setReturnValue(node.randomSource ? 54.0 : 66.0);
             case PROBE -> cir.setReturnValue(66.0);
             case BUS -> cir.setReturnValue(node.width <= 1 ? 20.0 : 30.0);
             case SPLITTER, MERGER -> cir.setReturnValue(72.0);
