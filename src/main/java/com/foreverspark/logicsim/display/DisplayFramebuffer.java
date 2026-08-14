@@ -7,6 +7,7 @@ public final class DisplayFramebuffer {
     private final int height;
     private final int[] pixels;
     private long revision;
+    private int nonZeroPixels;
     private int dirtyMinX;
     private int dirtyMinY;
     private int dirtyMaxX;
@@ -24,12 +25,19 @@ public final class DisplayFramebuffer {
     public int height() { return height; }
     public long revision() { return revision; }
 
+    /** O(1) fast path used by the renderer so a powered-off/black display submits no custom geometry at all. */
+    public boolean isBlack() { return nonZeroPixels == 0; }
+    public int nonZeroPixelCount() { return nonZeroPixels; }
+
     public boolean writePixel(int x, int y, int rgb565) {
         if (x < 0 || y < 0 || x >= width || y >= height) return false;
         int index = y * width + x;
         int normalized = rgb565 & 0xFFFF;
-        if (pixels[index] == normalized) return true;
+        int previous = pixels[index];
+        if (previous == normalized) return true;
         pixels[index] = normalized;
+        if (previous == 0 && normalized != 0) nonZeroPixels++;
+        else if (previous != 0 && normalized == 0) nonZeroPixels--;
         revision++;
         markDirty(x, y, x, y);
         return true;
@@ -44,8 +52,11 @@ public final class DisplayFramebuffer {
             int row = y * width;
             for (int x = minX; x <= maxX; x++) {
                 int index = row + x;
-                if (pixels[index] == normalized) continue;
+                int previous = pixels[index];
+                if (previous == normalized) continue;
                 pixels[index] = normalized;
+                if (previous == 0 && normalized != 0) nonZeroPixels++;
+                else if (previous != 0 && normalized == 0) nonZeroPixels--;
                 changed = true;
             }
         }
@@ -67,6 +78,7 @@ public final class DisplayFramebuffer {
         }
         if (!changed) return;
         Arrays.fill(pixels, normalized);
+        nonZeroPixels = normalized == 0 ? 0 : pixels.length;
         revision++;
         markDirty(0, 0, width - 1, height - 1);
     }
