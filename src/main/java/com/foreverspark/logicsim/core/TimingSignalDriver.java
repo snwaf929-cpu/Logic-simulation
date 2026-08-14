@@ -28,9 +28,8 @@ public final class TimingSignalDriver {
     }
 
     /**
-     * Compiled clock hot path. TimingDomain only calculates/counts due edges; the driver executes them directly.
-     * In physical turbo mode the clock signal id was already validated at compile time, so every edge also skips
-     * explicit id validation and detailed Signal-object dispatch.
+     * Compiled clock hot path. Physical turbo mode uses only compile-validated primitive ids and the direct turbo
+     * NAND settle loop; no per-edge simulator mode dispatch, Signal object write, or tracing branch remains here.
      */
     public long advanceNanos(long elapsedNanos, long edgeBudget, Runnable afterSettledEdge) {
         timing.queueElapsedNanos(elapsedNanos);
@@ -41,13 +40,22 @@ public final class TimingSignalDriver {
         boolean turbo = simulator.turboMode();
         long completed = 0L;
         try {
-            while (completed < executable) {
-                level = !level;
-                if (turbo) simulator.driveLevelFast(signalId, level);
-                else simulator.driveLevel(signalId, level);
-                simulator.runUntilStable(settleBudget);
-                completed++;
-                if (afterSettledEdge != null) afterSettledEdge.run();
+            if (turbo) {
+                while (completed < executable) {
+                    level = !level;
+                    simulator.driveLevelFast(signalId, level);
+                    simulator.runUntilStableFast(settleBudget);
+                    completed++;
+                    if (afterSettledEdge != null) afterSettledEdge.run();
+                }
+            } else {
+                while (completed < executable) {
+                    level = !level;
+                    simulator.driveLevel(signalId, level);
+                    simulator.runUntilStable(settleBudget);
+                    completed++;
+                    if (afterSettledEdge != null) afterSettledEdge.run();
+                }
             }
         } finally {
             timing.commitExecutedEdges(completed);
@@ -67,13 +75,22 @@ public final class TimingSignalDriver {
         boolean turbo = simulator.turboMode();
         long completed = 0L;
         try {
-            while (completed < edges) {
-                level = !level;
-                if (turbo) simulator.driveLevelFast(signalId, level);
-                else simulator.driveLevel(signalId, level);
-                simulator.runUntilStable(settleBudget);
-                completed++;
-                if (afterSettledEdge != null) afterSettledEdge.run();
+            if (turbo) {
+                while (completed < edges) {
+                    level = !level;
+                    simulator.driveLevelFast(signalId, level);
+                    simulator.runUntilStableFast(settleBudget);
+                    completed++;
+                    if (afterSettledEdge != null) afterSettledEdge.run();
+                }
+            } else {
+                while (completed < edges) {
+                    level = !level;
+                    simulator.driveLevel(signalId, level);
+                    simulator.runUntilStable(settleBudget);
+                    completed++;
+                    if (afterSettledEdge != null) afterSettledEdge.run();
+                }
             }
         } finally {
             timing.commitSteppedEdges(completed);
