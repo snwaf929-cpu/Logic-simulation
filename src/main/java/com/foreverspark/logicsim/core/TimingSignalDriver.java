@@ -5,6 +5,7 @@ public final class TimingSignalDriver {
     private final TimingDomain timing;
     private final CircuitSimulator simulator;
     private final Signal signal;
+    private final int signalId;
     private final long settleBudget;
 
     public TimingSignalDriver(long frequencyHz, CircuitSimulator simulator, Signal signal, long settleBudget) {
@@ -13,8 +14,9 @@ public final class TimingSignalDriver {
         this.timing = new TimingDomain(frequencyHz);
         this.simulator = simulator;
         this.signal = signal;
+        this.signalId = signal.id();
         this.settleBudget = settleBudget;
-        simulator.drive(signal, LogicValue.LOW);
+        simulator.driveLevel(signalId, false);
         simulator.runUntilStable(settleBudget);
     }
 
@@ -22,31 +24,54 @@ public final class TimingSignalDriver {
     public Signal signal() { return signal; }
 
     public long advanceNanos(long elapsedNanos, long edgeBudget) {
-        return advanceNanos(elapsedNanos, edgeBudget, () -> {});
+        return advanceNanos(elapsedNanos, edgeBudget, null);
     }
 
+    /**
+     * Compiled clock hot path. TimingDomain only calculates/counts due edges; the driver executes them directly.
+     * This removes EdgeSink + nested lambda dispatch from every MHz edge while preserving one settle/callback per edge.
+     */
     public long advanceNanos(long elapsedNanos, long edgeBudget, Runnable afterSettledEdge) {
-        Runnable callback = afterSettledEdge == null ? () -> {} : afterSettledEdge;
-        return timing.advanceNanos(elapsedNanos, edgeBudget, high -> {
-            driveLevel(high);
-            callback.run();
-        });
+        timing.queueElapsedNanos(elapsedNanos);
+        long executable = timing.executableEdges(edgeBudget);
+        if (executable <= 0L) return 0L;
+
+        boolean level = timing.high();
+        long completed = 0L;
+        try {
+            for (; completed < executable; completed++) {
+                level = !level;
+                simulator.driveLevel(signalId, level);
+                simulator.runUntilStable(settleBudget);
+                if (afterSettledEdge != null) afterSettledEdge.run();
+            }
+        } finally {
+            // If a user circuit throws, account only the prefix that really completed.
+            timing.commitExecutedEdges(completed);
+        }
+        return completed;
     }
 
     public long stepEdges(long edges) {
-        return stepEdges(edges, () -> {});
+        return stepEdges(edges, null);
     }
 
     public long stepEdges(long edges, Runnable afterSettledEdge) {
-        Runnable callback = afterSettledEdge == null ? () -> {} : afterSettledEdge;
-        return timing.stepEdges(edges, high -> {
-            driveLevel(high);
-            callback.run();
-        });
-    }
+        if (edges < 0L) throw new IllegalArgumentException("edges must be >= 0");
+        if (edges == 0L) return 0L;
 
-    private void driveLevel(boolean high) {
-        simulator.drive(signal, LogicValue.fromBoolean(high));
-        simulator.runUntilStable(settleBudget);
+        boolean level = timing.high();
+        long completed = 0L;
+        try {
+            for (; completed < edges; completed++) {
+                level = !level;
+                simulator.driveLevel(signalId, level);
+                simulator.runUntilStable(settleBudget);
+                if (afterSettledEdge != null) afterSettledEdge.run();
+            }
+        } finally {
+            timing.commitSteppedEdges(completed);
+        }
+        return completed;
     }
 }
