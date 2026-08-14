@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.block.DisplayPorts;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.gui.Font;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
@@ -19,10 +20,7 @@ import java.util.Arrays;
 
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     private static final String PIXEL = "█";
-    /**
-     * display_block.json puts the visible local-NORTH screen face at z=0.75/16.
-     * A slightly smaller Z is just outside that face, toward local NORTH.
-     */
+    /** display_block.json puts the visible local-NORTH screen surface at z=0.75/16. */
     private static final double SCREEN_FACE_Z = (0.75 / 16.0) - 0.001;
     private final Font font;
 
@@ -51,50 +49,63 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
     }
 
     @Override
-    public void submit(DisplayWorldRenderState state, PoseStack matrices, SubmitNodeCollector queue, CameraRenderState cameraState) {
-        matrices.pushPose();
-        matrices.translate(0.5, 0.5, 0.5);
-
-        /*
-         * IMPORTANT: blockstate JSON rotation and PoseStack Y rotation use opposite signs for EAST/WEST.
-         * display_block.json has a local NORTH screen. Minecraft's blockstate y=90 turns that model to
-         * facing=EAST, while Axis.YP needs -90 degrees to turn the dynamic local NORTH plane to EAST.
-         * Using +90 here puts the pixels on the physical back of an east-facing display.
-         */
-        matrices.mulPose(Axis.YP.rotationDegrees(rotationDegrees(state.facing)));
-        matrices.translate(-0.5, -0.5, -0.5);
-
+    public void submit(DisplayWorldRenderState state, PoseStack pose, SubmitNodeCollector queue, CameraRenderState cameraState) {
         int glyphWidth = Math.max(1, font.width(PIXEL));
         float scaleX = 0.998f / Math.max(1.0f, state.pixelWidth * glyphWidth);
         float scaleY = 0.998f / Math.max(1.0f, state.pixelHeight * 9.0f);
 
-        matrices.translate(0.001, 0.999, screenFaceZ());
-        matrices.scale(scaleX, -scaleY, scaleX);
+        pose.pushPose();
+        pose.translate(0.5, 0.5, 0.5);
+
+        /*
+         * Follow the same transform convention used by current 26.x block-entity text renderers:
+         * rotate around negative Y using the opposite direction's vanilla yaw.  This maps the model's
+         * local NORTH screen plane to the block's FACING direction without copying blockstate JSON signs.
+         */
+        pose.mulPose(Axis.YN.rotationDegrees(surfaceYawDegrees(state.facing)));
+
+        // Start at the top-left corner of the real local-NORTH screen, slightly outside the model surface.
+        pose.translate(-0.499, 0.499, screenFaceZ() - 0.5);
+
+        /*
+         * Do not mirror the PoseStack with a negative scale.  Mirroring flips geometry winding and made
+         * the glyph disappear with depth-tested text modes.  Rotate 180 degrees around Z and keep both
+         * scales positive, which is the normal surface-text pattern in current Minecraft renderers.
+         */
+        pose.mulPose(Axis.ZN.rotationDegrees(180.0f));
+        pose.scale(scaleX, scaleY, scaleX);
 
         for (int y = 0; y < state.pixelHeight; y++) {
             for (int x = 0; x < state.pixelWidth; x++) {
                 int color = state.pixels[y * DisplayBlockEntity.MAX_WIDTH + x];
                 if ((color & 0x00FFFFFF) == 0) continue;
+
+                // After the 180-degree Z rotation, negative text X advances toward screen-right.
+                float textX = -(x + 1) * glyphWidth;
+                float textY = y * 9.0f;
                 queue.submitText(
-                        matrices,
-                        x * glyphWidth,
-                        y * 9.0f,
+                        pose,
+                        textX,
+                        textY,
                         Component.literal(PIXEL).getVisualOrderText(),
                         false,
-                        // POLYGON_OFFSET is the depth-tested text mode intended for text drawn on a surface.
-                        // It avoids fighting with the black screen plane while still being occluded by blocks.
                         pixelDisplayMode(),
-                        state.lightCoords,
+                        pixelLight(),
                         color,
                         0,
                         0
                 );
             }
         }
-        matrices.popPose();
+        pose.popPose();
     }
 
-    /** PoseStack rotation that maps the model's local NORTH screen normal to the requested world facing. */
+    /** Vanilla yaw passed to Axis.YN; NORTH front = 0, EAST = 90, SOUTH = 180, WEST = 270. */
+    static float surfaceYawDegrees(Direction facing) {
+        return facing.getOpposite().toYRot();
+    }
+
+    /** Equivalent signed Axis.YP rotation, useful for regression-checking the resulting face normal. */
     static float rotationDegrees(Direction facing) {
         return switch (facing) {
             case NORTH -> 0.0f;
@@ -107,6 +118,11 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
 
     static Font.DisplayMode pixelDisplayMode() {
         return Font.DisplayMode.POLYGON_OFFSET;
+    }
+
+    /** A monitor pixel is emissive; its RGB565 value should not become black because the block is unlit. */
+    static int pixelLight() {
+        return LightTexture.FULL_BRIGHT;
     }
 
     static double screenFaceZ() {
