@@ -1,9 +1,12 @@
 package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.LogicSimulationMod;
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
+import com.foreverspark.logicsim.interconnect.CableKind;
+import com.foreverspark.logicsim.interconnect.CableNetworkCache;
 import com.foreverspark.logicsim.interconnect.CableRuntime;
 import com.foreverspark.logicsim.interconnect.CircuitPortCatalog;
 import com.foreverspark.logicsim.interconnect.CircuitPortLinks;
@@ -14,20 +17,20 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
 
 public final class CircuitBlockEntity extends BlockEntity {
     public static final int MAX_BOARD_JSON = 2_000_000;
@@ -38,7 +41,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     private static final long WORKER_SLICE_WALL_BUDGET_NANOS = 1_500_000L;
     private static final long WORKER_HARD_EDGE_LIMIT_PER_SLICE = 500_000L;
     private static final long WORKER_CHUNK_EDGES_PER_CLOCK = 1_024L;
-    private static final int MAX_PENDING_OUTPUT_EVENTS = 2_000_000;
+    private static final int MAX_COALESCED_DISPLAY_PIXELS = 262_144;
     private static final int WORLD_FLUSH_BATCH_EVENTS = 16_384;
     private static final long WORLD_FLUSH_WALL_BUDGET_NANOS = 4_000_000L;
     private static final long BENCHMARK_WINDOW_NANOS = 1_000_000_000L;
@@ -60,11 +63,15 @@ public final class CircuitBlockEntity extends BlockEntity {
     private volatile long lastClockTargetHz;
     private volatile long lastClockActualHz;
 
-    /** Preserve physical output transitions generated between Minecraft/server-world updates. */
-    private final ArrayDeque<OutputEvent> pendingOutputEvents = new ArrayDeque<>();
+    /**
+     * Minecraft-facing outputs are intentionally bounded/coalesced. Ordinary ports keep only the newest value.
+     * Display DATA64 ports keep final framebuffer intent: CLEAR plus the newest write for each pixel coordinate.
+     * This lets MHz simulation continue during /tick freeze without allocating millions of world events.
+     */
+    private final Map<String, OutputEvent> pendingLatestOutputs = new LinkedHashMap<>();
+    private final Map<String, DisplayCommandBuffer> pendingDisplayCommands = new HashMap<>();
     private final Map<String, Long> lastCapturedOutputs = new HashMap<>();
-    private final AtomicBoolean worldFlushScheduled = new AtomicBoolean();
-    private volatile MinecraftServer asyncServer;
+    private volatile Set<String> displayStreamPorts = Set.of();
 
     /** Independent-worker throughput accounting. */
     private long benchmarkStartNanos;
@@ -76,14 +83,17 @@ public final class CircuitBlockEntity extends BlockEntity {
     }
 
     /**
-     * Minecraft's block-entity ticker now performs lifecycle/world-I/O duties only.
+     * Minecraft's block-entity ticker performs lifecycle/world-I/O duties only.
      * It does NOT advance simulated clocks.
      */
     public static void tick(Level level, BlockPos pos, BlockState state, CircuitBlockEntity circuit) {
         if (level.isClientSide()) return;
-        circuit.bindServer(level);
-        if (circuit.isProgrammed()) CircuitSimulationWorker.register(circuit);
-        circuit.requestWorldFlush();
+        if (!circuit.isProgrammed()) return;
+
+        // Register only from a real server tick. Do not start MHz simulation from chunk restore/clearRemoved().
+        CircuitSimulationWorker.register(circuit);
+        circuit.refreshDisplayStreamPorts();
+        circuit.flushPendingOutputsOnServerThread();
     }
 
     public boolean isProgrammed() { return runtime != null; }
@@ -145,19 +155,18 @@ public final class CircuitBlockEntity extends BlockEntity {
             this.runtime = compiled;
             this.runtimeError = "";
             resetClockStateLocked(System.nanoTime());
-            pendingOutputEvents.clear();
+            pendingLatestOutputs.clear();
+            pendingDisplayCommands.clear();
             lastCapturedOutputs.clear();
             captureOutputChangesLocked();
         }
-        bindServer(level);
+        // A freshly programmed live block may start immediately. Restored blocks wait for their first real tick.
         if (level != null && !level.isClientSide()) CircuitSimulationWorker.register(this);
         setChanged();
-        requestWorldFlush();
     }
 
     /** Called only from CircuitSimulationWorker's dedicated daemon thread. */
     boolean runClockWorkerSlice(long now) {
-        boolean needsWorldFlush;
         boolean didWork = false;
         synchronized (runtimeLock) {
             CircuitProgramRuntime current = runtime;
@@ -171,42 +180,39 @@ public final class CircuitBlockEntity extends BlockEntity {
                 lastClockTargetHz = 0L;
                 lastClockActualHz = 0L;
                 captureOutputChangesLocked();
-                needsWorldFlush = !pendingOutputEvents.isEmpty();
-            } else {
-                if (lastClockNanos == 0L) resetClockStateLocked(now);
-                long elapsed = Math.max(0L, now - lastClockNanos);
-                lastClockNanos = now;
-
-                // First convert real elapsed wall time into pending virtual clock edges.
-                if (elapsed > 0L) current.advanceClocksNanos(elapsed, 0L, this::captureOutputChangesLocked);
-
-                long started = System.nanoTime();
-                long emittedTotal = 0L;
-                while (emittedTotal < WORKER_HARD_EDGE_LIMIT_PER_SLICE
-                        && pendingOutputEvents.size() < MAX_PENDING_OUTPUT_EVENTS) {
-                    long remaining = WORKER_HARD_EDGE_LIMIT_PER_SLICE - emittedTotal;
-                    long fairRemainingPerClock = Math.max(1L, remaining / clockCount);
-                    long chunkPerClock = Math.min(WORKER_CHUNK_EDGES_PER_CLOCK, fairRemainingPerClock);
-                    long emitted = current.advanceClocksNanos(0L, chunkPerClock, this::captureOutputChangesLocked);
-                    if (emitted <= 0L) break;
-                    emittedTotal = saturatingAdd(emittedTotal, emitted);
-                    didWork = true;
-                    if (System.nanoTime() - started >= WORKER_SLICE_WALL_BUDGET_NANOS) break;
-                }
-
-                long cpuNanos = Math.max(0L, System.nanoTime() - started);
-                lastClockExecutedEdges = emittedTotal;
-                lastClockPendingEdges = pendingClockEdgesLocked();
-                lastClockWallNanos = cpuNanos;
-                lastClockTargetHz = targetClockHzLocked();
-
-                benchmarkEdges = saturatingAdd(benchmarkEdges, emittedTotal);
-                benchmarkCpuNanos = saturatingAdd(benchmarkCpuNanos, cpuNanos);
-                updateBenchmarkLocked(now);
-                needsWorldFlush = !pendingOutputEvents.isEmpty();
+                return false;
             }
+
+            if (lastClockNanos == 0L) resetClockStateLocked(now);
+            long elapsed = Math.max(0L, now - lastClockNanos);
+            lastClockNanos = now;
+
+            // Convert real elapsed wall time into pending virtual clock edges.
+            if (elapsed > 0L) current.advanceClocksNanos(elapsed, 0L, this::captureOutputChangesLocked);
+
+            long started = System.nanoTime();
+            long emittedTotal = 0L;
+            while (emittedTotal < WORKER_HARD_EDGE_LIMIT_PER_SLICE) {
+                long remaining = WORKER_HARD_EDGE_LIMIT_PER_SLICE - emittedTotal;
+                long fairRemainingPerClock = Math.max(1L, remaining / clockCount);
+                long chunkPerClock = Math.min(WORKER_CHUNK_EDGES_PER_CLOCK, fairRemainingPerClock);
+                long emitted = current.advanceClocksNanos(0L, chunkPerClock, this::captureOutputChangesLocked);
+                if (emitted <= 0L) break;
+                emittedTotal = saturatingAdd(emittedTotal, emitted);
+                didWork = true;
+                if (System.nanoTime() - started >= WORKER_SLICE_WALL_BUDGET_NANOS) break;
+            }
+
+            long cpuNanos = Math.max(0L, System.nanoTime() - started);
+            lastClockExecutedEdges = emittedTotal;
+            lastClockPendingEdges = pendingClockEdgesLocked();
+            lastClockWallNanos = cpuNanos;
+            lastClockTargetHz = targetClockHzLocked();
+
+            benchmarkEdges = saturatingAdd(benchmarkEdges, emittedTotal);
+            benchmarkCpuNanos = saturatingAdd(benchmarkCpuNanos, cpuNanos);
+            updateBenchmarkLocked(now);
         }
-        if (needsWorldFlush) requestWorldFlush();
         return didWork;
     }
 
@@ -237,7 +243,7 @@ public final class CircuitBlockEntity extends BlockEntity {
                 actualCyclesPerSecond,
                 actualEdgesPerSecond,
                 pending,
-                pendingOutputEvents.size(),
+                pendingWorldOutputsLocked(),
                 String.format(java.util.Locale.ROOT, "%.3f", workerCpuMs)
         );
 
@@ -267,6 +273,15 @@ public final class CircuitBlockEntity extends BlockEntity {
         return total;
     }
 
+    private int pendingWorldOutputsLocked() {
+        long total = pendingLatestOutputs.size();
+        for (DisplayCommandBuffer buffer : pendingDisplayCommands.values()) {
+            total += buffer.size();
+            if (total >= Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        }
+        return (int) total;
+    }
+
     private void resetClockStateLocked(long now) {
         lastClockNanos = now;
         lastClockExecutedEdges = 0L;
@@ -279,10 +294,12 @@ public final class CircuitBlockEntity extends BlockEntity {
         benchmarkCpuNanos = 0L;
     }
 
-    /** Capture every changed external output after a settled simulated edge. */
+    /** Capture changed external outputs without creating one Minecraft event per simulated edge. */
     private void captureOutputChangesLocked() {
         CircuitProgramRuntime current = runtime;
         if (current == null) return;
+        Set<String> streamPorts = displayStreamPorts;
+
         for (PortSpec port : current.outputPorts()) {
             long value;
             try {
@@ -290,9 +307,21 @@ public final class CircuitBlockEntity extends BlockEntity {
             } catch (RuntimeException ignored) {
                 continue;
             }
+
             Long previous = lastCapturedOutputs.put(port.name(), value);
-            if (previous == null || previous.longValue() != value) {
-                pendingOutputEvents.addLast(new OutputEvent(port.name(), value));
+            if (previous != null && previous.longValue() == value) continue;
+
+            // Ordinary world-facing electrical state is level-triggered: newest value wins.
+            pendingLatestOutputs.put(port.name(), new OutputEvent(port.name(), value));
+
+            // A physical display is a framebuffer, not a million-entry Minecraft event queue.
+            if (port.width() == DisplayBlockEntity.DISPLAY_BUS_WIDTH && streamPorts.contains(port.name())) {
+                DisplayCommandCodec.Command command = DisplayCommandCodec.decode(value);
+                if (command.isPixel() || command.isClear()) {
+                    pendingDisplayCommands
+                            .computeIfAbsent(port.name(), ignored -> new DisplayCommandBuffer())
+                            .record(command);
+                }
             }
         }
     }
@@ -303,20 +332,16 @@ public final class CircuitBlockEntity extends BlockEntity {
     }
 
     public void acceptExternalInput(String portName, long value) {
-        boolean changed = false;
         synchronized (runtimeLock) {
             if (runtime == null) return;
             try {
                 runtime.driveInput(portName, value);
                 runtimeError = "";
-                int before = pendingOutputEvents.size();
                 captureOutputChangesLocked();
-                changed = pendingOutputEvents.size() != before;
             } catch (RuntimeException error) {
                 runtimeError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             }
         }
-        if (changed) requestWorldFlush();
     }
 
     public long outputValue(String portName) {
@@ -353,7 +378,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         }
     }
 
-    /** Publishes the current snapshot; transition history is handled by the independent output queue. */
+    /** Publishes the current snapshot. The high-rate display history is separately framebuffer-coalesced. */
     public void publishOutputs() {
         List<OutputEvent> snapshot = new ArrayList<>();
         synchronized (runtimeLock) {
@@ -392,23 +417,59 @@ public final class CircuitBlockEntity extends BlockEntity {
         }
     }
 
-    private void bindServer(Level candidate) {
-        if (candidate instanceof ServerLevel serverLevel) asyncServer = serverLevel.getServer();
+    /** Determine which 64-bit output ports currently feed a physical Pixel Display network. Server thread only. */
+    private void refreshDisplayStreamPorts() {
+        Level currentLevel = level;
+        if (currentLevel == null || currentLevel.isClientSide()) return;
+
+        Set<String> streams = new HashSet<>();
+
+        for (BlockPos socketPos : CircuitPortLinks.sockets(currentLevel, worldPosition)) {
+            if (!(currentLevel.getBlockEntity(socketPos) instanceof CircuitPortBlockEntity socket)) continue;
+            if (socket.direction() != PortDirection.OUTPUT || socket.width() != DisplayBlockEntity.DISPLAY_BUS_WIDTH) continue;
+
+            for (Direction direction : Direction.values()) {
+                BlockPos cablePos = socketPos.relative(direction);
+                BlockState state = currentLevel.getBlockState(cablePos);
+                if (!(state.getBlock() instanceof CableBlock cable)) continue;
+                if (cable.cableKind() != CableKind.BUS || cable.bitWidth() != DisplayBlockEntity.DISPLAY_BUS_WIDTH) continue;
+                if (!socket.accepts(cable)) continue;
+                if (networkTouchesDisplay(currentLevel, cablePos)) streams.add(socket.portName());
+            }
+        }
+
+        for (Direction direction : Direction.values()) {
+            BlockPos cablePos = worldPosition.relative(direction);
+            BlockState state = currentLevel.getBlockState(cablePos);
+            if (!(state.getBlock() instanceof CableBlock cable)) continue;
+            if (cable.cableKind() != CableKind.BUS || cable.bitWidth() != DisplayBlockEntity.DISPLAY_BUS_WIDTH) continue;
+
+            PortSpec port = DirectPortResolver.unique(this, cable.cableKind(), cable.bitWidth());
+            if (port == null || port.direction() != PortDirection.OUTPUT) continue;
+            if (networkTouchesDisplay(currentLevel, cablePos)) streams.add(port.name());
+        }
+
+        Set<String> immutable = Set.copyOf(streams);
+        displayStreamPorts = immutable;
+        synchronized (runtimeLock) {
+            pendingDisplayCommands.keySet().removeIf(name -> !immutable.contains(name));
+        }
+    }
+
+    private static boolean networkTouchesDisplay(Level level, BlockPos cablePos) {
+        CableNetworkCache.Network network = CableNetworkCache.network(level, cablePos);
+        if (network == null) return false;
+        for (CableNetworkCache.Endpoint endpoint : network.endpoints()) {
+            if (endpoint.kind() == CableNetworkCache.EndpointKind.DISPLAY) return true;
+        }
+        return false;
     }
 
     /**
-     * Safe bridge from the high-rate simulation worker to Minecraft's world thread.
-     * One queued server task drains thousands of output transitions at once.
+     * Minecraft world I/O is sampled from the independent simulation once per normal server tick.
+     * During /tick freeze this method stops, while the worker continues and coalesces final display state safely.
      */
-    private void requestWorldFlush() {
-        MinecraftServer server = asyncServer;
-        if (server == null || pendingOutputEvents.isEmpty()) return;
-        if (!worldFlushScheduled.compareAndSet(false, true)) return;
-        server.execute(this::flushQueuedOutputsOnServerThread);
-    }
-
-    private void flushQueuedOutputsOnServerThread() {
-        worldFlushScheduled.set(false);
+    private void flushPendingOutputsOnServerThread() {
         Level currentLevel = level;
         if (currentLevel == null || currentLevel.isClientSide() || isRemoved()) return;
 
@@ -417,17 +478,30 @@ public final class CircuitBlockEntity extends BlockEntity {
         while (processed < WORLD_FLUSH_BATCH_EVENTS) {
             OutputEvent event;
             synchronized (runtimeLock) {
-                event = pendingOutputEvents.pollFirst();
+                event = pollPendingWorldOutputLocked();
             }
             if (event == null) break;
+
             publishOutputValue(event);
             processed++;
             if (System.nanoTime() - started >= WORLD_FLUSH_WALL_BUDGET_NANOS) break;
         }
+    }
 
-        synchronized (runtimeLock) {
-            if (!pendingOutputEvents.isEmpty()) requestWorldFlush();
+    private OutputEvent pollPendingWorldOutputLocked() {
+        Iterator<Map.Entry<String, DisplayCommandBuffer>> streamIterator = pendingDisplayCommands.entrySet().iterator();
+        while (streamIterator.hasNext()) {
+            Map.Entry<String, DisplayCommandBuffer> entry = streamIterator.next();
+            OutputEvent event = entry.getValue().poll(entry.getKey());
+            if (entry.getValue().isEmpty()) streamIterator.remove();
+            if (event != null) return event;
         }
+
+        Iterator<Map.Entry<String, OutputEvent>> latestIterator = pendingLatestOutputs.entrySet().iterator();
+        if (!latestIterator.hasNext()) return null;
+        OutputEvent event = latestIterator.next().getValue();
+        latestIterator.remove();
+        return event;
     }
 
     @Override
@@ -438,9 +512,8 @@ public final class CircuitBlockEntity extends BlockEntity {
 
     @Override
     public void clearRemoved() {
+        // Do not register the clock worker here. clearRemoved() is called while chunks/spawn are still loading.
         super.clearRemoved();
-        bindServer(level);
-        if (level != null && !level.isClientSide() && runtime != null) CircuitSimulationWorker.register(this);
     }
 
     @Override
@@ -458,8 +531,10 @@ public final class CircuitBlockEntity extends BlockEntity {
         synchronized (runtimeLock) {
             runtime = null;
             runtimeError = "";
-            pendingOutputEvents.clear();
+            pendingLatestOutputs.clear();
+            pendingDisplayCommands.clear();
             lastCapturedOutputs.clear();
+            displayStreamPorts = Set.of();
             resetClockStateLocked(0L);
             if (programJson.isBlank()) return;
             try {
@@ -472,4 +547,55 @@ public final class CircuitBlockEntity extends BlockEntity {
     }
 
     private record OutputEvent(String portName, long value) {}
+
+    /**
+     * Bounded display-frame intent buffer. Pixel writes are coalesced by coordinate, so a MHz circuit cannot
+     * create an unbounded Java object queue. CLEAR discards older pending pixels because only the final framebuffer
+     * after that clear matters to the physical display.
+     */
+    private static final class DisplayCommandBuffer {
+        private final LinkedHashMap<Long, Long> pixels = new LinkedHashMap<>();
+        private boolean clearPending;
+        private long clearRaw;
+
+        private void record(DisplayCommandCodec.Command command) {
+            if (command.isClear()) {
+                clearPending = true;
+                clearRaw = command.raw();
+                pixels.clear();
+                return;
+            }
+            if (!command.isPixel()) return;
+
+            long key = ((long) command.x() << 32) | (command.y() & 0xFFFFFFFFL);
+            if (!pixels.containsKey(key) && pixels.size() >= MAX_COALESCED_DISPLAY_PIXELS) {
+                Iterator<Long> oldest = pixels.keySet().iterator();
+                if (oldest.hasNext()) {
+                    oldest.next();
+                    oldest.remove();
+                }
+            }
+            pixels.put(key, command.raw());
+        }
+
+        private OutputEvent poll(String portName) {
+            if (clearPending) {
+                clearPending = false;
+                return new OutputEvent(portName, clearRaw);
+            }
+            Iterator<Map.Entry<Long, Long>> iterator = pixels.entrySet().iterator();
+            if (!iterator.hasNext()) return null;
+            long raw = iterator.next().getValue();
+            iterator.remove();
+            return new OutputEvent(portName, raw);
+        }
+
+        private int size() {
+            return pixels.size() + (clearPending ? 1 : 0);
+        }
+
+        private boolean isEmpty() {
+            return !clearPending && pixels.isEmpty();
+        }
+    }
 }
