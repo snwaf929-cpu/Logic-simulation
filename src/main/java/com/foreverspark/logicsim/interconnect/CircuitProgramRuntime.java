@@ -121,6 +121,29 @@ public final class CircuitProgramRuntime {
         );
     }
 
+    /**
+     * Realtime DATA64 specialization. RANDOM still advances for every rising edge, while provably irrelevant display
+     * commands are rejected before boundary scatter/scratch/framebuffer work.
+     */
+    public long advanceDirectRandomDisplayBoundaryNanos(
+            long elapsedNanos,
+            long edgeBudget,
+            int outputIndex,
+            int displayWidth,
+            int displayHeight,
+            CircuitTimingController.LongBatchConsumer sink
+    ) {
+        if (!directRandomBoundaryBatchEligible(outputIndex)) return -1L;
+        return timing.advanceDirectRandomDisplayBoundaryNanos(
+                directRandomBoundaryPlans[outputIndex],
+                elapsedNanos,
+                edgeBudget,
+                displayWidth,
+                displayHeight,
+                sink
+        );
+    }
+
     public void setClocksRunning(boolean running) {
         for (CircuitTimingController.ClockAddress address : timing.clocks()) timing.setRunning(address.scopePath(), address.nodeId(), running);
     }
