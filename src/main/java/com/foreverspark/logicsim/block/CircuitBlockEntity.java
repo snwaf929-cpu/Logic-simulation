@@ -24,13 +24,11 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public final class CircuitBlockEntity extends BlockEntity {
     public static final int MAX_BOARD_JSON = 2_000_000;
@@ -38,12 +36,11 @@ public final class CircuitBlockEntity extends BlockEntity {
     private static final Gson BOARD_GSON = new GsonBuilder().disableHtmlEscaping().create();
 
     /** Worker budgets are wall-clock fairness limits, NOT Minecraft-tick limits. */
-    private static final long WORKER_SLICE_WALL_BUDGET_NANOS = 1_500_000L;
-    private static final long WORKER_HARD_EDGE_LIMIT_PER_SLICE = 500_000L;
-    private static final long WORKER_CHUNK_EDGES_PER_CLOCK = 1_024L;
-    private static final int MAX_COALESCED_DISPLAY_PIXELS = 262_144;
-    private static final int WORLD_FLUSH_BATCH_EVENTS = 16_384;
-    private static final long WORLD_FLUSH_WALL_BUDGET_NANOS = 4_000_000L;
+    private static final long WORKER_SLICE_WALL_BUDGET_NANOS = 2_500_000L;
+    private static final long WORKER_HARD_EDGE_LIMIT_PER_SLICE = 1_000_000L;
+    private static final long WORKER_CHUNK_EDGES_PER_CLOCK = 4_096L;
+    /** Dense framebuffer intent comfortably covers 1080p/1440p without HashMap allocation on every simulated edge. */
+    private static final int MAX_DENSE_DISPLAY_PIXELS = 4_194_304;
     private static final long BENCHMARK_WINDOW_NANOS = 1_000_000_000L;
 
     /** Editable CAD board stored independently from the compiled/running program. */
@@ -64,19 +61,20 @@ public final class CircuitBlockEntity extends BlockEntity {
     private volatile long lastClockActualHz;
 
     /**
-     * Minecraft-facing outputs are intentionally bounded/coalesced. Ordinary ports keep only the newest value.
-     * Display DATA64 ports keep final framebuffer intent: CLEAR plus the newest write for each pixel coordinate.
-     * This lets MHz simulation continue during /tick freeze without allocating millions of world events.
+     * Minecraft-facing outputs are sampled, not replayed edge-by-edge. Ordinary electrical outputs keep only the
+     * latest value. Display DATA64 streams keep final framebuffer intent in a dense primitive buffer and are applied
+     * to the physical display as one server-tick batch.
      */
-    private final Map<String, OutputEvent> pendingLatestOutputs = new LinkedHashMap<>();
+    private final Map<String, MutableOutput> pendingLatestOutputs = new LinkedHashMap<>();
     private final Map<String, DisplayCommandBuffer> pendingDisplayCommands = new HashMap<>();
-    private final Map<String, Long> lastCapturedOutputs = new HashMap<>();
-    private volatile Set<String> displayStreamPorts = Set.of();
+    private final Map<String, MutableOutput> lastCapturedOutputs = new HashMap<>();
+    private volatile Map<String, DisplayStreamTarget> displayStreamTargets = Map.of();
 
     /** Independent-worker throughput accounting. */
     private long benchmarkStartNanos;
     private long benchmarkEdges;
     private long benchmarkCpuNanos;
+    private long benchmarkFilteredDisplayCommands;
 
     public CircuitBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.CIRCUIT, pos, state);
@@ -91,8 +89,8 @@ public final class CircuitBlockEntity extends BlockEntity {
         if (!circuit.isProgrammed()) return;
 
         // Register only from a real server tick. Do not start MHz simulation from chunk restore/clearRemoved().
-        CircuitSimulationWorker.register(circuit);
         circuit.refreshDisplayStreamPorts();
+        CircuitSimulationWorker.register(circuit);
         circuit.flushPendingOutputsOnServerThread();
     }
 
@@ -160,8 +158,11 @@ public final class CircuitBlockEntity extends BlockEntity {
             lastCapturedOutputs.clear();
             captureOutputChangesLocked();
         }
-        // A freshly programmed live block may start immediately. Restored blocks wait for their first real tick.
-        if (level != null && !level.isClientSide()) CircuitSimulationWorker.register(this);
+        // Discover the physical display before starting a freshly programmed high-rate stream.
+        if (level != null && !level.isClientSide()) {
+            refreshDisplayStreamPorts();
+            CircuitSimulationWorker.register(this);
+        }
         setChanged();
     }
 
@@ -237,19 +238,21 @@ public final class CircuitBlockEntity extends BlockEntity {
         double workerCpuMs = benchmarkCpuNanos / 1_000_000.0;
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK BENCH/world] pos={} targetHz={} actualHz={} edgesPerSec={} pendingEdges={} outputQueue={} workerCpuMs={} minecraftTickIndependent=true",
+                "[CLOCK BENCH/world] pos={} targetHz={} actualHz={} edgesPerSec={} pendingEdges={} outputQueue={} filteredDisplay={} workerCpuMs={} minecraftTickIndependent=true",
                 worldPosition,
                 targetHz,
                 actualCyclesPerSecond,
                 actualEdgesPerSecond,
                 pending,
                 pendingWorldOutputsLocked(),
+                benchmarkFilteredDisplayCommands,
                 String.format(java.util.Locale.ROOT, "%.3f", workerCpuMs)
         );
 
         benchmarkStartNanos = now;
         benchmarkEdges = 0L;
         benchmarkCpuNanos = 0L;
+        benchmarkFilteredDisplayCommands = 0L;
     }
 
     private long targetClockHzLocked() {
@@ -292,13 +295,14 @@ public final class CircuitBlockEntity extends BlockEntity {
         benchmarkStartNanos = now;
         benchmarkEdges = 0L;
         benchmarkCpuNanos = 0L;
+        benchmarkFilteredDisplayCommands = 0L;
     }
 
-    /** Capture changed external outputs without creating one Minecraft event per simulated edge. */
+    /** Capture changed external outputs without creating one Java/Minecraft event per simulated edge. */
     private void captureOutputChangesLocked() {
         CircuitProgramRuntime current = runtime;
         if (current == null) return;
-        Set<String> streamPorts = displayStreamPorts;
+        Map<String, DisplayStreamTarget> streamTargets = displayStreamTargets;
 
         for (PortSpec port : current.outputPorts()) {
             long value;
@@ -308,21 +312,35 @@ public final class CircuitBlockEntity extends BlockEntity {
                 continue;
             }
 
-            Long previous = lastCapturedOutputs.put(port.name(), value);
-            if (previous != null && previous.longValue() == value) continue;
+            MutableOutput captured = lastCapturedOutputs.computeIfAbsent(port.name(), ignored -> new MutableOutput());
+            if (captured.initialized && captured.value == value) continue;
+            captured.initialized = true;
+            captured.value = value;
 
-            // Ordinary world-facing electrical state is level-triggered: newest value wins.
-            pendingLatestOutputs.put(port.name(), new OutputEvent(port.name(), value));
-
-            // A physical display is a framebuffer, not a million-entry Minecraft event queue.
-            if (port.width() == DisplayBlockEntity.DISPLAY_BUS_WIDTH && streamPorts.contains(port.name())) {
+            DisplayStreamTarget target = port.width() == DisplayBlockEntity.DISPLAY_BUS_WIDTH
+                    ? streamTargets.get(port.name())
+                    : null;
+            if (target != null) {
                 DisplayCommandCodec.Command command = DisplayCommandCodec.decode(value);
-                if (command.isPixel() || command.isClear()) {
+                if (command.isClear()) {
                     pendingDisplayCommands
                             .computeIfAbsent(port.name(), ignored -> new DisplayCommandBuffer())
-                            .record(command);
+                            .record(command, target);
+                } else if (command.isPixel()) {
+                    if (target.contains(command.x(), command.y())) {
+                        pendingDisplayCommands
+                                .computeIfAbsent(port.name(), ignored -> new DisplayCommandBuffer())
+                                .record(command, target);
+                    } else {
+                        benchmarkFilteredDisplayCommands = saturatingAdd(benchmarkFilteredDisplayCommands, 1L);
+                    }
                 }
+                // The display stream's cable level is sampled once per server tick below; do not allocate an
+                // ordinary world-output event for every DATA64 transition.
+                continue;
             }
+
+            pendingLatestOutputs.computeIfAbsent(port.name(), ignored -> new MutableOutput()).set(value);
         }
     }
 
@@ -378,7 +396,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         }
     }
 
-    /** Publishes the current snapshot. The high-rate display history is separately framebuffer-coalesced. */
+    /** Publishes the current snapshot. High-rate display history is separately framebuffer-coalesced. */
     public void publishOutputs() {
         List<OutputEvent> snapshot = new ArrayList<>();
         synchronized (runtimeLock) {
@@ -417,12 +435,12 @@ public final class CircuitBlockEntity extends BlockEntity {
         }
     }
 
-    /** Determine which 64-bit output ports currently feed a physical Pixel Display network. Server thread only. */
+    /** Determine the physical Pixel Display target and bounds for each connected 64-bit output. Server thread only. */
     private void refreshDisplayStreamPorts() {
         Level currentLevel = level;
         if (currentLevel == null || currentLevel.isClientSide()) return;
 
-        Set<String> streams = new HashSet<>();
+        Map<String, DisplayStreamTarget> targets = new HashMap<>();
 
         for (BlockPos socketPos : CircuitPortLinks.sockets(currentLevel, worldPosition)) {
             if (!(currentLevel.getBlockEntity(socketPos) instanceof CircuitPortBlockEntity socket)) continue;
@@ -434,7 +452,8 @@ public final class CircuitBlockEntity extends BlockEntity {
                 if (!(state.getBlock() instanceof CableBlock cable)) continue;
                 if (cable.cableKind() != CableKind.BUS || cable.bitWidth() != DisplayBlockEntity.DISPLAY_BUS_WIDTH) continue;
                 if (!socket.accepts(cable)) continue;
-                if (networkTouchesDisplay(currentLevel, cablePos)) streams.add(socket.portName());
+                DisplayStreamTarget target = displayTarget(currentLevel, cablePos);
+                if (target != null) targets.putIfAbsent(socket.portName(), target);
             }
         }
 
@@ -446,62 +465,75 @@ public final class CircuitBlockEntity extends BlockEntity {
 
             PortSpec port = DirectPortResolver.unique(this, cable.cableKind(), cable.bitWidth());
             if (port == null || port.direction() != PortDirection.OUTPUT) continue;
-            if (networkTouchesDisplay(currentLevel, cablePos)) streams.add(port.name());
+            DisplayStreamTarget target = displayTarget(currentLevel, cablePos);
+            if (target != null) targets.putIfAbsent(port.name(), target);
         }
 
-        Set<String> immutable = Set.copyOf(streams);
-        displayStreamPorts = immutable;
+        Map<String, DisplayStreamTarget> immutable = Map.copyOf(targets);
+        displayStreamTargets = immutable;
         synchronized (runtimeLock) {
-            pendingDisplayCommands.keySet().removeIf(name -> !immutable.contains(name));
+            pendingDisplayCommands.keySet().removeIf(name -> !immutable.containsKey(name));
         }
     }
 
-    private static boolean networkTouchesDisplay(Level level, BlockPos cablePos) {
+    private static DisplayStreamTarget displayTarget(Level level, BlockPos cablePos) {
         CableNetworkCache.Network network = CableNetworkCache.network(level, cablePos);
-        if (network == null) return false;
+        if (network == null) return null;
         for (CableNetworkCache.Endpoint endpoint : network.endpoints()) {
-            if (endpoint.kind() == CableNetworkCache.EndpointKind.DISPLAY) return true;
+            if (endpoint.kind() != CableNetworkCache.EndpointKind.DISPLAY) continue;
+            BlockState displayState = level.getBlockState(endpoint.devicePos());
+            if (!(displayState.getBlock() instanceof DisplayBlock)) continue;
+            DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(level, endpoint.devicePos(), displayState);
+            if (info == null || info.pixelWidth() <= 0 || info.pixelHeight() <= 0) continue;
+            return new DisplayStreamTarget(endpoint.devicePos().immutable(), info.pixelWidth(), info.pixelHeight());
         }
-        return false;
+        return null;
     }
 
     /**
-     * Minecraft world I/O is sampled from the independent simulation once per normal server tick.
-     * During /tick freeze this method stops, while the worker continues and coalesces final display state safely.
+     * Minecraft world I/O is sampled once per normal server tick. Valid display commands are applied as a single
+     * framebuffer batch, so thousands of simulated pixel writes can become visible together on the next client
+     * display sync instead of leaking out one cable event at a time.
      */
     private void flushPendingOutputsOnServerThread() {
         Level currentLevel = level;
         if (currentLevel == null || currentLevel.isClientSide() || isRemoved()) return;
 
-        long started = System.nanoTime();
-        int processed = 0;
-        while (processed < WORLD_FLUSH_BATCH_EVENTS) {
-            OutputEvent event;
-            synchronized (runtimeLock) {
-                event = pollPendingWorldOutputLocked();
+        List<DisplayBatch> displayBatches = new ArrayList<>();
+        List<OutputEvent> latestOutputs = new ArrayList<>();
+
+        synchronized (runtimeLock) {
+            Map<String, DisplayStreamTarget> targets = displayStreamTargets;
+            for (Map.Entry<String, DisplayCommandBuffer> entry : pendingDisplayCommands.entrySet()) {
+                DisplayStreamTarget target = targets.get(entry.getKey());
+                if (target == null) continue;
+                long[] commands = entry.getValue().drain();
+                if (commands.length > 0) displayBatches.add(new DisplayBatch(target, commands));
             }
-            if (event == null) break;
+            pendingDisplayCommands.clear();
 
-            publishOutputValue(event);
-            processed++;
-            if (System.nanoTime() - started >= WORLD_FLUSH_WALL_BUDGET_NANOS) break;
+            for (Map.Entry<String, MutableOutput> entry : pendingLatestOutputs.entrySet()) {
+                latestOutputs.add(new OutputEvent(entry.getKey(), entry.getValue().value));
+            }
+            pendingLatestOutputs.clear();
+
+            // Display cables are level-triggered in the Minecraft world. Publish only the newest bus value once
+            // per server tick; the complete pixel history has already been consumed by DisplayBatchRuntime.
+            CircuitProgramRuntime current = runtime;
+            if (current != null) {
+                for (String portName : targets.keySet()) {
+                    try {
+                        latestOutputs.add(new OutputEvent(portName, current.outputValue(portName)));
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
         }
-    }
 
-    private OutputEvent pollPendingWorldOutputLocked() {
-        Iterator<Map.Entry<String, DisplayCommandBuffer>> streamIterator = pendingDisplayCommands.entrySet().iterator();
-        while (streamIterator.hasNext()) {
-            Map.Entry<String, DisplayCommandBuffer> entry = streamIterator.next();
-            OutputEvent event = entry.getValue().poll(entry.getKey());
-            if (entry.getValue().isEmpty()) streamIterator.remove();
-            if (event != null) return event;
+        for (DisplayBatch batch : displayBatches) {
+            DisplayBatchRuntime.apply(currentLevel, batch.target().displayPos(), batch.commands());
         }
-
-        Iterator<Map.Entry<String, OutputEvent>> latestIterator = pendingLatestOutputs.entrySet().iterator();
-        if (!latestIterator.hasNext()) return null;
-        OutputEvent event = latestIterator.next().getValue();
-        latestIterator.remove();
-        return event;
+        for (OutputEvent event : latestOutputs) publishOutputValue(event);
     }
 
     @Override
@@ -534,7 +566,7 @@ public final class CircuitBlockEntity extends BlockEntity {
             pendingLatestOutputs.clear();
             pendingDisplayCommands.clear();
             lastCapturedOutputs.clear();
-            displayStreamPorts = Set.of();
+            displayStreamTargets = Map.of();
             resetClockStateLocked(0L);
             if (programJson.isBlank()) return;
             try {
@@ -547,55 +579,131 @@ public final class CircuitBlockEntity extends BlockEntity {
     }
 
     private record OutputEvent(String portName, long value) {}
+    private record DisplayBatch(DisplayStreamTarget target, long[] commands) {}
+
+    private record DisplayStreamTarget(BlockPos displayPos, int width, int height) {
+        private boolean contains(int x, int y) {
+            return x >= 0 && y >= 0 && x < width && y < height;
+        }
+    }
+
+    /** Mutable holder avoids allocating a new OutputEvent/Long object on every high-rate output transition. */
+    private static final class MutableOutput {
+        private boolean initialized;
+        private long value;
+
+        private void set(long value) {
+            this.initialized = true;
+            this.value = value;
+        }
+    }
 
     /**
-     * Bounded display-frame intent buffer. Pixel writes are coalesced by coordinate, so a MHz circuit cannot
-     * create an unbounded Java object queue. CLEAR discards older pending pixels because only the final framebuffer
-     * after that clear matters to the physical display.
+     * Final-frame display intent. Up to 1440p uses primitive dense arrays: no HashMap key/value allocation for
+     * every simulated pixel command. Larger experimental walls fall back to a sparse map until the future GPU/
+     * texture-backed display path replaces block-entity framebuffer transport entirely.
      */
     private static final class DisplayCommandBuffer {
-        private final LinkedHashMap<Long, Long> pixels = new LinkedHashMap<>();
+        private int width;
+        private int height;
+        private boolean dense;
+        private long[] denseRaw = new long[0];
+        private int[] denseMarks = new int[0];
+        private int[] dirtyIndices = new int[0];
+        private int generation = 1;
+        private int dirtyCount;
+        private final LinkedHashMap<Long, Long> sparsePixels = new LinkedHashMap<>();
         private boolean clearPending;
         private long clearRaw;
 
-        private void record(DisplayCommandCodec.Command command) {
+        private void record(DisplayCommandCodec.Command command, DisplayStreamTarget target) {
+            ensureGeometry(target.width(), target.height());
             if (command.isClear()) {
                 clearPending = true;
                 clearRaw = command.raw();
-                pixels.clear();
+                resetPixels();
                 return;
             }
-            if (!command.isPixel()) return;
+            if (!command.isPixel() || !target.contains(command.x(), command.y())) return;
+
+            if (dense) {
+                int index = command.y() * width + command.x();
+                denseRaw[index] = command.raw();
+                if (denseMarks[index] != generation) {
+                    denseMarks[index] = generation;
+                    dirtyIndices[dirtyCount++] = index;
+                }
+                return;
+            }
 
             long key = ((long) command.x() << 32) | (command.y() & 0xFFFFFFFFL);
-            if (!pixels.containsKey(key) && pixels.size() >= MAX_COALESCED_DISPLAY_PIXELS) {
-                Iterator<Long> oldest = pixels.keySet().iterator();
-                if (oldest.hasNext()) {
-                    oldest.next();
-                    oldest.remove();
-                }
-            }
-            pixels.put(key, command.raw());
+            sparsePixels.put(key, command.raw());
         }
 
-        private OutputEvent poll(String portName) {
-            if (clearPending) {
-                clearPending = false;
-                return new OutputEvent(portName, clearRaw);
+        private void ensureGeometry(int newWidth, int newHeight) {
+            if (newWidth == width && newHeight == height) return;
+            width = Math.max(1, newWidth);
+            height = Math.max(1, newHeight);
+            long area = (long) width * (long) height;
+            dense = area <= MAX_DENSE_DISPLAY_PIXELS;
+            if (dense) {
+                int size = (int) area;
+                denseRaw = new long[size];
+                denseMarks = new int[size];
+                dirtyIndices = new int[size];
+                generation = 1;
+            } else {
+                denseRaw = new long[0];
+                denseMarks = new int[0];
+                dirtyIndices = new int[0];
             }
-            Iterator<Map.Entry<Long, Long>> iterator = pixels.entrySet().iterator();
-            if (!iterator.hasNext()) return null;
-            long raw = iterator.next().getValue();
-            iterator.remove();
-            return new OutputEvent(portName, raw);
+            dirtyCount = 0;
+            sparsePixels.clear();
+            clearPending = false;
+        }
+
+        private void resetPixels() {
+            if (dense) {
+                dirtyCount = 0;
+                nextGeneration();
+            } else {
+                sparsePixels.clear();
+            }
+        }
+
+        private void nextGeneration() {
+            generation++;
+            if (generation == 0) {
+                Arrays.fill(denseMarks, 0);
+                generation = 1;
+            }
+        }
+
+        private long[] drain() {
+            int pixelCount = dense ? dirtyCount : sparsePixels.size();
+            int count = pixelCount + (clearPending ? 1 : 0);
+            if (count == 0) return new long[0];
+
+            long[] commands = new long[count];
+            int out = 0;
+            if (clearPending) {
+                commands[out++] = clearRaw;
+                clearPending = false;
+            }
+
+            if (dense) {
+                for (int i = 0; i < dirtyCount; i++) commands[out++] = denseRaw[dirtyIndices[i]];
+                dirtyCount = 0;
+                nextGeneration();
+            } else {
+                for (long raw : sparsePixels.values()) commands[out++] = raw;
+                sparsePixels.clear();
+            }
+            return commands;
         }
 
         private int size() {
-            return pixels.size() + (clearPending ? 1 : 0);
-        }
-
-        private boolean isEmpty() {
-            return !clearPending && pixels.isEmpty();
+            return (dense ? dirtyCount : sparsePixels.size()) + (clearPending ? 1 : 0);
         }
     }
 }
