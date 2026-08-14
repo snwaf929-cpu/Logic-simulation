@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.ClockPlacementState;
 import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
 import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
+import com.foreverspark.logicsim.client.screen.EditorScreenContext;
 import com.foreverspark.logicsim.client.screen.RandomPlacementState;
 import com.foreverspark.logicsim.client.screen.SourceConfigScreen;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -103,7 +104,7 @@ public abstract class ComponentLibraryClockMixin {
                 status.accept("Place CLOCK at " + EditorNode.formatFrequency(ClockPlacementState.frequencyHz())
                         + " — right-click CLOCK in the library to enter an exact Hz / kHz / MHz value.");
             } else if (event.button() == 1) {
-                var parent = Minecraft.getInstance().gui.getScreen();
+                var parent = EditorScreenContext.current();
                 Minecraft.getInstance().gui.setScreen(SourceConfigScreen.clock(parent, ClockPlacementState.frequencyHz(), hz -> {
                     ClockPlacementState.setFrequencyHz(hz);
                     status.accept("CLOCK placement frequency = " + EditorNode.formatFrequency(hz));
@@ -124,7 +125,7 @@ public abstract class ComponentLibraryClockMixin {
                 status.accept("Place RANDOM — " + RandomPlacementState.chancePercent()
                         + "% chance of HIGH on each TRIGGER 0 -> 1 edge. Right-click RANDOM to set the chance.");
             } else if (event.button() == 1) {
-                var parent = Minecraft.getInstance().gui.getScreen();
+                var parent = EditorScreenContext.current();
                 Minecraft.getInstance().gui.setScreen(SourceConfigScreen.random(parent, RandomPlacementState.chancePercent(), chance -> {
                     RandomPlacementState.setChancePercent(chance);
                     status.accept("RANDOM placement chance = " + chance + "% HIGH per rising edge");
