@@ -39,6 +39,8 @@ public final class DisplayBlockEntity extends BlockEntity {
     private int pixelWidth = DEFAULT_PIXEL_WIDTH;
     private boolean syncPending;
     private long lastWallCommand = Long.MIN_VALUE;
+    /** Last raw DATA64 observed by this physical tile; used to avoid rescanning an unchanged wall every tick. */
+    private long lastCableValue = Long.MIN_VALUE;
     private boolean hasReceivedData;
     private long lastReceivedData;
     private String lastActionStatus = "No DRAW/CLEAR command accepted yet";
@@ -74,6 +76,7 @@ public final class DisplayBlockEntity extends BlockEntity {
         framebuffer.clear(0);
         framebuffer.markAllDirty();
         lastWallCommand = Long.MIN_VALUE;
+        lastCableValue = Long.MIN_VALUE;
         hasReceivedData = false;
         lastReceivedData = 0L;
         lastActionStatus = "Resolution changed; waiting for DATA64";
@@ -147,6 +150,8 @@ public final class DisplayBlockEntity extends BlockEntity {
     public void acceptCableValue(Direction face, long value) {
         if (level == null || level.isClientSide()) return;
         if (!DisplayPorts.accepts(getBlockState(), face, CableKind.BUS, DISPLAY_BUS_WIDTH)) return;
+        if (lastCableValue == value) return;
+        lastCableValue = value;
         routeWallCommand(level, worldPosition, value);
     }
 
@@ -302,6 +307,7 @@ public final class DisplayBlockEntity extends BlockEntity {
         }
         framebuffer.markAllDirty();
         lastWallCommand = Long.MIN_VALUE;
+        lastCableValue = Long.MIN_VALUE;
         hasReceivedData = false;
         lastReceivedData = 0L;
         lastActionStatus = "Loaded screen; waiting for DATA64";
