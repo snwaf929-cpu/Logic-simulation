@@ -29,7 +29,8 @@ public final class TimingSignalDriver {
 
     /**
      * Compiled clock hot path. TimingDomain only calculates/counts due edges; the driver executes them directly.
-     * This removes EdgeSink + nested lambda dispatch from every MHz edge while preserving one settle/callback per edge.
+     * In physical turbo mode the clock signal id was already validated at compile time, so every edge also skips
+     * explicit id validation and detailed Signal-object dispatch.
      */
     public long advanceNanos(long elapsedNanos, long edgeBudget, Runnable afterSettledEdge) {
         timing.queueElapsedNanos(elapsedNanos);
@@ -37,17 +38,18 @@ public final class TimingSignalDriver {
         if (executable <= 0L) return 0L;
 
         boolean level = timing.high();
+        boolean turbo = simulator.turboMode();
         long completed = 0L;
         try {
             while (completed < executable) {
                 level = !level;
-                simulator.driveLevel(signalId, level);
+                if (turbo) simulator.driveLevelFast(signalId, level);
+                else simulator.driveLevel(signalId, level);
                 simulator.runUntilStable(settleBudget);
                 completed++;
                 if (afterSettledEdge != null) afterSettledEdge.run();
             }
         } finally {
-            // If a user callback throws, account the edge whose circuit already settled before that callback.
             timing.commitExecutedEdges(completed);
         }
         return completed;
@@ -62,11 +64,13 @@ public final class TimingSignalDriver {
         if (edges == 0L) return 0L;
 
         boolean level = timing.high();
+        boolean turbo = simulator.turboMode();
         long completed = 0L;
         try {
             while (completed < edges) {
                 level = !level;
-                simulator.driveLevel(signalId, level);
+                if (turbo) simulator.driveLevelFast(signalId, level);
+                else simulator.driveLevel(signalId, level);
                 simulator.runUntilStable(settleBudget);
                 completed++;
                 if (afterSettledEdge != null) afterSettledEdge.run();
