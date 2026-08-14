@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.mixin.client;
 
+import com.foreverspark.logicsim.client.screen.CanvasConfigAccess;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
 import com.foreverspark.logicsim.client.screen.EditorScreenContext;
