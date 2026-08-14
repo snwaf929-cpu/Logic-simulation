@@ -29,12 +29,16 @@ public final class CircuitSimulator {
     private final boolean[] queued;
     private final int[] queue;
     private final Map<String, Signal> signalsByPath;
+    /** Optional 64-bit dirty-watch fanout for compiled boundary ports. */
+    private final long[] dirtyWatchBitsBySignal;
 
     private int queueHead;
     private int queueTail;
     private int queueSize;
     private long transitionSequence;
     private long totalGateEvaluations;
+    private long dirtyWatchBits;
+    private boolean dirtyWatchEnabled;
     private boolean mirrorSignalObjects = true;
 
     public CircuitSimulator(LogicCircuit circuit, TraceRecorder traceRecorder) {
@@ -45,6 +49,7 @@ public final class CircuitSimulator {
         this.signals = circuit.signals().toArray(Signal[]::new);
         NandGate[] gates = circuit.gates().toArray(NandGate[]::new);
         this.values = new byte[signals.length];
+        this.dirtyWatchBitsBySignal = new long[signals.length];
         this.signalsByPath = new HashMap<>(Math.max(16, signals.length * 2));
 
         this.consumerOffsets = new int[signals.length + 1];
@@ -150,6 +155,28 @@ public final class CircuitSimulator {
     }
 
     /**
+     * Marks a compiled bus as one dirty-watch bit. Up to 64 physical output ports can therefore be tracked with one
+     * machine word and consumed after each settled edge without re-reading untouched buses.
+     */
+    public void watchDirtyBit(int bitIndex, int[] signalIds) {
+        if (bitIndex < 0 || bitIndex >= 64) throw new IllegalArgumentException("dirty bit must be 0..63");
+        if (signalIds == null) throw new IllegalArgumentException("signal ids are required");
+        long bit = 1L << bitIndex;
+        for (int signalId : signalIds) {
+            requireSignalId(signalId);
+            dirtyWatchBitsBySignal[signalId] |= bit;
+        }
+        dirtyWatchEnabled = true;
+    }
+
+    /** Returns and clears output dirtiness accumulated during the previous propagation. */
+    public long consumeDirtyWatchBits() {
+        long result = dirtyWatchBits;
+        dirtyWatchBits = 0L;
+        return result;
+    }
+
+    /**
      * Packs an already-compiled bus directly from the simulator's primitive value array.
      * Signal membership checks are appropriate for editor/debug callers that have not cached primitive ids.
      */
@@ -220,6 +247,7 @@ public final class CircuitSimulator {
 
         values[signalId] = next;
         transitionSequence++;
+        if (dirtyWatchEnabled) dirtyWatchBits |= dirtyWatchBitsBySignal[signalId];
 
         if (mirrorSignalObjects) signals[signalId].setValue(decode(next));
 
