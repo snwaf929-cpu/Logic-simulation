@@ -34,30 +34,17 @@ public final class CompiledCircuit {
 
     public void driveInputUnsigned(int nodeId, long value) {
         Signal[] signals = rootInputs.get(nodeId);
-        if (signals == null) {
-            throw new IllegalArgumentException("Node " + nodeId + " is not a root input");
-        }
+        if (signals == null) throw new IllegalArgumentException("Node " + nodeId + " is not a root input");
         for (int bit = 0; bit < signals.length; bit++) {
             simulator.drive(signals[bit], LogicValue.fromBoolean(((value >>> bit) & 1L) != 0));
         }
         simulator.runUntilStable(settleBudget);
     }
 
-    public LogicValue[] inputValues(int nodeId, int port) {
-        return inputValues(ROOT_SCOPE, nodeId, port);
-    }
-
-    public LogicValue[] outputValues(int nodeId, int port) {
-        return outputValues(ROOT_SCOPE, nodeId, port);
-    }
-
-    public long inputUnsigned(int nodeId, int port) {
-        return inputUnsigned(ROOT_SCOPE, nodeId, port);
-    }
-
-    public long outputUnsigned(int nodeId, int port) {
-        return outputUnsigned(ROOT_SCOPE, nodeId, port);
-    }
+    public LogicValue[] inputValues(int nodeId, int port) { return inputValues(ROOT_SCOPE, nodeId, port); }
+    public LogicValue[] outputValues(int nodeId, int port) { return outputValues(ROOT_SCOPE, nodeId, port); }
+    public long inputUnsigned(int nodeId, int port) { return inputUnsigned(ROOT_SCOPE, nodeId, port); }
+    public long outputUnsigned(int nodeId, int port) { return outputUnsigned(ROOT_SCOPE, nodeId, port); }
 
     public LogicValue[] inputValues(String scopePath, int nodeId, int port) {
         return values(signals(scopedInputs, scopePath, nodeId, port));
@@ -75,6 +62,23 @@ public final class CompiledCircuit {
         return unsigned(signals(scopedOutputs, scopePath, nodeId, port));
     }
 
+    /**
+     * Returns one already-compiled input signal directly. Timing sources cache this handle once instead of
+     * allocating LogicValue arrays / NodePortKey lookups on every simulated edge.
+     */
+    public Signal inputSignal(String scopePath, int nodeId, int port, int bit) {
+        Signal[] found = signals(scopedInputs, scopePath, nodeId, port);
+        if (found == null || bit < 0 || bit >= found.length) return null;
+        return found[bit];
+    }
+
+    /** Direct compiled output-signal counterpart used by runtime devices that need a stable handle. */
+    public Signal outputSignal(String scopePath, int nodeId, int port, int bit) {
+        Signal[] found = signals(scopedOutputs, scopePath, nodeId, port);
+        if (found == null || bit < 0 || bit >= found.length) return null;
+        return found[bit];
+    }
+
     public boolean hasScope(String scopePath) {
         return scopedInputs.containsKey(scopePath) || scopedOutputs.containsKey(scopePath);
     }
@@ -85,9 +89,7 @@ public final class CompiledCircuit {
         return Set.copyOf(result);
     }
 
-    public CircuitSimulator simulator() {
-        return simulator;
-    }
+    public CircuitSimulator simulator() { return simulator; }
 
     /**
      * Deterministic scope path used by the compiler and editor inspector.
@@ -107,9 +109,7 @@ public final class CompiledCircuit {
     ) {
         String scope = scopePath == null || scopePath.isBlank() ? ROOT_SCOPE : scopePath;
         Map<NodePortKey, Signal[]> ports = scopes.get(scope);
-        if (ports == null) {
-            return null;
-        }
+        if (ports == null) return null;
         return ports.get(new NodePortKey(nodeId, port));
     }
 
@@ -124,29 +124,19 @@ public final class CompiledCircuit {
     }
 
     private static LogicValue[] values(Signal[] signals) {
-        if (signals == null) {
-            return new LogicValue[0];
-        }
+        if (signals == null) return new LogicValue[0];
         LogicValue[] result = new LogicValue[signals.length];
-        for (int i = 0; i < signals.length; i++) {
-            result[i] = signals[i].value();
-        }
+        for (int i = 0; i < signals.length; i++) result[i] = signals[i].value();
         return result;
     }
 
     private static long unsigned(Signal[] signals) {
-        if (signals == null) {
-            throw new IllegalArgumentException("Port is not available");
-        }
+        if (signals == null) throw new IllegalArgumentException("Port is not available");
         long value = 0L;
         for (int bit = 0; bit < signals.length; bit++) {
             LogicValue logicValue = signals[bit].value();
-            if (logicValue == LogicValue.UNKNOWN) {
-                throw new IllegalStateException("Port contains UNKNOWN at bit " + bit);
-            }
-            if (logicValue == LogicValue.HIGH) {
-                value |= (1L << bit);
-            }
+            if (logicValue == LogicValue.UNKNOWN) throw new IllegalStateException("Port contains UNKNOWN at bit " + bit);
+            if (logicValue == LogicValue.HIGH) value |= (1L << bit);
         }
         return value;
     }
