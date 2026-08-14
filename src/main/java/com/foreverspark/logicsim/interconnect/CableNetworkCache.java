@@ -20,11 +20,13 @@ import java.util.Set;
 import java.util.WeakHashMap;
 
 /**
- * One physical cable run becomes one cached electrical net for the current world tick.
- * Virtual edges reuse that net; world topology is rediscovered on the next tick.
+ * Cached physical cable topology. Networks persist across normal world ticks and are invalidated by topology
+ * changes. A short safety TTL repairs any missed external topology mutation without paying a full cable BFS every
+ * tick. Values remain live inside the cached Network object, so this changes discovery cost rather than logic.
  */
 public final class CableNetworkCache {
     private static final int MAX_SEGMENTS = 8192;
+    private static final long TOPOLOGY_SAFETY_TTL_TICKS = 20L;
     private static final Map<Level, State> STATES = new WeakHashMap<>();
 
     private CableNetworkCache() {}
@@ -170,7 +172,8 @@ public final class CableNetworkCache {
         public void markObserved() { fresh = false; }
 
         private boolean matches(Level level, BlockPos start) {
-            if (builtAtGameTime != level.getGameTime()) return false;
+            long age = level.getGameTime() - builtAtGameTime;
+            if (age < 0L || age >= TOPOLOGY_SAFETY_TTL_TICKS) return false;
             BlockState state = level.getBlockState(start);
             return state.getBlock() instanceof CableBlock cable && cable.cableKind() == kind && cable.bitWidth() == width;
         }

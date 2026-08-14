@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.interconnect.CableRuntime;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
@@ -12,6 +13,7 @@ public final class CableVisualRefresh {
 
     public static void aroundSocket(Level level, BlockPos socketPos, CircuitPortBlockEntity socket) {
         if (level == null || socketPos == null || socket == null) return;
+        CableRuntime.invalidateTopology(level, socketPos);
         for (Direction fromSocket : Direction.values()) {
             BlockPos cablePos = socketPos.relative(fromSocket);
             BlockState state = level.getBlockState(cablePos);
