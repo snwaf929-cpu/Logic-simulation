@@ -93,6 +93,28 @@ public final class CircuitSimulator {
         return path == null ? null : signalsByPath.get(path);
     }
 
+    /**
+     * Packs an already-compiled bus directly from the simulator's primitive value array.
+     * This deliberately bypasses LogicValue[] allocation and generic scope/port lookups; physical MHz output paths
+     * call it millions of times per second.
+     */
+    public long readUnsigned(Signal[] bus) {
+        if (bus == null) throw new IllegalArgumentException("bus is required");
+        long result = 0L;
+        int bits = Math.min(64, bus.length);
+        for (int bit = 0; bit < bits; bit++) {
+            Signal signal = bus[bit];
+            int signalId = signal.id();
+            if (signalId < 0 || signalId >= signals.length || signals[signalId] != signal) {
+                throw new IllegalArgumentException("Signal does not belong to this simulator");
+            }
+            byte value = values[signalId];
+            if (value == UNKNOWN) throw new IllegalStateException("Port contains UNKNOWN at bit " + bit);
+            if (value == HIGH) result |= (1L << bit);
+        }
+        return result;
+    }
+
     public long runUntilStable(long maxGateEvaluations) {
         if (maxGateEvaluations <= 0) {
             throw new IllegalArgumentException("maxGateEvaluations must be > 0");
