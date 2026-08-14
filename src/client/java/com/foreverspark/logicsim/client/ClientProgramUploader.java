@@ -29,8 +29,7 @@ public final class ClientProgramUploader {
 
     /**
      * Install the editable BOARD itself into the physical Circuit Block.
-     * This keeps world execution in sync with what the player sees when reopening that block;
-     * saving a reusable named chip is no longer required just to make the board run.
+     * The world runtime therefore matches the board that is restored when the block is reopened.
      */
     public static void uploadBoard(BlockPos target, CircuitDocument board, ClientChipLibrary library) throws IOException {
         if (target == null || board == null) return;
@@ -42,6 +41,8 @@ public final class ClientProgramUploader {
         LinkedHashMap<String, ChipDefinition> dependencies = new LinkedHashMap<>();
         collect(root, library, dependencies, new HashSet<>());
         CircuitProgram program = new CircuitProgram(root, dependencies);
+        // Compile on the client too so invalid boards fail immediately instead of silently reaching the server.
+        program.compile();
         String json = program.toJson();
         if (json.length() > ProgramCircuitPayload.MAX_JSON_LENGTH) {
             throw new IOException("Program is too large for a Circuit Block");
