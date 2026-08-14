@@ -24,9 +24,19 @@ public final class ModNetworking {
                     || payload.programJson().length() > ProgramCircuitPayload.MAX_JSON_LENGTH) return;
             if (!near(player, payload.pos())) return;
             if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
+            long started = System.nanoTime();
             try {
                 circuit.installProgramJson(payload.programJson());
-                player.sendSystemMessage(Component.literal("Programmed Circuit Block with " + circuit.programName()));
+                double elapsedMs = Math.max(0L, System.nanoTime() - started) / 1_000_000.0;
+                player.sendSystemMessage(Component.literal(
+                        "Programmed Circuit Block with " + circuit.programName()
+                                + " in " + String.format(java.util.Locale.ROOT, "%.2f", elapsedMs) + " ms"
+                ));
+                if (elapsedMs >= 100.0) {
+                    player.sendSystemMessage(Component.literal(
+                            "Circuit performance warning: install/compile took over 100 ms. Shift+Right Click the block for runtime stats."
+                    ));
+                }
             } catch (RuntimeException error) {
                 String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
                 player.sendSystemMessage(Component.literal("Circuit program rejected: " + message));
