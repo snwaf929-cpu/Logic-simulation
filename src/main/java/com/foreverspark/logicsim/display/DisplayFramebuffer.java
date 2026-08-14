@@ -35,6 +35,27 @@ public final class DisplayFramebuffer {
         return true;
     }
 
+    /** Fills an inclusive rectangle and records it as one framebuffer revision. */
+    public boolean fillRect(int minX, int minY, int maxX, int maxY, int rgb565) {
+        if (minX < 0 || minY < 0 || maxX < minX || maxY < minY || maxX >= width || maxY >= height) return false;
+        int normalized = rgb565 & 0xFFFF;
+        boolean changed = false;
+        for (int y = minY; y <= maxY; y++) {
+            int row = y * width;
+            for (int x = minX; x <= maxX; x++) {
+                int index = row + x;
+                if (pixels[index] == normalized) continue;
+                pixels[index] = normalized;
+                changed = true;
+            }
+        }
+        if (changed) {
+            revision++;
+            markDirty(minX, minY, maxX, maxY);
+        }
+        return true;
+    }
+
     public void clear(int rgb565) {
         int normalized = rgb565 & 0xFFFF;
         boolean changed = false;
