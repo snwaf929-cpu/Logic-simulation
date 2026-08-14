@@ -25,7 +25,7 @@ public final class CircuitProgramRuntime {
         this.compiled = program.compile();
         this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
         indexBoundary();
-        initializeBoundaryInputsLow();
+        initializeBoundaryInputDefaults();
     }
 
     public CircuitProgram program() { return program; }
@@ -76,10 +76,13 @@ public final class CircuitProgramRuntime {
         for (int i = 0; i < outputNodes.size(); i++) putUnique(outputs, outputSpecs.get(i), outputNodes.get(i).id);
     }
 
-    /** Physical external inputs start at a deterministic logic LOW until a cable drives them. */
-    private void initializeBoundaryInputsLow() {
-        for (BoundaryPort port : inputs.values()) {
-            compiled.driveInputUnsigned(port.nodeId(), 0L);
+    /**
+     * Root INPUT toggles are saved as the physical block's manual/default state.
+     * A real external cable can still drive the same boundary input afterward.
+     */
+    private void initializeBoundaryInputDefaults() {
+        for (EditorNode node : program.root.circuit.inputNodes()) {
+            compiled.driveInputUnsigned(node.id, mask(node.inputDefaultValue, node.width));
         }
     }
 
