@@ -104,6 +104,17 @@ public final class CircuitDocument {
             if (node.kind == NodeKind.INPUT && node.width < 64) {
                 node.inputDefaultValue &= (1L << node.width) - 1L;
             }
+            if (node.kind == NodeKind.CONSTANT && node.randomSource) {
+                node.clockSource = false;
+                node.width = 1;
+                node.constantValue = 0L;
+                node.randomChancePercent = Math.max(0, Math.min(100, node.randomChancePercent));
+            } else if (node.kind == NodeKind.CONSTANT && node.clockSource) {
+                node.randomSource = false;
+                node.width = 1;
+                node.constantValue = 0L;
+                node.clockFrequencyHz = Math.max(1L, Math.min(50_000_000L, node.clockFrequencyHz));
+            }
         }
     }
 }
