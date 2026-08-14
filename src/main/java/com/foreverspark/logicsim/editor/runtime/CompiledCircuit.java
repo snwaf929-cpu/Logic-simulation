@@ -55,11 +55,20 @@ public final class CompiledCircuit {
     }
 
     public long inputUnsigned(String scopePath, int nodeId, int port) {
-        return unsigned(signals(scopedInputs, scopePath, nodeId, port));
+        return simulator.readUnsigned(requireSignals(scopedInputs, scopePath, nodeId, port));
     }
 
     public long outputUnsigned(String scopePath, int nodeId, int port) {
-        return unsigned(signals(scopedOutputs, scopePath, nodeId, port));
+        return simulator.readUnsigned(requireSignals(scopedOutputs, scopePath, nodeId, port));
+    }
+
+    /** Direct bus handles for high-rate runtime users. These arrays are immutable after compile. */
+    public Signal[] inputSignals(String scopePath, int nodeId, int port) {
+        return signals(scopedInputs, scopePath, nodeId, port);
+    }
+
+    public Signal[] outputSignals(String scopePath, int nodeId, int port) {
+        return signals(scopedOutputs, scopePath, nodeId, port);
     }
 
     /**
@@ -113,6 +122,17 @@ public final class CompiledCircuit {
         return ports.get(new NodePortKey(nodeId, port));
     }
 
+    private static Signal[] requireSignals(
+            Map<String, Map<NodePortKey, Signal[]>> scopes,
+            String scopePath,
+            int nodeId,
+            int port
+    ) {
+        Signal[] found = signals(scopes, scopePath, nodeId, port);
+        if (found == null) throw new IllegalArgumentException("Port is not available");
+        return found;
+    }
+
     private static Map<String, Map<NodePortKey, Signal[]>> immutableNestedMap(
             Map<String, Map<NodePortKey, Signal[]>> source
     ) {
@@ -128,16 +148,5 @@ public final class CompiledCircuit {
         LogicValue[] result = new LogicValue[signals.length];
         for (int i = 0; i < signals.length; i++) result[i] = signals[i].value();
         return result;
-    }
-
-    private static long unsigned(Signal[] signals) {
-        if (signals == null) throw new IllegalArgumentException("Port is not available");
-        long value = 0L;
-        for (int bit = 0; bit < signals.length; bit++) {
-            LogicValue logicValue = signals[bit].value();
-            if (logicValue == LogicValue.UNKNOWN) throw new IllegalStateException("Port contains UNKNOWN at bit " + bit);
-            if (logicValue == LogicValue.HIGH) value |= (1L << bit);
-        }
-        return value;
     }
 }
