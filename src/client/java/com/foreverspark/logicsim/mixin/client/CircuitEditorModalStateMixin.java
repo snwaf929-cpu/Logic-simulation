@@ -22,19 +22,22 @@ public abstract class CircuitEditorModalStateMixin {
     @Unique
     private CanvasConfigAccess.CanvasSessionState logic$pendingCanvasState;
 
+    @Unique
+    private static CanvasConfigAccess logic$access(CircuitCanvasWidget canvas) {
+        // CircuitCanvasSourceConfigMixin adds CanvasConfigAccess at runtime. The (Object) hop is
+        // required because CircuitCanvasWidget is final, so javac otherwise rejects the cast.
+        return (CanvasConfigAccess)(Object)canvas;
+    }
+
     @Inject(method = "init", at = @At("HEAD"))
     private void logic$captureCanvasState(CallbackInfo ci) {
-        if (canvas instanceof CanvasConfigAccess access) {
-            logic$pendingCanvasState = access.logic$captureSessionState();
-        } else {
-            logic$pendingCanvasState = null;
-        }
+        logic$pendingCanvasState = canvas == null ? null : logic$access(canvas).logic$captureSessionState();
     }
 
     @Inject(method = "init", at = @At("TAIL"))
     private void logic$restoreCanvasState(CallbackInfo ci) {
-        if (logic$pendingCanvasState != null && canvas instanceof CanvasConfigAccess access) {
-            access.logic$restoreSessionState(logic$pendingCanvasState);
+        if (logic$pendingCanvasState != null && canvas != null) {
+            logic$access(canvas).logic$restoreSessionState(logic$pendingCanvasState);
         }
         logic$pendingCanvasState = null;
     }
@@ -47,8 +50,7 @@ public abstract class CircuitEditorModalStateMixin {
             )
     )
     private boolean logic$editSelectedSourcesBeforeWireMode(CircuitCanvasWidget target) {
-        if (target instanceof CanvasConfigAccess access
-                && access.logic$editSelectedSources((CircuitEditorScreen)(Object)this)) {
+        if (logic$access(target).logic$editSelectedSources((CircuitEditorScreen)(Object)this)) {
             return true;
         }
         return target.toggleWireEditMode();
