@@ -32,7 +32,7 @@ public abstract class CircuitCanvasCustomChipTextMixin {
     private void logic$dynamicCustomChip(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs,
                                          int x, int y, int w, int h, CallbackInfo ci) {
         if (BuiltinDevices.isDisplay(node.chipName)) {
-            logic$drawDisplayOut(graphics, node, inputs, outputs, x, y, w, h);
+            logic$drawScreenOutput(graphics, node, inputs, outputs, x, y, w, h);
             ci.cancel();
             return;
         }
@@ -57,8 +57,8 @@ public abstract class CircuitCanvasCustomChipTextMixin {
     }
 
     @Unique
-    private void logic$drawDisplayOut(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs,
-                                      int x, int y, int w, int h) {
+    private void logic$drawScreenOutput(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs,
+                                        int x, int y, int w, int h) {
         int border = isNodeSelected(node.id) ? 0xFFFFFFFF : 0xFF4A9CAD;
         graphics.fill(x, y, x + w, y + h, 0xF0121A1E);
         graphics.outline(x, y, w, h, border);
@@ -66,14 +66,14 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(5 * zoom)), BuiltinDevices.DISPLAY_COLOR);
 
         logic$text(graphics, BuiltinDevices.DISPLAY_LABEL, x + w / 2, y + Math.max(4, (int)Math.round(8 * zoom)), Math.max(8, w - 12), 1.0f, 0xFFF0FAFC);
-        logic$text(graphics, "PIXEL CMD -> DATA64", x + w / 2, y + Math.max(15, (int)Math.round(22 * zoom)), Math.max(8, w - 16), 0.82f, 0xFF86C7D3);
+        logic$text(graphics, "PIXEL INPUTS -> BUS[64] -> SCREEN", x + w / 2, y + Math.max(15, (int)Math.round(22 * zoom)), Math.max(8, w - 16), 0.76f, 0xFF86C7D3);
 
         for (int port = 0; port < inputs.size(); port++) {
             PortSpec spec = inputs.get(port);
             double py = centeredPortY(node, port, inputs.size());
             int sy = screenY(py);
             logic$port(graphics, node.x, py, portDisplayColor(node, port, spec, true), validTarget(true));
-            String label = spec.name() + " [" + spec.width() + "]";
+            String label = logic$friendlyInputLabel(spec);
             graphics.text(font(), label, x + Math.max(8, (int)Math.round(9 * zoom)), sy - 4, 0xFFD3E3E7, false);
         }
 
@@ -82,10 +82,23 @@ public abstract class CircuitCanvasCustomChipTextMixin {
             double py = centeredPortY(node, port, outputs.size());
             int sy = screenY(py);
             logic$port(graphics, node.x + nodeWidth(node), py, portDisplayColor(node, port, spec, false), validTarget(false));
-            String label = spec.name() + " [" + spec.width() + "]";
+            String label = "SCREEN DATA [" + spec.width() + "]";
             int labelX = x + w - Math.max(8, (int)Math.round(9 * zoom)) - font().width(label);
             graphics.text(font(), label, labelX, sy - 4, 0xFF9ADDE8, false);
         }
+    }
+
+    @Unique
+    private static String logic$friendlyInputLabel(PortSpec spec) {
+        String name = spec.name() == null ? "" : spec.name().trim().toUpperCase();
+        return switch (name) {
+            case "X" -> "X PIXEL [16]";
+            case "Y" -> "Y PIXEL [16]";
+            case "COLOR" -> "COLOR RGB565 [16]";
+            case "DRAW" -> "DRAW PULSE [1]";
+            case "CLEAR" -> "CLEAR PULSE [1]";
+            default -> name + " [" + spec.width() + "]";
+        };
     }
 
     @Unique

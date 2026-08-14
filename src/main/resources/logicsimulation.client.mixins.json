@@ -11,11 +11,12 @@
     "CircuitCanvasTerminalInteractionMixin",
     "CircuitCanvasTerminalRenderMixin",
     "CircuitCanvasCustomChipTextMixin",
+    "CircuitCanvasDisplayPlacementMixin",
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
     "CircuitEditorProgramMixin",
-    "ComponentLibraryClockMixin",
     "ClientChipLibraryBuiltinMixin",
+    "ComponentLibraryClockMixin",
     "CanvasAccess"
   ],
   "injectors": {"defaultRequire": 1}

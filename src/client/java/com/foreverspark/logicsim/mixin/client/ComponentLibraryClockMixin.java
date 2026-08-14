@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 public abstract class ComponentLibraryClockMixin {
     private static final int EXTRA_ROW_HEIGHT = 18;
     private static final int EXTRA_ROW_STEP = 19;
+    private static final int SECTION_HEIGHT = 14;
     private static final int CONTENT_TOP_OFFSET = 25;
     private static final int CLOCK_OFFSET_IN_CONTENT = 107;
     private static final long[] LOGIC_CLOCK_PRESETS = {
@@ -51,12 +52,21 @@ public abstract class ComponentLibraryClockMixin {
         }
 
         if (kind == NodeKind.PROBE) {
-            int rowY = cir.getReturnValue();
+            int sectionY = cir.getReturnValue() + 3;
+            logic$drawSection(graphics, sectionY, clipTop, clipBottom, "DEVICES");
+            int rowY = sectionY + SECTION_HEIGHT;
             logic$displayRowY = rowY;
             logic$drawRow(graphics, rowY, clipTop, clipBottom, BuiltinDevices.DISPLAY_LABEL,
-                    BuiltinDevices.DISPLAY_COLOR, "DATA64", 0xFF9ADDE8);
+                    BuiltinDevices.DISPLAY_COLOR, "AUTO OUT64", 0xFF9ADDE8);
             cir.setReturnValue(rowY + EXTRA_ROW_STEP);
         }
+    }
+
+    @Unique
+    private void logic$drawSection(GuiGraphicsExtractor graphics, int rowY, int clipTop, int clipBottom, String text) {
+        if (rowY + SECTION_HEIGHT <= clipTop || rowY >= clipBottom) return;
+        ComponentLibraryWidget self = (ComponentLibraryWidget)(Object)this;
+        graphics.text(Minecraft.getInstance().font, text, self.getX() + 7, rowY + 3, 0xFF737E8B, false);
     }
 
     @Unique
@@ -88,7 +98,10 @@ public abstract class ComponentLibraryClockMixin {
                 && event.y() >= logic$displayRowY && event.y() < logic$displayRowY + EXTRA_ROW_HEIGHT) {
             if (event.button() == 0) {
                 canvas.setCustomChipPlacement(BuiltinDevices.DISPLAY);
-                status.accept("Place DISPLAY OUT — X[16], Y[16], COLOR[16], WRITE[1], CLEAR[1] -> DATA[64]. Connect DATA to an OUTPUT[64].");
+                status.accept("Place SCREEN OUTPUT — it automatically adds and wires the required SCREEN_DATA OUTPUT[64].");
+                ci.cancel();
+            } else if (event.button() == 1) {
+                status.accept("SCREEN OUTPUT help: X/Y = pixel position, COLOR = RGB565, DRAW 0->1 draws, CLEAR 0->1 clears. Save chip, then use Bus Cable [64] to the screen.");
                 ci.cancel();
             }
             return;
@@ -101,11 +114,11 @@ public abstract class ComponentLibraryClockMixin {
         if (event.button() == 0) {
             ClockPlacementState.arm(canvas);
             canvas.setPlacement(NodeKind.CONSTANT);
-            status.accept("Place CLOCK — " + EditorNode.formatFrequency(ClockPlacementState.frequencyHz()) + " (RMB changes frequency)");
+            status.accept("Place CLOCK — " + EditorNode.formatFrequency(ClockPlacementState.frequencyHz()) + ". Right-click CLOCK in the sidebar to change frequency.");
         } else if (event.button() == 1) {
             long next = logic$nextPreset(ClockPlacementState.frequencyHz());
             ClockPlacementState.setFrequencyHz(next);
-            status.accept("CLOCK frequency = " + EditorNode.formatFrequency(next) + " — max 50 MHz");
+            status.accept("CLOCK frequency = " + EditorNode.formatFrequency(next) + " — maximum 50 MHz");
         } else if (event.button() == 2) {
             boolean running = EditorClockRuntime.toggleAll(canvas);
             status.accept(running ? "CLOCKS RUNNING" : "CLOCKS PAUSED");
@@ -113,7 +126,7 @@ public abstract class ComponentLibraryClockMixin {
         ci.cancel();
     }
 
-    /** Suppress any old user-saved legacy DISPLAY entry; the dedicated DISPLAY OUT row replaces it. */
+    /** Suppress any old user-saved legacy DISPLAY entry; the dedicated SCREEN OUTPUT row replaces it. */
     @Inject(method = "drawChip", at = @At("HEAD"), cancellable = true)
     private void logic$hideLegacyDisplayChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom,
                                              CallbackInfoReturnable<Integer> cir) {

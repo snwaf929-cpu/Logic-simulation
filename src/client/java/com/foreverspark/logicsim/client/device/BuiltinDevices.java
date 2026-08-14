@@ -10,7 +10,7 @@ import com.foreverspark.logicsim.editor.model.NodeKind;
 public final class BuiltinDevices {
     /** Internal stable ID kept as DISPLAY so older editor documents continue to load. */
     public static final String DISPLAY = "DISPLAY";
-    public static final String DISPLAY_LABEL = "DISPLAY OUT";
+    public static final String DISPLAY_LABEL = "SCREEN OUTPUT";
     public static final int DISPLAY_COLOR = 0xFF3E8FA0;
 
     private static final ChipDefinition DISPLAY_DEFINITION = makeDisplayOutput();
@@ -32,19 +32,20 @@ public final class BuiltinDevices {
     }
 
     public static ChipVisualSettings displayVisual() {
-        return new ChipVisualSettings(180.0, 126.0, 18.0);
+        return new ChipVisualSettings(216.0, 132.0, 18.0);
     }
 
     /**
-     * DISPLAY OUT packs normal logic ports into the physical screen's 64-bit DATA command:
+     * SCREEN OUTPUT converts easy-to-understand pixel controls into the physical screen's
+     * fixed 64-bit DATA protocol:
      *   bits  0..15  COLOR RGB565
-     *   bits 16..31  X
-     *   bits 32..47  Y
-     *   bit      48  WRITE  (opcode 1)
-     *   bit      49  CLEAR  (opcode 2)
+     *   bits 16..31  X pixel coordinate
+     *   bits 32..47  Y pixel coordinate
+     *   bit      48  DRAW (opcode 1)
+     *   bit      49  CLEAR (opcode 2)
      *   bits 50..63  0
      *
-     * WRITE and CLEAR should not be high together. Pull WRITE low then high again to resend
+     * DRAW and CLEAR should not be high together. Pull DRAW low then high again to resend
      * the exact same pixel command.
      */
     private static ChipDefinition makeDisplayOutput() {
@@ -53,7 +54,7 @@ public final class BuiltinDevices {
         EditorNode x = addInput(circuit, "X", 16, 0);
         EditorNode y = addInput(circuit, "Y", 16, 36);
         EditorNode color = addInput(circuit, "COLOR", 16, 72);
-        EditorNode write = addInput(circuit, "WRITE", 1, 108);
+        EditorNode draw = addInput(circuit, "DRAW", 1, 108);
         EditorNode clear = addInput(circuit, "CLEAR", 1, 144);
 
         EditorNode splitX = circuit.addNode(NodeKind.SPLITTER, 90, 0);
@@ -77,7 +78,7 @@ public final class BuiltinDevices {
             circuit.connect(splitX.id, bit, merge.id, 16 + bit);
             circuit.connect(splitY.id, bit, merge.id, 32 + bit);
         }
-        circuit.connect(write.id, 0, merge.id, 48);
+        circuit.connect(draw.id, 0, merge.id, 48);
         circuit.connect(clear.id, 0, merge.id, 49);
         circuit.connect(merge.id, 0, data.id, 0);
 

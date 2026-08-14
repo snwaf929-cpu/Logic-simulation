@@ -7,7 +7,7 @@
   "block.logicsimulation.bus_cable_16": "Bus Cable [16]",
   "block.logicsimulation.bus_cable_32": "Bus Cable [32]",
   "block.logicsimulation.bus_cable_64": "Bus Cable [64]",
-  "block.logicsimulation.display_block": "Pixel Display [64-bit DATA]",
+  "block.logicsimulation.display_block": "Pixel Display [uses Bus 64]",
   "block.logicsimulation.io_connector": "Circuit I/O Connector",
   "screen.logicsimulation.circuit_editor": "Circuit Editor"
 }

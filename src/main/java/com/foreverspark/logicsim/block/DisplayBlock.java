@@ -54,28 +54,50 @@ public final class DisplayBlock extends BaseEntityBlock {
         return RenderShape.MODEL;
     }
 
+    /**
+     * Empty-hand right click = explain the connected screen.
+     * Shift + right click = change pixels per display block and report the new total resolution.
+     */
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
-        if (!player.isShiftKeyDown()) return InteractionResult.PASS;
-
-        int current = level.getBlockEntity(pos) instanceof DisplayBlockEntity display
-                ? display.pixelWidth()
-                : DisplayBlockEntity.DEFAULT_PIXEL_WIDTH;
-        int next = DisplayBlockEntity.nextPixelWidth(current);
-
         if (!level.isClientSide()) {
-            DisplayBlockEntity.setWallPixelWidth(level, pos, state, next);
-            DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(level, pos, state);
-            if (info != null) {
-                player.sendSystemMessage(Component.literal(
-                        "Display: " + info.pixelWidth() + "x" + info.pixelHeight()
-                                + " px  |  " + info.columns() + "x" + info.rows() + " tiles"
-                                + "  |  " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " px/tile"
-                                + "  |  DATA" + info.dataBusWidth()
-                ));
+            if (player.isShiftKeyDown()) {
+                int current = level.getBlockEntity(pos) instanceof DisplayBlockEntity display
+                        ? display.pixelWidth()
+                        : DisplayBlockEntity.DEFAULT_PIXEL_WIDTH;
+                int next = DisplayBlockEntity.nextPixelWidth(current);
+                DisplayBlockEntity.setWallPixelWidth(level, pos, state, next);
+                logic$showScreenInfo(level, pos, state, player, true);
+            } else {
+                logic$showScreenInfo(level, pos, state, player, false);
             }
         }
         return InteractionResult.SUCCESS;
+    }
+
+    private static void logic$showScreenInfo(Level level, BlockPos pos, BlockState state, Player player, boolean changed) {
+        DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(level, pos, state);
+        if (info == null) return;
+
+        if (changed) {
+            player.sendSystemMessage(Component.literal(
+                    "Screen changed: " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " pixels per block"
+                            + " -> " + info.pixelWidth() + "x" + info.pixelHeight() + " total pixels."
+            ));
+            player.sendSystemMessage(Component.literal(
+                    "Cable does NOT change with resolution: always use one Bus Cable [64] on any side/back display block."
+            ));
+            return;
+        }
+
+        player.sendSystemMessage(Component.literal(
+                "Screen: " + info.pixelWidth() + "x" + info.pixelHeight() + " total pixels"
+                        + " | " + info.columns() + "x" + info.rows() + " display blocks"
+                        + " | " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " pixels/block"
+        ));
+        player.sendSystemMessage(Component.literal(
+                "Connection: one Bus Cable [64] to any side/back display block. Shift+Right Click changes pixels/block."
+        ));
     }
 
     @Nullable
