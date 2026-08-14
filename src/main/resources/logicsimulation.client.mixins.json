@@ -25,6 +25,8 @@
     "CircuitEditorBoardPersistenceMixin",
     "ClientChipLibraryBuiltinMixin",
     "ComponentLibraryClockMixin",
+    "CircuitBlockRealtimeDisplayMixin",
+    "DisplayRealtimePersistenceMixin",
     "CanvasAccess"
   ],
   "injectors": {"defaultRequire": 1}
