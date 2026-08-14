@@ -23,11 +23,12 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeWidth", at = @At("HEAD"), cancellable = true)
     private void logic$compactWidth(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            // I/O terminals are tiny one-bit controls. RANDOM is still one row tall, but wider so
-            // its probability can be read without turning it into a full-size chip card.
+            // I/O terminals are tiny one-bit controls. RANDOM is still exactly one row tall, but
+            // deliberately wider so the whole control reads left-to-right as:
+            // TRIGGER -> [ RND 10%   0/1 ] -> OUT.
             case INPUT, OUTPUT -> cir.setReturnValue(18.0);
             case NAND -> cir.setReturnValue(66.0);
-            case CONSTANT -> cir.setReturnValue(node.randomSource ? 54.0 : 66.0);
+            case CONSTANT -> cir.setReturnValue(node.randomSource ? 78.0 : 66.0);
             case PROBE -> cir.setReturnValue(66.0);
             case BUS -> cir.setReturnValue(node.width <= 1 ? 20.0 : 30.0);
             case SPLITTER, MERGER -> cir.setReturnValue(72.0);
@@ -38,7 +39,7 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeHeight", at = @At("HEAD"), cancellable = true)
     private void logic$compactHeight(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            // One terminal = one merger/splitter bit-row. RANDOM is also exactly one bit-row.
+            // One terminal = one merger/splitter bit-row. RANDOM stays one bit-row high.
             case INPUT, OUTPUT -> cir.setReturnValue(12.0);
             case CONSTANT -> cir.setReturnValue(node.randomSource ? 12.0 : 42.0);
             case PROBE -> cir.setReturnValue(42.0);
@@ -54,10 +55,9 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     }
 
     /**
-     * CONSTANT normally places any input at the old 30-unit component row. RANDOM is a compact
-     * CONSTANT subtype with both TRIGGER and OUT, so its real interactive TRIGGER pin must move to
-     * the same center row that the compact renderer uses. This keeps rendered pins, hitboxes and
-     * wire endpoints on exactly the same grid point.
+     * CONSTANT normally places an input at the old 30-unit component row. RANDOM is a compact
+     * CONSTANT subtype with TRIGGER on its single center row, so move its real interactive pin to
+     * the visual center. This keeps the rendered pad, wire endpoint and hitbox on one coordinate.
      */
     @ModifyConstant(method = "inputPortPoint", constant = @Constant(doubleValue = 30.0))
     private double logic$centerRandomTrigger(double original, EditorNode node, int port) {
