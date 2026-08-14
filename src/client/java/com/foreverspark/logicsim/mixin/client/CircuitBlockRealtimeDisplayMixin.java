@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.mixin.client;
 
+import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import com.foreverspark.logicsim.client.render.RealtimeDisplaySurface;
@@ -33,6 +34,7 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
 
     @Unique private static final Field logic$displayTargetsField = logic$findDisplayTargetsField();
     @Unique private volatile Map<Object, RealtimeDisplaySurface.Surface> logic$realtimeTargets = Map.of();
+    @Unique private int logic$lastLoggedRealtimeTargetCount = -1;
 
     @Inject(method = "refreshDisplayStreamPorts", at = @At("TAIL"))
     private void logic$refreshRealtimeDisplayRoutes(CallbackInfo ci) {
@@ -41,13 +43,13 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
 
         CircuitProgramRuntime current = runtime;
         if (current == null) {
-            logic$realtimeTargets = Map.of();
+            logic$setRealtimeTargets(self, Map.of());
             return;
         }
 
         Object[] targets = logic$displayTargets(self);
         if (targets.length == 0) {
-            logic$realtimeTargets = Map.of();
+            logic$setRealtimeTargets(self, Map.of());
             return;
         }
 
@@ -61,7 +63,32 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
             RealtimeDisplaySurface.Surface surface = RealtimeDisplaySurface.route(self.getBlockPos(), port.name());
             if (surface != null) mapped.put(target, surface);
         }
-        logic$realtimeTargets = mapped.isEmpty() ? Map.of() : Map.copyOf(mapped);
+        logic$setRealtimeTargets(self, mapped.isEmpty() ? Map.of() : Map.copyOf(mapped));
+    }
+
+    @Unique
+    private void logic$setRealtimeTargets(
+            CircuitBlockEntity self,
+            Map<Object, RealtimeDisplaySurface.Surface> targets
+    ) {
+        logic$realtimeTargets = targets;
+        int mappedCount = targets.size();
+        if (mappedCount == logic$lastLoggedRealtimeTargetCount) return;
+        logic$lastLoggedRealtimeTargetCount = mappedCount;
+
+        RealtimeDisplaySurface.Surface first = targets.values().stream().findFirst().orElse(null);
+        if (first == null) {
+            LogicSimulationMod.LOGGER.info(
+                    "[DISPLAY REALTIME] circuit={} mappedStreams=0 integratedFastPath=false",
+                    self.getBlockPos()
+            );
+        } else {
+            LogicSimulationMod.LOGGER.info(
+                    "[DISPLAY REALTIME] circuit={} mappedStreams={} integratedFastPath=true backing={}x{} targetFps={}",
+                    self.getBlockPos(), mappedCount, first.backingWidth(), first.backingHeight(),
+                    (long) first.backingWidth() * first.backingHeight() >= 2_000_000L ? 30 : 60
+            );
+        }
     }
 
     @WrapOperation(
@@ -112,6 +139,7 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
     private void logic$removeRealtimeDisplayRoutes(CallbackInfo ci) {
         RealtimeDisplaySurface.removeRoutes((CircuitBlockEntity) (Object) this);
         logic$realtimeTargets = Map.of();
+        logic$lastLoggedRealtimeTargetCount = -1;
     }
 
     @Unique
