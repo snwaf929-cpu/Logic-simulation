@@ -19,16 +19,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.List;
 
 /**
- * Dedicated RANDOM renderer. The visual intentionally resembles a compact horizontal hardware
- * source: a full-height TRIGGER pad on the left, a flat labelled body, and a full-height OUT pad
- * on the right. It stays one bit-row high regardless of probability.
+ * RANDOM is a flat one-row source. Its electrical terminals deliberately use the exact same
+ * square pin geometry as every other 1-bit port in the circuit editor; only the body is wider.
  */
 @Mixin(value = CircuitCanvasWidget.class, priority = 2500)
 public abstract class CircuitCanvasRandomHorizontalMixin {
-    @Unique private static final int LOGIC_BODY = 0xFF596168;
-    @Unique private static final int LOGIC_TOP = 0xFFF0C64A;
-    @Unique private static final int LOGIC_DARK = 0xFF171B20;
-    @Unique private static final int LOGIC_TEXT = 0xFFF5F7F9;
+    @Unique private static final int BODY = 0xF0191F26;
+    @Unique private static final int TOP = 0xFFD29A45;
+    @Unique private static final int BORDER = 0xFF805E2E;
+    @Unique private static final int TEXT = 0xFFF2F5F8;
 
     @Shadow private CircuitDocument document;
     @Shadow private double zoom;
@@ -43,11 +42,6 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
     @Shadow private boolean isNodeSelected(int nodeId) { throw new AssertionError(); }
     @Shadow private LogicValue[] valueForNode(EditorNode node) { throw new AssertionError(); }
 
-    /*
-     * order=900 deliberately runs before the editor's older default-order built-in render mixins.
-     * Cancelling here means RANDOM gets exactly one renderer instead of being painted again as a
-     * generic CONSTANT card afterward.
-     */
     @Inject(method = "drawNode", at = @At("HEAD"), order = 900, cancellable = true)
     private void logic$drawRandom(GuiGraphicsExtractor graphics, EditorNode node, CallbackInfo ci) {
         if (!logic$isRandom(node)) return;
@@ -57,51 +51,37 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
         int w = Math.max(34, (int)Math.round(nodeWidth(node) * zoom));
         int h = Math.max(8, (int)Math.round(nodeHeight(node) * zoom));
 
-        // Pads are square and consume the full node height, matching the user's hardware-style mockup.
-        int pad = Math.min(Math.max(6, h), Math.max(6, w / 4));
-        int bodyLeft = x + pad;
-        int bodyRight = x + w - pad;
-        if (bodyRight <= bodyLeft + 8) {
-            pad = Math.max(4, (w - 10) / 4);
-            bodyLeft = x + pad;
-            bodyRight = x + w - pad;
-        }
-
-        List<PortSpec> inputs = safeInputs(node);
-        List<PortSpec> outputs = safeOutputs(node);
-        int triggerColor = inputs.isEmpty()
-                ? 0xFFE05252
-                : portDisplayColor(node, 0, inputs.getFirst(), true);
-        int outputColor = outputs.isEmpty()
-                ? logic$stateColor(valueForNode(node))
-                : portDisplayColor(node, 0, outputs.getFirst(), false);
-
-        // Central body first, then the two full-height electrical pads.
-        graphics.fill(bodyLeft, y, bodyRight, y + h, LOGIC_BODY);
-        graphics.fill(x, y, bodyLeft, y + h, triggerColor);
-        graphics.fill(bodyRight, y, x + w, y + h, outputColor);
-
+        // Body uses the editor's normal dark component styling. The gold strip keeps RANDOM
+        // visually grouped with other source/infrastructure components without copying the mockup.
+        graphics.fill(x, y, x + w, y + h, BODY);
         int strip = Math.max(1, Math.min(h / 3, (int)Math.round(2.0 * zoom)));
-        graphics.fill(bodyLeft, y, bodyRight, y + strip, LOGIC_TOP);
-
-        // Dark seams make each pad read as a terminal rather than part of the label body.
-        graphics.fill(bodyLeft - 1, y, bodyLeft + 1, y + h, LOGIC_DARK);
-        graphics.fill(bodyRight - 1, y, bodyRight + 1, y + h, LOGIC_DARK);
-
-        int outline = isNodeSelected(node.id) ? 0xFFFFFFFF : LOGIC_DARK;
-        graphics.outline(x, y, w, h, outline);
-        graphics.outline(x, y, pad, h, validTarget(true) ? 0xFFFFFFFF : LOGIC_DARK);
-        graphics.outline(bodyRight, y, x + w - bodyRight, h, validTarget(false) ? 0xFFFFFFFF : LOGIC_DARK);
+        graphics.fill(x, y, x + w, y + strip, TOP);
+        graphics.outline(x, y, w, h, isNodeSelected(node.id) ? 0xFFFFFFFF : BORDER);
 
         String label = "RND " + node.randomChancePercent + "%";
-        String state = logic$isHigh(valueForNode(node)) ? "1" : "0";
+        LogicValue[] values = valueForNode(node);
+        String state = logic$isHigh(values) ? "1" : "0";
+        int stateColor = logic$stateColor(values);
 
-        // Reserve a small right-hand section of the grey body for the live output value.
-        int stateWidth = Math.max(9, (int)Math.round(11.0 * zoom));
-        int labelLeft = bodyLeft + Math.max(2, (int)Math.round(3.0 * zoom));
-        int labelRight = Math.max(labelLeft + 4, bodyRight - stateWidth);
-        logic$fitText(graphics, label, labelLeft, labelRight, y, y + h, LOGIC_TEXT);
-        logic$fitText(graphics, state, labelRight, bodyRight, y, y + h, logic$stateColor(valueForNode(node)));
+        int stateWidth = Math.max(10, (int)Math.round(12.0 * zoom));
+        logic$fitText(graphics, label,
+                x + Math.max(3, (int)Math.round(4.0 * zoom)),
+                Math.max(x + 8, x + w - stateWidth), y, y + h, TEXT);
+        logic$fitText(graphics, state,
+                Math.max(x + 4, x + w - stateWidth), x + w - 2, y, y + h, stateColor);
+
+        // These are not decorative side blocks. They are the same bit pins used by NAND,
+        // merger/splitter and ordinary I/O ports, centered on the one-row RANDOM body.
+        List<PortSpec> inputs = safeInputs(node);
+        if (!inputs.isEmpty()) {
+            logic$standardPin(graphics, node.x, node.y + nodeHeight(node) * 0.5,
+                    portDisplayColor(node, 0, inputs.getFirst(), true), validTarget(true));
+        }
+        List<PortSpec> outputs = safeOutputs(node);
+        if (!outputs.isEmpty()) {
+            logic$standardPin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * 0.5,
+                    portDisplayColor(node, 0, outputs.getFirst(), false), validTarget(false));
+        }
 
         ci.cancel();
     }
@@ -113,7 +93,7 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
 
         LogicValue[] value = valueForNode(node);
         String out = logic$isHigh(value) ? "1" : "0";
-        String text = "RANDOM " + node.randomChancePercent + "%   TRIGGER: rising edge 0 -> 1   OUT: " + out + "   double-click to edit";
+        String text = "RANDOM " + node.randomChancePercent + "%   TRIGGER 0 -> 1   OUT " + out + "   select + E to edit";
         Font font = Minecraft.getInstance().font;
         int padding = 5;
         int boxW = font.width(text) + padding * 2;
@@ -126,7 +106,7 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
         y = Math.min(y, self.getY() + self.getHeight() - boxH - 3);
 
         graphics.fill(x, y, x + boxW, y + boxH, 0xF0181D23);
-        graphics.outline(x, y, boxW, boxH, LOGIC_TOP);
+        graphics.outline(x, y, boxW, boxH, TOP);
         graphics.text(font, text, x + padding, y + 5, 0xFFE8EDF3, false);
         ci.cancel();
     }
@@ -142,6 +122,19 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
             if (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h) return node;
         }
         return null;
+    }
+
+    /** Mirrors CircuitCanvasWidget.drawPort's ordinary non-compact 1-bit pin size. */
+    @Unique private void logic$standardPin(GuiGraphicsExtractor graphics, double worldX, double worldY,
+                                           int color, boolean wiringTarget) {
+        double snappedX = Math.round(worldX / 6.0) * 6.0;
+        double snappedY = Math.round(worldY / 6.0) * 6.0;
+        int x = screenX(snappedX);
+        int y = screenY(snappedY);
+        double base = wiringTarget ? 4.2 : 3.5;
+        int r = Math.max(2, (int)Math.round(base * zoom));
+        graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
+        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
     }
 
     @Unique private void logic$fitText(GuiGraphicsExtractor graphics, String text,

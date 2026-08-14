@@ -21,11 +21,25 @@ public abstract class CircuitCanvasPersistentInputMixin {
     @Shadow private CompiledCircuit runtime;
     @Shadow private String runtimeScopePath;
 
+    /**
+     * CircuitEditorScreen is re-initialized after returning from child config screens. That creates
+     * a new CircuitCanvasWidget around the same board document, so restore the saved INPUT defaults
+     * immediately instead of showing every switch as OFF until the board is reloaded another way.
+     */
+    @Inject(method = "<init>", at = @At("RETURN"))
+    private void logic$restoreDefaultsAfterConstruction(CallbackInfo ci) {
+        logic$restoreSavedInputDefaultsNow();
+    }
+
     @Inject(
             method = "setDocument(Lcom/foreverspark/logicsim/editor/model/CircuitDocument;Ljava/lang/String;)V",
             at = @At("RETURN")
     )
     private void logic$restoreSavedInputDefaults(CircuitDocument restored, String rootChipName, CallbackInfo ci) {
+        logic$restoreSavedInputDefaultsNow();
+    }
+
+    private void logic$restoreSavedInputDefaultsNow() {
         if (document == null || !CompiledCircuit.ROOT_SCOPE.equals(runtimeScopePath)) return;
         for (EditorNode node : document.nodes) {
             if (node.kind != NodeKind.INPUT) continue;
