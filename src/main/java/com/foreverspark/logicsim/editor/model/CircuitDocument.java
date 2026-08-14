@@ -101,6 +101,9 @@ public final class CircuitDocument {
             if (node.chipName == null) {
                 node.chipName = "";
             }
+            if (node.kind == NodeKind.INPUT && node.width < 64) {
+                node.inputDefaultValue &= (1L << node.width) - 1L;
+            }
         }
     }
 }
