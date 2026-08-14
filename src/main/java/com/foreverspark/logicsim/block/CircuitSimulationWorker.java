@@ -2,12 +2,12 @@ package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.LogicSimulationMod;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.LockSupport;
-import java.util.stream.IntStream;
 
 /**
  * Dedicated wall-clock simulation workers for programmed circuit blocks.
@@ -23,9 +23,7 @@ public final class CircuitSimulationWorker {
     private static final int WORKER_COUNT = chooseWorkerCount(PROCESSORS);
     private static final int WORKER_PRIORITY = chooseWorkerPriority(PROCESSORS);
 
-    private static final List<Set<CircuitBlockEntity>> SHARDS = IntStream.range(0, WORKER_COUNT)
-            .mapToObj(ignored -> ConcurrentHashMap.<CircuitBlockEntity>newKeySet())
-            .toList();
+    private static final List<Set<CircuitBlockEntity>> SHARDS = createShards();
     private static final AtomicBoolean STARTED = new AtomicBoolean();
 
     /** Idle workers may sleep; an active MHz worker should stay hot on its CPU/cache. */
@@ -100,6 +98,14 @@ public final class CircuitSimulationWorker {
                 LockSupport.parkNanos(IDLE_PARK_NANOS);
             }
         }
+    }
+
+    private static List<Set<CircuitBlockEntity>> createShards() {
+        List<Set<CircuitBlockEntity>> shards = new ArrayList<>(WORKER_COUNT);
+        for (int index = 0; index < WORKER_COUNT; index++) {
+            shards.add(ConcurrentHashMap.newKeySet());
+        }
+        return List.copyOf(shards);
     }
 
     private static int shardIndex(CircuitBlockEntity circuit) {
