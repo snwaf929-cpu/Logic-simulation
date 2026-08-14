@@ -23,6 +23,7 @@ import java.util.Set;
 public final class CircuitTimingController {
     private static final long EDGE_SETTLE_BUDGET = 10_000_000L;
     private static final long RNG_NONZERO_FALLBACK = 0x9E3779B97F4A7C15L;
+    private static final long RNG_SEED_GAMMA = 0x9E3779B97F4A7C15L;
 
     public record ClockAddress(String scopePath, int nodeId) {}
     public record RandomAddress(String scopePath, int nodeId) {}
@@ -55,7 +56,8 @@ public final class CircuitTimingController {
         private final RandomState[] sources;
         private final RandomChanceBucket[] buckets;
         private boolean lastHigh;
-        private long rngState;
+        private long rng0;
+        private long rng1;
 
         private RandomTriggerGroup(
                 int triggerSignalId,
@@ -68,17 +70,29 @@ public final class CircuitTimingController {
             this.sources = sources;
             this.buckets = buckets;
             this.lastHigh = lastHigh;
-            this.rngState = seed == 0L ? RNG_NONZERO_FALLBACK : seed;
+
+            // xoroshiro128++ needs a non-zero 128-bit state. SplitMix-style seeding keeps neighboring trigger ids
+            // from producing related streams while remaining a compile-time-only cost.
+            this.rng0 = mix64(seed);
+            this.rng1 = mix64(seed + RNG_SEED_GAMMA);
+            if ((rng0 | rng1) == 0L) rng1 = RNG_NONZERO_FALLBACK;
         }
 
+        /**
+         * xoroshiro128++ output. The previous raw xorshift64 state was fast but linear: when lanes 0..47 were
+         * reassembled into X/Y/RGB buses, a huge random-pixel display exposed visible bands and rectangular
+         * sections. The ++ output scrambler removes those cross-bit lattice artifacts while keeping the vector path
+         * allocation-free and only a handful of integer operations per 64 RANDOM lanes.
+         */
         private long nextLong() {
-            long x = rngState;
-            x ^= x << 13;
-            x ^= x >>> 7;
-            x ^= x << 17;
-            if (x == 0L) x = RNG_NONZERO_FALLBACK;
-            rngState = x;
-            return x;
+            long s0 = rng0;
+            long s1 = rng1;
+            long result = Long.rotateLeft(s0 + s1, 17) + s0;
+
+            s1 ^= s0;
+            rng0 = Long.rotateLeft(s0, 49) ^ s1 ^ (s1 << 21);
+            rng1 = Long.rotateLeft(s1, 28);
+            return result;
         }
     }
 
@@ -345,7 +359,7 @@ public final class CircuitTimingController {
         if (chancePercent == 25) return (~group.nextLong() & ~group.nextLong()) & validMask;
         if (chancePercent == 75) return (~(group.nextLong() & group.nextLong())) & validMask;
 
-        // Eight independent 64-bit PRNG words represent the eight bits of 64 independent random bytes.
+        // Eight independent, scrambled 64-bit words represent the eight bits of 64 independent random bytes.
         // Compare all 64 lanes against one scalar threshold simultaneously using bitwise less-than logic.
         int threshold = (chancePercent * 256 + 50) / 100;
         if (threshold <= 0) return 0L;
