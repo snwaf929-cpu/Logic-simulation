@@ -40,20 +40,45 @@ public abstract class CircuitCanvasTerminalRenderMixin {
             return;
         }
         if (node.kind != NodeKind.INPUT && node.kind != NodeKind.OUTPUT) return;
-        int x = screenX(node.x), y = screenY(node.y);
-        int w = Math.max(8, (int)Math.round(nodeWidth(node) * zoom));
-        int h = Math.max(8, (int)Math.round(nodeHeight(node) * zoom));
+
+        int x = screenX(node.x);
+        int y = screenY(node.y);
+        int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(6, (int)Math.round(nodeHeight(node) * zoom));
         LogicValue[] values = valueForNode(node);
-        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : nodeAccent(node);
-        graphics.fill(x, y, x + w, y + h, 0xF012171D);
+        int accent = nodeAccent(node);
+        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : logic$darken(accent, 0.90);
+
+        // A terminal is a tiny hardware pin control, not a full component card.
+        graphics.fill(x, y, x + w, y + h, 0xF010151B);
         graphics.outline(x, y, w, h, border);
-        String side = node.kind == NodeKind.INPUT ? "IN" : "OUT";
-        String value = logic$format(values);
-        logic$smallText(graphics, side, x + w / 2, y + 3, Math.max(5, w - 4), 0xFFAEB9C5);
-        logic$smallText(graphics, value, x + w / 2, y + h / 2 - 2, Math.max(5, w - 4), 0xFFFFFFFF);
-        List<PortSpec> inputs = safeInputs(node), outputs = safeOutputs(node);
-        for (int i = 0; i < inputs.size(); i++) logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5, portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
-        for (int i = 0; i < outputs.size(); i++) logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5, portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
+
+        int indicator = Math.max(4, Math.min(h - 2, (int)Math.round(7.0 * zoom)));
+        int inset = Math.max(1, (int)Math.round(3.0 * zoom));
+        int sx = node.kind == NodeKind.INPUT
+                ? x + inset
+                : x + w - inset - indicator;
+        int sy = y + (h - indicator) / 2;
+        int stateColor = logic$valueColor(values);
+
+        // INPUT: this square is the clickable saved ON/OFF switch.
+        // OUTPUT: the same square is a read-only live state indicator.
+        graphics.fill(sx, sy, sx + indicator, sy + indicator, logic$darken(stateColor, 0.42));
+        graphics.outline(sx, sy, indicator, indicator, stateColor);
+        if (logic$isHigh(values) && indicator >= 5) {
+            graphics.fill(sx + 2, sy + 2, sx + indicator - 1, sy + indicator - 1, stateColor);
+        }
+
+        List<PortSpec> inputs = safeInputs(node);
+        List<PortSpec> outputs = safeOutputs(node);
+        for (int i = 0; i < inputs.size(); i++) {
+            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5,
+                    portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
+        }
+        for (int i = 0; i < outputs.size(); i++) {
+            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5,
+                    portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
+        }
         ci.cancel();
     }
 
@@ -86,17 +111,39 @@ public abstract class CircuitCanvasTerminalRenderMixin {
     }
 
     @Unique private void logic$pin(GuiGraphicsExtractor graphics, double wx, double wy, int color, boolean target) {
-        int x = screenX(Math.round(wx / 6.0) * 6.0), y = screenY(Math.round(wy / 6.0) * 6.0);
+        int x = screenX(Math.round(wx / 6.0) * 6.0);
+        int y = screenY(Math.round(wy / 6.0) * 6.0);
         int r = Math.max(1, (int)Math.round((target ? 4.0 : 3.0) * zoom));
-        graphics.fill(x-r,y-r,x+r+1,y+r+1,color);
-        graphics.outline(x-r-1,y-r-1,r*2+3,r*2+3,0xFF090B0D);
+        graphics.fill(x-r, y-r, x+r+1, y+r+1, color);
+        graphics.outline(x-r-1, y-r-1, r*2+3, r*2+3, 0xFF090B0D);
     }
 
-    @Unique private static String logic$format(LogicValue[] values) {
-        if (values == null || values.length == 0) return "0";
-        for (LogicValue v : values) if (v == LogicValue.UNKNOWN) return "X";
-        long n=0; for(int i=0;i<values.length;i++) if(values[i]==LogicValue.HIGH)n|=1L<<i;
-        if(values.length==1)return Long.toString(n);
-        return Long.toUnsignedString(n,16).toUpperCase();
+    @Unique private static boolean logic$isHigh(LogicValue[] values) {
+        if (values == null) return false;
+        for (LogicValue value : values) if (value == LogicValue.HIGH) return true;
+        return false;
+    }
+
+    @Unique private static int logic$valueColor(LogicValue[] values) {
+        if (values == null || values.length == 0) return 0xFF777777;
+        boolean unknown = false;
+        boolean high = false;
+        boolean low = false;
+        for (LogicValue value : values) {
+            if (value == LogicValue.UNKNOWN) unknown = true;
+            if (value == LogicValue.HIGH) high = true;
+            if (value == LogicValue.LOW) low = true;
+        }
+        if (unknown) return 0xFFFFC857;
+        if (high && low) return 0xFF5AA9FF;
+        if (high) return 0xFF55D96B;
+        return 0xFFE05252;
+    }
+
+    @Unique private static int logic$darken(int color, double factor) {
+        int r = (int)(((color >>> 16) & 0xFF) * factor);
+        int g = (int)(((color >>> 8) & 0xFF) * factor);
+        int b = (int)((color & 0xFF) * factor);
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 }
