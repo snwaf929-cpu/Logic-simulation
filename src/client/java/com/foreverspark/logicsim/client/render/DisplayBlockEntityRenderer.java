@@ -55,9 +55,12 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         matrices.pushPose();
         matrices.translate(0.5, 0.5, 0.5);
 
-        // IMPORTANT: use the same Y rotations as assets/.../blockstates/display_block.json.
-        // In Minecraft 26.2 the static block model and this dynamic render submission are separate;
-        // matching the blockstate values keeps the pixel plane on the visible black screen face.
+        /*
+         * IMPORTANT: blockstate JSON rotation and PoseStack Y rotation use opposite signs for EAST/WEST.
+         * display_block.json has a local NORTH screen. Minecraft's blockstate y=90 turns that model to
+         * facing=EAST, while Axis.YP needs -90 degrees to turn the dynamic local NORTH plane to EAST.
+         * Using +90 here puts the pixels on the physical back of an east-facing display.
+         */
         matrices.mulPose(Axis.YP.rotationDegrees(rotationDegrees(state.facing)));
         matrices.translate(-0.5, -0.5, -0.5);
 
@@ -78,8 +81,8 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                         y * 9.0f,
                         Component.literal(PIXEL).getVisualOrderText(),
                         false,
-                        // NORMAL participates in world depth testing. Do not use SEE_THROUGH here:
-                        // the display body and other solid blocks must occlude screen pixels normally.
+                        // POLYGON_OFFSET is the depth-tested text mode intended for text drawn on a surface.
+                        // It avoids fighting with the black screen plane while still being occluded by blocks.
                         pixelDisplayMode(),
                         state.lightCoords,
                         color,
@@ -91,19 +94,19 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         matrices.popPose();
     }
 
-    /** Exact rotations used by display_block.json. */
+    /** PoseStack rotation that maps the model's local NORTH screen normal to the requested world facing. */
     static float rotationDegrees(Direction facing) {
         return switch (facing) {
             case NORTH -> 0.0f;
-            case EAST -> 90.0f;
+            case EAST -> -90.0f;
             case SOUTH -> 180.0f;
-            case WEST -> 270.0f;
+            case WEST -> 90.0f;
             default -> 0.0f;
         };
     }
 
     static Font.DisplayMode pixelDisplayMode() {
-        return Font.DisplayMode.NORMAL;
+        return Font.DisplayMode.POLYGON_OFFSET;
     }
 
     static double screenFaceZ() {
