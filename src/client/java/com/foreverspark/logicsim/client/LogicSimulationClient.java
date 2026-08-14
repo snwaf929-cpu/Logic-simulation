@@ -6,6 +6,7 @@ import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.client.device.BuiltinDevices;
 import com.foreverspark.logicsim.client.render.DisplayBlockEntityRenderer;
 import com.foreverspark.logicsim.client.render.DisplayTextureCache;
+import com.foreverspark.logicsim.client.render.RealtimeDisplayTextureCache;
 import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.platform.ClientEditorBridge;
@@ -21,7 +22,10 @@ public final class LogicSimulationClient implements ClientModInitializer {
     public void onInitializeClient() {
         ensureBuiltInDevices();
         BlockEntityRenderers.register(ModBlockEntities.DISPLAY, DisplayBlockEntityRenderer::new);
-        ClientTickEvents.END_CLIENT_TICK.register(client -> DisplayTextureCache.clientTick());
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            DisplayTextureCache.clientTick();
+            RealtimeDisplayTextureCache.clientTick();
+        });
         ClientEditorBridge.installEditorOpener(() -> Minecraft.getInstance().gui.setScreen(new CircuitEditorScreen()));
         ClientBoardNetworking.initialize();
         CircuitBlockUseHandler.register();
