@@ -82,7 +82,7 @@ public abstract class ComponentLibraryClockMixin {
     }
 
     @Inject(method = "drawChip", at = @At("HEAD"), cancellable = true)
-    private void logic$hideLegacyDisplayChip(String chipName, int y, int clipTop, int clipBottom,
+    private void logic$hideLegacyDisplayChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom,
                                              CallbackInfoReturnable<Integer> cir) {
         if (chipName != null && BuiltinDevices.DISPLAY.equalsIgnoreCase(chipName.trim())) cir.setReturnValue(y);
     }
