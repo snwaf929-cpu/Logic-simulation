@@ -25,6 +25,7 @@ public final class CircuitProgramRuntime {
         this.compiled = program.compile();
         this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
         indexBoundary();
+        initializeBoundaryInputsLow();
     }
 
     public CircuitProgram program() { return program; }
@@ -73,6 +74,13 @@ public final class CircuitProgramRuntime {
         List<EditorNode> outputNodes = program.root.circuit.outputNodes();
         List<PortSpec> outputSpecs = program.root.outputPorts();
         for (int i = 0; i < outputNodes.size(); i++) putUnique(outputs, outputSpecs.get(i), outputNodes.get(i).id);
+    }
+
+    /** Physical external inputs start at a deterministic logic LOW until a cable drives them. */
+    private void initializeBoundaryInputsLow() {
+        for (BoundaryPort port : inputs.values()) {
+            compiled.driveInputUnsigned(port.nodeId(), 0L);
+        }
     }
 
     private void putUnique(Map<String, BoundaryPort> table, PortSpec spec, int nodeId) {
