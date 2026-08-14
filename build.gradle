@@ -73,9 +73,17 @@ tasks.register('displaySelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.tools.DisplayFramebufferSelfTest'
 }
 
+tasks.register('displayPipelineSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Compiles a real SCREEN OUTPUT board and verifies DATA64 draws a non-black framebuffer pixel.'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.tools.DisplayPipelineSelfTest'
+}
+
 tasks.register('physicalCableSelfTest', JavaExec) {
     group = 'verification'
-    description = 'Validates 1/2/4/8/16/32-bit physical cable width rules.'
+    description = 'Validates 1-bit signal and 2/4/8/16/32/64-bit physical bus rules.'
     dependsOn classes
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.foreverspark.logicsim.tools.PhysicalCableSelfTest'
@@ -99,6 +107,7 @@ tasks.register('clockSignalSelfTest', JavaExec) {
 
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
+    dependsOn tasks.named('displayPipelineSelfTest')
     dependsOn tasks.named('physicalCableSelfTest')
     dependsOn tasks.named('clockMathSelfTest')
     dependsOn tasks.named('clockSignalSelfTest')
