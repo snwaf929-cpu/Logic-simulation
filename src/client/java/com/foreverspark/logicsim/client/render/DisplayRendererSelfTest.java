@@ -2,7 +2,7 @@ package com.foreverspark.logicsim.client.render;
 
 import net.minecraft.core.Direction;
 
-/** Regression checks for display face orientation, full-face geometry, emissive pixels, and compressed runs. */
+/** Regression checks for display face orientation, full-face geometry, and emissive textured rendering. */
 public final class DisplayRendererSelfTest {
     private DisplayRendererSelfTest() {}
 
@@ -13,23 +13,17 @@ public final class DisplayRendererSelfTest {
         checkFaces(Direction.WEST, 270.0f, 90.0f);
 
         check(DisplayBlockEntityRenderer.pixelLight() == 0x00F000F0,
-                "screen pixels must use vanilla packed full-bright light");
+                "screen texture must use vanilla packed full-bright light");
         check(DisplayBlockEntityRenderer.screenMin() == 0.0f,
-                "pixel geometry must start at the exact block-face edge");
+                "screen quad must start at the exact block-face edge");
         check(DisplayBlockEntityRenderer.screenMax() == 1.0f,
-                "pixel geometry must end at the exact block-face edge");
+                "screen quad must end at the exact block-face edge");
         check(DisplayBlockEntityRenderer.screenMax() - DisplayBlockEntityRenderer.screenMin() == 1.0f,
-                "1x1 mode must cover the complete block face with zero renderer inset");
-
-        long run = DisplayBlockEntityRenderer.packRun(63, 0, 64, 0xFF12AB34);
-        check((int) run == 0xFF12AB34, "run encoding preserves ARGB");
-        check(DisplayBlockEntityRenderer.unpackY(run) == 63, "run encoding preserves max row");
-        check(DisplayBlockEntityRenderer.unpackStartX(run) == 0, "run encoding preserves start X");
-        check(DisplayBlockEntityRenderer.unpackEndX(run) == 64, "run encoding preserves exclusive max X");
+                "screen texture must cover the complete block face with zero renderer inset");
 
         double z = DisplayBlockEntityRenderer.screenFaceZ();
-        check(z > 0.0 && z < 0.75 / 16.0, "pixel plane sits just outside the local NORTH model screen face");
-        System.out.println("Display renderer face/full-surface/run-compression self-test: PASS");
+        check(z > 0.0 && z < 0.75 / 16.0, "texture plane sits just outside the local NORTH model screen face");
+        System.out.println("Display renderer face/full-surface/GPU-texture self-test: PASS");
     }
 
     private static void checkFaces(Direction expectedFacing, float expectedYnYaw, float expectedSignedDegrees) {
@@ -39,7 +33,6 @@ public final class DisplayRendererSelfTest {
         float degrees = DisplayBlockEntityRenderer.rotationDegrees(expectedFacing);
         check(degrees == expectedSignedDegrees, expectedFacing + " equivalent signed PoseStack angle");
 
-        // Rotate local NORTH vector (0,0,-1) using the right-handed Axis.YP equivalent.
         double radians = Math.toRadians(degrees);
         double worldX = -Math.sin(radians);
         double worldZ = -Math.cos(radians);
