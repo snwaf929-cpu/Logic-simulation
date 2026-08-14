@@ -45,28 +45,61 @@ public final class TimingDomain {
         totalEdges = 0L;
     }
 
+    /** Queue wall time without emitting callbacks. Used by the compiled TimingSignalDriver fast path. */
+    public void queueElapsedNanos(long elapsedNanos) {
+        if (elapsedNanos < 0L) throw new IllegalArgumentException("elapsedNanos must be >= 0");
+        if (running && elapsedNanos > 0L) queueElapsedTime(elapsedNanos);
+    }
+
+    /** Number of queued edges that may be executed now; does not mutate state until commitExecutedEdges(). */
+    public long executableEdges(long edgeBudget) {
+        if (edgeBudget < 0L) throw new IllegalArgumentException("edgeBudget must be >= 0");
+        return Math.min(pendingEdges, edgeBudget);
+    }
+
+    /** Commit a successfully executed prefix of pending edges in O(1). */
+    public void commitExecutedEdges(long edges) {
+        if (edges < 0L || edges > pendingEdges) throw new IllegalArgumentException("Invalid executed edge count");
+        pendingEdges -= edges;
+        commitLevelAndCount(edges);
+    }
+
+    /** Commit manually stepped edges; they are not taken from pending wall-time work. */
+    public void commitSteppedEdges(long edges) {
+        if (edges < 0L) throw new IllegalArgumentException("edges must be >= 0");
+        commitLevelAndCount(edges);
+    }
+
     public long advanceNanos(long elapsedNanos, long edgeBudget, EdgeSink sink) {
         if (elapsedNanos < 0L) throw new IllegalArgumentException("elapsedNanos must be >= 0");
         if (edgeBudget < 0L) throw new IllegalArgumentException("edgeBudget must be >= 0");
         if (sink == null) throw new IllegalArgumentException("edge sink is required");
-        if (running && elapsedNanos > 0L) queueElapsedTime(elapsedNanos);
-        long emitted = Math.min(pendingEdges, edgeBudget);
-        for (long i = 0; i < emitted; i++) emitEdge(sink);
-        pendingEdges -= emitted;
+        queueElapsedNanos(elapsedNanos);
+        long emitted = executableEdges(edgeBudget);
+        boolean level = high;
+        for (long i = 0; i < emitted; i++) {
+            level = !level;
+            sink.onLevel(level);
+        }
+        commitExecutedEdges(emitted);
         return emitted;
     }
 
     public long stepEdges(long edges, EdgeSink sink) {
         if (edges < 0L) throw new IllegalArgumentException("edges must be >= 0");
         if (sink == null) throw new IllegalArgumentException("edge sink is required");
-        for (long i = 0; i < edges; i++) emitEdge(sink);
+        boolean level = high;
+        for (long i = 0; i < edges; i++) {
+            level = !level;
+            sink.onLevel(level);
+        }
+        commitSteppedEdges(edges);
         return edges;
     }
 
-    private void emitEdge(EdgeSink sink) {
-        high = !high;
-        totalEdges++;
-        sink.onLevel(high);
+    private void commitLevelAndCount(long edges) {
+        if ((edges & 1L) != 0L) high = !high;
+        totalEdges = saturatingAdd(totalEdges, edges);
     }
 
     private void queueElapsedTime(long elapsedNanos) {
