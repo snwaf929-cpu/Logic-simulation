@@ -20,9 +20,9 @@ import java.util.Set;
 import java.util.WeakHashMap;
 
 /**
- * Cached physical cable topology. Networks persist across normal world ticks and are invalidated by topology
- * changes. A short safety TTL repairs any missed external topology mutation without paying a full cable BFS every
- * tick. Values remain live inside the cached Network object, so this changes discovery cost rather than logic.
+ * Cached physical cable topology. Ordinary circuit networks persist across normal world ticks and are invalidated
+ * by topology changes. Display-connected networks intentionally keep the old per-tick refresh semantics because a
+ * display consumes a stream of DATA64 commands and must never retain stale endpoint discovery/freshness state.
  */
 public final class CableNetworkCache {
     private static final int MAX_SEGMENTS = 8192;
@@ -140,6 +140,7 @@ public final class CableNetworkCache {
         private final Set<BlockPos> segments;
         private final List<Endpoint> endpoints;
         private final long builtAtGameTime;
+        private final boolean hasDisplayEndpoint;
         private long value;
         private boolean initialized;
         private boolean fresh;
@@ -154,6 +155,7 @@ public final class CableNetworkCache {
             this.initialized = initialized;
             this.fresh = fresh;
             this.builtAtGameTime = builtAtGameTime;
+            this.hasDisplayEndpoint = endpoints.stream().anyMatch(endpoint -> endpoint.kind() == EndpointKind.DISPLAY);
         }
 
         public CableKind kind() { return kind; }
@@ -173,7 +175,12 @@ public final class CableNetworkCache {
 
         private boolean matches(Level level, BlockPos start) {
             long age = level.getGameTime() - builtAtGameTime;
-            if (age < 0L || age >= TOPOLOGY_SAFETY_TTL_TICKS) return false;
+            if (age < 0L) return false;
+            if (hasDisplayEndpoint) {
+                if (age != 0L) return false;
+            } else if (age >= TOPOLOGY_SAFETY_TTL_TICKS) {
+                return false;
+            }
             BlockState state = level.getBlockState(start);
             return state.getBlock() instanceof CableBlock cable && cable.cableKind() == kind && cable.bitWidth() == width;
         }

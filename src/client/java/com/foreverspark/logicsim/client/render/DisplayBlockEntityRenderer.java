@@ -3,7 +3,6 @@ package com.foreverspark.logicsim.client.render;
 import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import com.foreverspark.logicsim.block.DisplayPorts;
-import com.foreverspark.logicsim.display.DisplayFramebuffer;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -48,41 +47,24 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                                    Vec3 cameraPos, @Nullable ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         BlockEntityRenderer.super.extractRenderState(blockEntity, state, tickProgress, cameraPos, crumblingOverlay);
         state.facing = DisplayPorts.front(blockEntity.getBlockState());
-
-        int width = blockEntity.pixelWidth();
-        int height = blockEntity.pixelHeight();
-        long sourcePos = blockEntity.getBlockPos().asLong();
-        long revision = blockEntity.framebuffer().revision();
-        state.pixelWidth = width;
-        state.pixelHeight = height;
-
-        // Render-state extraction runs every frame. Never resample a static framebuffer.
-        if (state.sourcePos == sourcePos
-                && state.framebufferRevision == revision
-                && state.cachedPixelWidth == width
-                && state.cachedPixelHeight == height) {
-            return;
-        }
-
-        state.sourcePos = sourcePos;
-        state.framebufferRevision = revision;
-        state.cachedPixelWidth = width;
-        state.cachedPixelHeight = height;
+        state.pixelWidth = blockEntity.pixelWidth();
+        state.pixelHeight = blockEntity.pixelHeight();
         state.runCount = 0;
 
-        DisplayFramebuffer framebuffer = blockEntity.framebuffer();
-        // This is the overwhelmingly common case for an idle/off screen and is now O(1), with zero render submit.
-        if (framebuffer.isBlack()) return;
-
-        rebuildRuns(blockEntity, state, framebuffer, width, height);
+        /*
+         * Do not cache the client framebuffer by its local revision. Block-entity update packets can replace the
+         * visible framebuffer without preserving a revision relationship with the previously rendered client copy.
+         * Reading the authoritative logical pixels every extraction keeps the screen correct while still retaining
+         * the large GPU-side win from horizontal run compression below.
+         */
+        rebuildRuns(blockEntity, state, state.pixelWidth, state.pixelHeight);
     }
 
-    private static void rebuildRuns(DisplayBlockEntity blockEntity, DisplayWorldRenderState state,
-                                    DisplayFramebuffer framebuffer, int width, int height) {
+    private static void rebuildRuns(DisplayBlockEntity blockEntity, DisplayWorldRenderState state, int width, int height) {
         for (int y = 0; y < height; y++) {
             int x = 0;
             while (x < width) {
-                int color = logicalPixelArgb(framebuffer, x, y, width, height);
+                int color = blockEntity.logicalPixelArgb(x, y);
                 if ((color & 0x00FFFFFF) == 0) {
                     x++;
                     continue;
@@ -90,30 +72,10 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
 
                 int startX = x;
                 x++;
-                while (x < width && logicalPixelArgb(framebuffer, x, y, width, height) == color) x++;
+                while (x < width && blockEntity.logicalPixelArgb(x, y) == color) x++;
                 state.runs[state.runCount++] = packRun(y, startX, x, color);
             }
         }
-    }
-
-    /**
-     * Samples the persistent 64x64 backing store directly. End coordinates are exclusive, which also fixes the
-     * old 64x64 path where a 1x1 backing cell could accidentally sample zero pixels.
-     */
-    private static int logicalPixelArgb(DisplayFramebuffer framebuffer, int x, int y, int width, int height) {
-        int scaleX = DisplayBlockEntity.MAX_WIDTH / width;
-        int scaleY = DisplayBlockEntity.MAX_HEIGHT / height;
-        int minX = x * scaleX;
-        int minY = y * scaleY;
-        int endX = minX + scaleX;
-        int endY = minY + scaleY;
-        for (int backingY = minY; backingY < endY; backingY++) {
-            for (int backingX = minX; backingX < endX; backingX++) {
-                int value = framebuffer.pixelRgb565(backingX, backingY);
-                if (value != 0) return DisplayFramebuffer.rgb565ToArgb(value);
-            }
-        }
-        return 0xFF000000;
     }
 
     @Override
@@ -134,7 +96,7 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
 
         /*
          * Horizontal same-color logical pixels are emitted as one quad. A solid 32x32 tile is therefore 32
-         * quads instead of 1024, while an all-black tile submits no custom geometry at all.
+         * quads instead of 1024. Black pixels produce no geometry, so the performance optimization remains.
          */
         queue.submitCustomGeometry(pose, RenderTypes.text(WHITE_TEXTURE), (matrix, consumer) -> {
             for (int index = 0; index < runCount; index++) {
