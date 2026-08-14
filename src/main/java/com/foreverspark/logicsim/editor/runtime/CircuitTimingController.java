@@ -97,6 +97,8 @@ public final class CircuitTimingController {
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
     private RandomTriggerGroup[] randomGroups = new RandomTriggerGroup[0];
     private Map<Integer, RandomTriggerGroup> randomGroupByTriggerSignal = Map.of();
+    /** Signals participating in physical streams where intermediate transitions must never be collapsed. */
+    private Set<Integer> losslessBoundarySignalIds = Set.of();
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
@@ -105,7 +107,6 @@ public final class CircuitTimingController {
         this.simulator = compiled.simulator();
         collect(root, chips == null ? ChipLookup.empty() : chips, CompiledCircuit.ROOT_SCOPE, Set.of());
         compileRandomGroups();
-        logCompileTopology();
     }
 
     public Set<ClockAddress> clocks() { return Collections.unmodifiableSet(clocks.keySet()); }
@@ -121,6 +122,15 @@ public final class CircuitTimingController {
     public void setRandomChancePercent(String scopePath, int nodeId, int chancePercent) {
         requireRandom(scopePath, nodeId).chancePercent = Math.max(0, Math.min(100, chancePercent));
         compileRandomGroups();
+    }
+
+    /**
+     * Programmed runtimes call this once after boundary ports have been indexed. Ordinary world outputs expose only
+     * their newest sampled level and therefore do not need every intermediate clock edge. Lossless command streams do.
+     */
+    public void configureLosslessBoundarySignals(Set<Integer> signalIds) {
+        losslessBoundarySignalIds = signalIds == null || signalIds.isEmpty() ? Set.of() : Set.copyOf(signalIds);
+        logCompileTopology();
     }
 
     public boolean enabled(String scopePath, int nodeId) {
@@ -169,12 +179,12 @@ public final class CircuitTimingController {
                     && randomGroups.length == 1
                     && directRandom != null
                     && clock.compiledConeGateCount() == 0
-                    && !simulator.isDirtyWatchedSignalFast(clock.signalId());
+                    && pulseBatchBoundarySafe(clock.signalId());
 
             long next;
             if (pulseBatch) {
-                // This specialized topology has no observer of the clock's falling level. Consume H/L clock edges in
-                // O(1), then execute only the useful LOW->HIGH RANDOM/device cycles.
+                // Falling levels are irrelevant to RANDOM (which samples LOW->HIGH only) and to ordinary sampled
+                // world outputs. Consume H/L clock bookkeeping in O(1), then execute only useful rising-edge work.
                 next = clock.advanceNanosPulseBatch(elapsedNanos, edgeBudgetPerClock);
                 long risingEdges = clock.lastPulseRisingEdges();
                 for (long cycle = 0L; cycle < risingEdges; cycle++) {
@@ -279,6 +289,10 @@ public final class CircuitTimingController {
         if (!simulator.dirtyWatchEnabledFast() || simulator.hasDirtyWatchBitsFast()) afterSettledEdge.run();
     }
 
+    private boolean pulseBatchBoundarySafe(int clockSignalId) {
+        return !losslessBoundarySignalIds.contains(clockSignalId);
+    }
+
     private void compileRandomGroups() {
         if (randomSources.isEmpty()) {
             randomGroups = new RandomTriggerGroup[0];
@@ -333,6 +347,7 @@ public final class CircuitTimingController {
         int queueFreeClocks = 0;
         int feedbackClocks = 0;
         int pulseBatchClocks = 0;
+        int pulseBatchBoundaryBlocked = 0;
         long totalConeGates = 0L;
         int maxConeGates = 0;
         int chanceBuckets = 0;
@@ -346,19 +361,22 @@ public final class CircuitTimingController {
             } else {
                 feedbackClocks++;
             }
-            if (clockEnableSignalIds.get(entry.getKey()) == null
+
+            boolean directPulseCandidate = clockEnableSignalIds.get(entry.getKey()) == null
                     && randomGroups.length == 1
                     && randomGroupByTriggerSignal.containsKey(driver.signalId())
-                    && cone == 0
-                    && !simulator.isDirtyWatchedSignalFast(driver.signalId())) {
-                pulseBatchClocks++;
+                    && cone == 0;
+            if (directPulseCandidate) {
+                if (pulseBatchBoundarySafe(driver.signalId())) pulseBatchClocks++;
+                else pulseBatchBoundaryBlocked++;
             }
         }
         for (RandomTriggerGroup group : randomGroups) chanceBuckets += group.buckets.length;
         LogicSimulationMod.LOGGER.info(
-                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={}",
-                clocks.size(), queueFreeClocks, pulseBatchClocks, feedbackClocks, totalConeGates, maxConeGates,
-                randomSources.size(), randomGroups.length, chanceBuckets
+                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} pulseBatchBoundaryBlocked={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={} losslessBoundarySignals={}",
+                clocks.size(), queueFreeClocks, pulseBatchClocks, pulseBatchBoundaryBlocked, feedbackClocks,
+                totalConeGates, maxConeGates, randomSources.size(), randomGroups.length, chanceBuckets,
+                losslessBoundarySignalIds.size()
         );
     }
 

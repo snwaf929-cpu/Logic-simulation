@@ -14,24 +14,20 @@ import java.util.concurrent.locks.LockSupport;
  *
  * Minecraft ticks are deliberately NOT the clock source. Each circuit is permanently assigned to one worker shard,
  * so a single circuit remains deterministic/single-threaded while independent Circuit Blocks can execute on separate
- * CPU cores. Minecraft's server/render threads still rely on the OS scheduler for pre-emption; the simulator no longer
- * voluntarily yields after every hot slice because that destroyed cache locality and heavily penalized Windows/hybrid
- * CPUs at MHz rates.
+ * CPU cores. Active simulation stays cache-hot, but workers intentionally remain at normal OS priority so a saturated
+ * virtual clock cannot starve Minecraft's server/render threads on Windows hybrid CPUs.
  */
 public final class CircuitSimulationWorker {
     private static final int PROCESSORS = Math.max(1, Runtime.getRuntime().availableProcessors());
     private static final int WORKER_COUNT = chooseWorkerCount(PROCESSORS);
-    private static final int WORKER_PRIORITY = chooseWorkerPriority(PROCESSORS);
+    private static final int WORKER_PRIORITY = Thread.NORM_PRIORITY;
 
     private static final List<Set<CircuitBlockEntity>> SHARDS = createShards();
     private static final AtomicBoolean STARTED = new AtomicBoolean();
 
     /** Idle workers may sleep; an active MHz worker should stay hot on its CPU/cache. */
     private static final long IDLE_PARK_NANOS = 500_000L;
-    /**
-     * Java/Windows Thread.yield() can migrate the simulation thread and throw away its hot primitive-array cache.
-     * The OS already pre-empts normal-priority threads. Keep a very occasional real handoff only as a safety valve.
-     */
+    /** Rare cooperative scheduler handoff. Normal OS pre-emption supplies the actual game-thread fairness. */
     private static final int HARD_HANDOFF_EVERY_BUSY_SLICES = 64;
 
     private CircuitSimulationWorker() {}
@@ -87,10 +83,8 @@ public final class CircuitSimulationWorker {
                 consecutiveBusySlices++;
                 if (consecutiveBusySlices >= HARD_HANDOFF_EVERY_BUSY_SLICES) {
                     consecutiveBusySlices = 0;
-                    // Rare scheduler handoff. Normal OS pre-emption provides the actual Minecraft fairness.
                     LockSupport.parkNanos(1L);
                 } else {
-                    // CPU hint only: unlike Thread.yield(), this does not voluntarily surrender the time slice.
                     Thread.onSpinWait();
                 }
             } else {
@@ -118,13 +112,5 @@ public final class CircuitSimulationWorker {
         if (processors <= 4) return 1;
         // Leave at least two logical CPUs for Minecraft/OS work and avoid spawning an excessive idle thread fleet.
         return Math.max(2, Math.min(8, processors - 2));
-    }
-
-    private static int chooseWorkerPriority(int processors) {
-        // MIN_PRIORITY was a major throughput limiter on Windows hybrid CPUs. One notch above normal is reserved for
-        // machines with enough cores; smaller systems stay at normal priority so the game remains responsive.
-        return processors >= 8
-                ? Math.min(Thread.MAX_PRIORITY, Thread.NORM_PRIORITY + 1)
-                : Thread.NORM_PRIORITY;
     }
 }

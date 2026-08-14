@@ -9,11 +9,15 @@ import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 public final class CircuitProgramRuntime {
+    private static final int LOSSLESS_STREAM_WIDTH = 64;
+
     private final CircuitProgram program;
     private final CompiledCircuit compiled;
     private final CircuitTimingController timing;
@@ -55,6 +59,10 @@ public final class CircuitProgramRuntime {
 
         initializeBoundaryInputDefaults();
         this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
+        // Ordinary physical outputs are sampled/coalesced to their newest level. A 64-bit boundary is different: it
+        // may be a lossless DATA64 display command stream, so every signal participating in such a bus must retain
+        // exact edge history and therefore blocks CLOCK pulse batching when it directly observes the clock signal.
+        this.timing.configureLosslessBoundarySignals(losslessBoundarySignalIds());
         this.compiled.simulator().enableTurboMode();
     }
 
@@ -134,6 +142,15 @@ public final class CircuitProgramRuntime {
         for (EditorNode node : program.root.circuit.inputNodes()) {
             compiled.driveInputUnsigned(node.id, mask(node.inputDefaultValue, node.width));
         }
+    }
+
+    private Set<Integer> losslessBoundarySignalIds() {
+        LinkedHashSet<Integer> ids = new LinkedHashSet<>();
+        for (BoundaryPort port : outputRuntimePorts) {
+            if (port.spec().width() != LOSSLESS_STREAM_WIDTH) continue;
+            for (int signalId : port.valueSignalIds()) ids.add(signalId);
+        }
+        return Set.copyOf(ids);
     }
 
     private void putUnique(
