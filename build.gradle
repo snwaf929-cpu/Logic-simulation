@@ -105,12 +105,21 @@ tasks.register('clockSignalSelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.tools.ClockSignalChecks'
 }
 
+tasks.register('randomSourceSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates RANDOM probability endpoints, rising-edge behavior, and CLOCK triggering.'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.tools.RandomSourceSelfTest'
+}
+
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
     dependsOn tasks.named('displayPipelineSelfTest')
     dependsOn tasks.named('physicalCableSelfTest')
     dependsOn tasks.named('clockMathSelfTest')
     dependsOn tasks.named('clockSignalSelfTest')
+    dependsOn tasks.named('randomSourceSelfTest')
 }
 
 tasks.register('clientSelfTest', JavaExec) {
