@@ -63,7 +63,7 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         float scaleY = 0.998f / Math.max(1.0f, state.pixelHeight * 9.0f);
 
         // Local NORTH is the model's screen face. Render almost flush with the actual screen surface.
-        matrices.translate(0.001, 0.999, SCREEN_FACE_Z);
+        matrices.translate(0.001, 0.999, screenFaceZ());
         matrices.scale(scaleX, -scaleY, scaleX);
 
         for (int y = 0; y < state.pixelHeight; y++) {
@@ -78,7 +78,7 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                         false,
                         // NORMAL participates in the world depth buffer. SEE_THROUGH made pixels visible
                         // through the display itself and through unrelated solid blocks.
-                        Font.DisplayMode.NORMAL,
+                        pixelDisplayMode(),
                         state.lightCoords,
                         color,
                         0,
@@ -98,5 +98,13 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
             case WEST -> 270.0f;
             default -> 0.0f;
         };
+    }
+
+    static Font.DisplayMode pixelDisplayMode() {
+        return Font.DisplayMode.NORMAL;
+    }
+
+    static double screenFaceZ() {
+        return SCREEN_FACE_Z;
     }
 }
