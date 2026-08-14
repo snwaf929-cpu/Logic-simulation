@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.display.DisplayFramebuffer;
 import com.foreverspark.logicsim.interconnect.CableKind;
 import com.foreverspark.logicsim.interconnect.CableRuntime;
@@ -27,9 +28,9 @@ public final class DisplayBlockEntity extends BlockEntity {
     public static final int MAX_HEIGHT = 64;
     public static final int DEFAULT_PIXEL_WIDTH = 32;
     public static final int DISPLAY_BUS_WIDTH = 64;
-    public static final int OP_NOP = 0;
-    public static final int OP_PIXEL = 1;
-    public static final int OP_CLEAR = 2;
+    public static final int OP_NOP = DisplayCommandCodec.OP_NOP;
+    public static final int OP_PIXEL = DisplayCommandCodec.OP_PIXEL;
+    public static final int OP_CLEAR = DisplayCommandCodec.OP_CLEAR;
 
     private static final int[] PIXEL_WIDTHS = {1, 2, 4, 8, 16, 32, 64};
     private static final int MAX_WALL_BLOCKS = 4096;
@@ -38,6 +39,9 @@ public final class DisplayBlockEntity extends BlockEntity {
     private int pixelWidth = DEFAULT_PIXEL_WIDTH;
     private boolean syncPending;
     private long lastWallCommand = Long.MIN_VALUE;
+    private boolean hasReceivedData;
+    private long lastReceivedData;
+    private String lastActionStatus = "No DRAW/CLEAR command accepted yet";
 
     public DisplayBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.DISPLAY, pos, state);
@@ -55,24 +59,12 @@ public final class DisplayBlockEntity extends BlockEntity {
         return DEFAULT_PIXEL_WIDTH;
     }
 
-    /**
-     * Packed 64-bit display command:
-     * bits  0..15 RGB565
-     * bits 16..31 global X
-     * bits 32..47 global Y
-     * bits 48..55 opcode (1=pixel, 2=clear)
-     * bits 56..63 optional sequence. DISPLAY OUT leaves these zero and uses WRITE low/high as the strobe.
-     */
     public static long pixelCommand(int x, int y, int rgb565, int sequence) {
-        return ((long)(sequence & 0xFF) << 56)
-                | ((long)OP_PIXEL << 48)
-                | ((long)(y & 0xFFFF) << 32)
-                | ((long)(x & 0xFFFF) << 16)
-                | (rgb565 & 0xFFFFL);
+        return DisplayCommandCodec.pixel(x, y, rgb565, sequence);
     }
 
     public static long clearCommand(int sequence) {
-        return ((long)(sequence & 0xFF) << 56) | ((long)OP_CLEAR << 48);
+        return DisplayCommandCodec.clear(sequence);
     }
 
     public void setPixelWidth(int width) {
@@ -82,6 +74,9 @@ public final class DisplayBlockEntity extends BlockEntity {
         framebuffer.clear(0);
         framebuffer.markAllDirty();
         lastWallCommand = Long.MIN_VALUE;
+        hasReceivedData = false;
+        lastReceivedData = 0L;
+        lastActionStatus = "Resolution changed; waiting for DATA64";
         setChanged();
     }
 
@@ -118,6 +113,19 @@ public final class DisplayBlockEntity extends BlockEntity {
         );
     }
 
+    /** Electrical diagnostics for the controller tile of the connected wall. */
+    public static WallSignalInfo wallSignalInfo(Level level, BlockPos start, BlockState startState) {
+        DisplayWall wall = collectWall(level, start, startState);
+        if (wall == null || wall.blocks().isEmpty()) return null;
+        BlockPos controllerPos = controllerPos(wall, start);
+        if (!(level.getBlockEntity(controllerPos) instanceof DisplayBlockEntity controller)) return null;
+        return new WallSignalInfo(
+                controller.hasReceivedData,
+                controller.lastReceivedData,
+                controller.lastActionStatus
+        );
+    }
+
     public static void tick(Level level, BlockPos pos, BlockState state, DisplayBlockEntity display) {
         if (level.isClientSide()) return;
 
@@ -147,33 +155,47 @@ public final class DisplayBlockEntity extends BlockEntity {
         DisplayWall wall = collectWall(level, touchedTile, touchedState);
         if (wall == null || wall.blocks().isEmpty()) return;
 
-        BlockPos controllerPos = wall.blocks().stream()
-                .min(Comparator.comparingLong(BlockPos::asLong))
-                .orElse(touchedTile);
+        BlockPos controllerPos = controllerPos(wall, touchedTile);
         if (!(level.getBlockEntity(controllerPos) instanceof DisplayBlockEntity controller)) return;
+        controller.hasReceivedData = true;
+        controller.lastReceivedData = command;
+
         if (controller.lastWallCommand == command) return;
         controller.lastWallCommand = command;
 
-        int opcode = (int)((command >>> 48) & 0xFFL);
-        if (opcode == OP_NOP) return;
+        DisplayCommandCodec.Command decoded = DisplayCommandCodec.decode(command);
+        if (decoded.isNop()) return;
 
-        if (opcode == OP_CLEAR) {
+        if (decoded.isClear()) {
             for (BlockPos pos : wall.blocks()) {
                 if (level.getBlockEntity(pos) instanceof DisplayBlockEntity display) display.clearScreen();
             }
+            controller.lastActionStatus = "CLEAR accepted";
+            controller.setChanged();
             return;
         }
 
-        if (opcode != OP_PIXEL) return;
+        if (!decoded.isPixel()) {
+            controller.lastActionStatus = "IGNORED invalid opcode " + decoded.opcode();
+            controller.setChanged();
+            return;
+        }
 
-        int globalX = (int)((command >>> 16) & 0xFFFFL);
-        int globalY = (int)((command >>> 32) & 0xFFFFL);
-        int rgb565 = (int)(command & 0xFFFFL);
+        int globalX = decoded.x();
+        int globalY = decoded.y();
+        int rgb565 = decoded.rgb565();
         int density = controller.pixelWidth();
 
         int columns = wall.maxHorizontal() - wall.minHorizontal() + 1;
         int rows = wall.maxY() - wall.minY() + 1;
-        if (globalX >= columns * density || globalY >= rows * density) return;
+        int screenWidth = columns * density;
+        int screenHeight = rows * density;
+        if (globalX >= screenWidth || globalY >= screenHeight) {
+            controller.lastActionStatus = "DRAW rejected: (" + globalX + "," + globalY + ") outside "
+                    + screenWidth + "x" + screenHeight;
+            controller.setChanged();
+            return;
+        }
 
         int targetHorizontal = wall.minHorizontal() + globalX / density;
         int targetY = wall.maxY() - globalY / density;
@@ -183,10 +205,23 @@ public final class DisplayBlockEntity extends BlockEntity {
                 wall.right().getStepZ() * targetHorizontal
         );
 
-        if (!wall.blocks().contains(target)) return;
+        if (!wall.blocks().contains(target)) {
+            controller.lastActionStatus = "DRAW rejected: target tile is missing at (" + globalX + "," + globalY + ")";
+            controller.setChanged();
+            return;
+        }
         if (level.getBlockEntity(target) instanceof DisplayBlockEntity display) {
             display.writePixel(globalX % density, globalY % density, rgb565);
+            controller.lastActionStatus = "DRAW accepted: x=" + globalX + " y=" + globalY
+                    + " color=" + String.format(java.util.Locale.ROOT, "0x%04X", rgb565);
+            controller.setChanged();
         }
+    }
+
+    private static BlockPos controllerPos(DisplayWall wall, BlockPos fallback) {
+        return wall.blocks().stream()
+                .min(Comparator.comparingLong(BlockPos::asLong))
+                .orElse(fallback);
     }
 
     private static DisplayWall collectWall(Level level, BlockPos start, BlockState startState) {
@@ -267,6 +302,9 @@ public final class DisplayBlockEntity extends BlockEntity {
         }
         framebuffer.markAllDirty();
         lastWallCommand = Long.MIN_VALUE;
+        hasReceivedData = false;
+        lastReceivedData = 0L;
+        lastActionStatus = "Loaded screen; waiting for DATA64";
     }
 
     @Override
@@ -298,5 +336,6 @@ public final class DisplayBlockEntity extends BlockEntity {
     }
 
     public record WallInfo(int tileCount, int columns, int rows, int pixelsPerTile, int pixelWidth, int pixelHeight, int dataBusWidth) {}
+    public record WallSignalInfo(boolean hasReceivedData, long lastReceivedData, String lastActionStatus) {}
     private record DisplayWall(Set<BlockPos> blocks, Direction right, int minHorizontal, int maxHorizontal, int minY, int maxY) {}
 }
