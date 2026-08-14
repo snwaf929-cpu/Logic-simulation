@@ -2,7 +2,7 @@ package com.foreverspark.logicsim.client.render;
 
 import net.minecraft.core.Direction;
 
-/** Regression checks for display face orientation, full-face geometry, and emissive pixels. */
+/** Regression checks for display face orientation, full-face geometry, emissive pixels, and compressed runs. */
 public final class DisplayRendererSelfTest {
     private DisplayRendererSelfTest() {}
 
@@ -21,9 +21,15 @@ public final class DisplayRendererSelfTest {
         check(DisplayBlockEntityRenderer.screenMax() - DisplayBlockEntityRenderer.screenMin() == 1.0f,
                 "1x1 mode must cover the complete block face with zero renderer inset");
 
+        long run = DisplayBlockEntityRenderer.packRun(63, 0, 64, 0xFF12AB34);
+        check((int) run == 0xFF12AB34, "run encoding preserves ARGB");
+        check(DisplayBlockEntityRenderer.unpackY(run) == 63, "run encoding preserves max row");
+        check(DisplayBlockEntityRenderer.unpackStartX(run) == 0, "run encoding preserves start X");
+        check(DisplayBlockEntityRenderer.unpackEndX(run) == 64, "run encoding preserves exclusive max X");
+
         double z = DisplayBlockEntityRenderer.screenFaceZ();
         check(z > 0.0 && z < 0.75 / 16.0, "pixel plane sits just outside the local NORTH model screen face");
-        System.out.println("Display renderer face/full-surface self-test: PASS");
+        System.out.println("Display renderer face/full-surface/run-compression self-test: PASS");
     }
 
     private static void checkFaces(Direction expectedFacing, float expectedYnYaw, float expectedSignedDegrees) {
