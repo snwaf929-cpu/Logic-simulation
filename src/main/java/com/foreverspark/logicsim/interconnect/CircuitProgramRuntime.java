@@ -49,18 +49,12 @@ public final class CircuitProgramRuntime {
                     ? -1L
                     : (outputRuntimePorts.length == 0 ? 0L : (1L << outputRuntimePorts.length) - 1L);
         } else {
-            // Extremely wide physical interfaces fall back to polling all ports; normal CPU/GPU boards are <=64.
             dirtyOutputTracking = false;
             forcedDirtyOutputMask = -1L;
         }
 
         initializeBoundaryInputDefaults();
-        // Create edge-triggered infrastructure after saved boundary defaults are applied so a RANDOM trigger that is
-        // already HIGH when a board loads does not look like a fresh 0 -> 1 edge.
         this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
-
-        // From here onward this object is physical running hardware, not an editor model. Primitive simulator state
-        // is authoritative and editor Signal objects no longer need to be mirrored on every transition.
         this.compiled.simulator().enableTurboMode();
     }
 
@@ -85,10 +79,6 @@ public final class CircuitProgramRuntime {
     public int outputPortCount() { return outputRuntimePorts.length; }
     public PortSpec outputPort(int index) { return outputRuntimePorts[index].spec(); }
 
-    /**
-     * Returns a 64-bit mask of boundary outputs that changed since the previous call. A freshly compiled runtime
-     * forces every output dirty once so its initial physical state is published.
-     */
     public long consumeDirtyOutputMask() {
         if (!dirtyOutputTracking) return -1L;
         long result = forcedDirtyOutputMask | compiled.simulator().consumeDirtyWatchBits();
@@ -104,24 +94,22 @@ public final class CircuitProgramRuntime {
     public void driveInput(String name, long value) {
         BoundaryPort port = directOrNormalized(exactInputs, inputs, name, "input");
         compiled.driveInputUnsigned(port.nodeId(), mask(value, port.spec().width()));
-        // External cable/input changes are real source updates. RANDOM samples immediately on a
-        // LOW -> HIGH TRIGGER edge and remains unchanged while TRIGGER stays HIGH.
         timing.processRandomSources();
     }
 
     public long inputValue(String name) {
         BoundaryPort port = directOrNormalized(exactInputs, inputs, name, "input");
-        return compiled.simulator().readUnsigned(port.valueSignalIds());
+        return compiled.simulator().readUnsignedFast(port.valueSignalIds());
     }
 
     public long outputValue(String name) {
         BoundaryPort port = directOrNormalized(exactOutputs, outputs, name, "output");
-        return compiled.simulator().readUnsigned(port.valueSignalIds());
+        return compiled.simulator().readUnsignedFast(port.valueSignalIds());
     }
 
-    /** Fastest physical-boundary read: no String/Map lookup at all. */
+    /** Fastest physical-boundary read: no String/Map lookup or signal-id validation. */
     public long outputValue(int index) {
-        return compiled.simulator().readUnsigned(outputRuntimePorts[index].valueSignalIds());
+        return compiled.simulator().readUnsignedFast(outputRuntimePorts[index].valueSignalIds());
     }
 
     private void indexBoundary() {
@@ -142,10 +130,6 @@ public final class CircuitProgramRuntime {
         }
     }
 
-    /**
-     * Root INPUT toggles are saved as the physical block's manual/default state.
-     * A real external cable can still drive the same boundary input afterward.
-     */
     private void initializeBoundaryInputDefaults() {
         for (EditorNode node : program.root.circuit.inputNodes()) {
             compiled.driveInputUnsigned(node.id, mask(node.inputDefaultValue, node.width));
