@@ -1,6 +1,6 @@
 package com.foreverspark.logicsim.editor.runtime;
 
-import com.foreverspark.logicsim.core.LogicValue;
+import com.foreverspark.logicsim.core.CircuitSimulator;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TimingSignalDriver;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
@@ -15,40 +15,47 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
 
 /** Runtime clock sources and edge-triggered infrastructure layered on top of a compiled NAND circuit. */
 public final class CircuitTimingController {
     private static final long EDGE_SETTLE_BUDGET = 10_000_000L;
+    private static final long RNG_NONZERO_FALLBACK = 0x9E3779B97F4A7C15L;
 
     public record ClockAddress(String scopePath, int nodeId) {}
     public record RandomAddress(String scopePath, int nodeId) {}
 
     private static final class RandomState {
-        private final Signal output;
-        private final Signal trigger;
+        private final int outputSignalId;
+        private final int triggerSignalId;
         private int chancePercent;
         private boolean lastHigh;
+        private long rngState;
 
-        private RandomState(Signal output, Signal trigger, int chancePercent) {
-            this.output = output;
-            this.trigger = trigger;
+        private RandomState(int outputSignalId, int triggerSignalId, int chancePercent, boolean lastHigh, long seed) {
+            this.outputSignalId = outputSignalId;
+            this.triggerSignalId = triggerSignalId;
             this.chancePercent = chancePercent;
-            this.lastHigh = trigger != null && trigger.value() == LogicValue.HIGH;
+            this.lastHigh = lastHigh;
+            this.rngState = seed == 0L ? RNG_NONZERO_FALLBACK : seed;
         }
     }
 
     private final CompiledCircuit compiled;
+    private final CircuitSimulator simulator;
     private final Map<ClockAddress, TimingSignalDriver> clocks = new LinkedHashMap<>();
-    /** Only clocks with a physically wired ENABLE input appear here. The Signal handle is cached once. */
-    private final Map<ClockAddress, Signal> clockEnableSignals = new LinkedHashMap<>();
+    /** Only clocks with a physically wired ENABLE input appear here. Signal ids are cached once. */
+    private final Map<ClockAddress, Integer> clockEnableSignalIds = new LinkedHashMap<>();
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
+    /** Flat array avoids a Map.values() iterator on every MHz clock edge. */
+    private RandomState[] randomRuntime = new RandomState[0];
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
         if (root == null) throw new IllegalArgumentException("Root circuit is required");
         this.compiled = compiled;
+        this.simulator = compiled.simulator();
         collect(root, chips == null ? ChipLookup.empty() : chips, CompiledCircuit.ROOT_SCOPE, Set.of());
+        randomRuntime = randomSources.values().toArray(RandomState[]::new);
     }
 
     /** Stable read-only views; constructing Set.copyOf on every worker slice was unnecessary allocation. */
@@ -69,8 +76,8 @@ public final class CircuitTimingController {
     public boolean enabled(String scopePath, int nodeId) {
         ClockAddress address = address(scopePath, nodeId);
         require(scopePath, nodeId);
-        Signal enable = clockEnableSignals.get(address);
-        return enable == null || enable.value() == LogicValue.HIGH;
+        Integer enableId = clockEnableSignalIds.get(address);
+        return enableId == null || simulator.isHigh(enableId);
     }
 
     public boolean active(String scopePath, int nodeId) {
@@ -80,7 +87,7 @@ public final class CircuitTimingController {
     public long pendingEdges(String scopePath, int nodeId) { return require(scopePath, nodeId).timing().pendingEdges(); }
 
     public long stepEdges(String scopePath, int nodeId, long edges) {
-        return stepEdges(scopePath, nodeId, edges, () -> {});
+        return stepEdges(scopePath, nodeId, edges, null);
     }
 
     public long stepEdges(String scopePath, int nodeId, long edges, Runnable afterSettledEdge) {
@@ -89,7 +96,7 @@ public final class CircuitTimingController {
     }
 
     public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock) {
-        return advanceNanos(elapsedNanos, edgeBudgetPerClock, () -> {});
+        return advanceNanos(elapsedNanos, edgeBudgetPerClock, null);
     }
 
     public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock, Runnable afterSettledEdge) {
@@ -101,8 +108,8 @@ public final class CircuitTimingController {
             ClockAddress address = entry.getKey();
             TimingSignalDriver clock = entry.getValue();
             if (!clock.timing().running()) continue;
-            Signal enable = clockEnableSignals.get(address);
-            if (enable != null && enable.value() != LogicValue.HIGH) continue;
+            Integer enableId = clockEnableSignalIds.get(address);
+            if (enableId != null && !simulator.isHigh(enableId)) continue;
             long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, callback);
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
@@ -111,43 +118,47 @@ public final class CircuitTimingController {
 
     /**
      * Samples every RANDOM source only on a trigger LOW -> HIGH transition.
-     * Trigger Signal handles are cached during compile, so the MHz hot path performs no LogicValue[] allocation
-     * and no scope/NodePortKey lookup for every edge.
+     * Runtime sources are a flat primitive-handle array; no iterator, Signal.value(), or ThreadLocalRandom lookup is
+     * performed in the MHz path.
      */
     public int processRandomSources() {
-        if (randomSources.isEmpty()) return 0;
+        RandomState[] states = randomRuntime;
+        if (states.length == 0) return 0;
+
         int fired = 0;
-        int maxPasses = Math.max(4, randomSources.size() * 4 + 4);
+        int maxPasses = Math.max(4, states.length * 4 + 4);
         for (int pass = 0; pass < maxPasses; pass++) {
             boolean outputChanged = false;
-            for (RandomState state : randomSources.values()) {
-                boolean high = state.trigger != null && state.trigger.value() == LogicValue.HIGH;
+            for (int index = 0; index < states.length; index++) {
+                RandomState state = states[index];
+                boolean high = simulator.isHigh(state.triggerSignalId);
                 boolean rising = high && !state.lastHigh;
                 state.lastHigh = high;
                 if (!rising) continue;
 
                 fired++;
-                boolean emitHigh = sampleHigh(state.chancePercent);
-                outputChanged |= compiled.simulator().drive(state.output, LogicValue.fromBoolean(emitHigh));
+                outputChanged |= simulator.driveLevel(state.outputSignalId, sampleHigh(state));
             }
             if (!outputChanged) break;
-            compiled.simulator().runUntilStable(EDGE_SETTLE_BUDGET);
+            simulator.runUntilStable(EDGE_SETTLE_BUDGET);
         }
         return fired;
     }
 
     /** Aligns RANDOM edge memory to the current trigger levels without emitting a new value. */
     public void synchronizeRandomInputs() {
-        for (RandomState state : randomSources.values()) {
-            state.lastHigh = state.trigger != null && state.trigger.value() == LogicValue.HIGH;
+        RandomState[] states = randomRuntime;
+        for (int index = 0; index < states.length; index++) {
+            RandomState state = states[index];
+            state.lastHigh = simulator.isHigh(state.triggerSignalId);
         }
     }
 
     private Runnable sourceCallback(Runnable afterSettledEdge) {
-        Runnable downstream = afterSettledEdge == null ? () -> {} : afterSettledEdge;
+        if (randomRuntime.length == 0) return afterSettledEdge;
         return () -> {
             processRandomSources();
-            downstream.run();
+            if (afterSettledEdge != null) afterSettledEdge.run();
         };
     }
 
@@ -159,25 +170,32 @@ public final class CircuitTimingController {
                 node.width = 1;
                 node.constantValue = 0L;
                 node.randomChancePercent = Math.max(0, Math.min(100, node.randomChancePercent));
-                Signal output = compiled.simulator().signalByPath(constantSignalPath(scope, node.id));
+                Signal output = simulator.signalByPath(constantSignalPath(scope, node.id));
                 if (output == null) throw new IllegalStateException("Compiled RANDOM signal not found: " + scope + "/" + node.id);
                 Signal trigger = compiled.inputSignal(scope, node.id, 0, 0);
                 if (trigger == null) throw new IllegalStateException("Compiled RANDOM trigger not found: " + scope + "/" + node.id);
                 RandomAddress randomAddress = new RandomAddress(scope, node.id);
-                randomSources.put(randomAddress, new RandomState(output, trigger, node.randomChancePercent));
+                long seed = mix64(System.nanoTime() ^ ((long) output.id() << 32) ^ trigger.id() ^ node.id);
+                randomSources.put(randomAddress, new RandomState(
+                        output.id(),
+                        trigger.id(),
+                        node.randomChancePercent,
+                        simulator.isHigh(trigger.id()),
+                        seed
+                ));
             } else if (node.kind == NodeKind.CONSTANT && node.clockSource) {
                 node.width = 1;
                 node.constantValue = 0L;
                 long frequency = Math.max(1L, Math.min(50_000_000L, node.clockFrequencyHz));
                 node.clockFrequencyHz = frequency;
-                Signal signal = compiled.simulator().signalByPath(constantSignalPath(scope, node.id));
+                Signal signal = simulator.signalByPath(constantSignalPath(scope, node.id));
                 if (signal == null) throw new IllegalStateException("Compiled CLOCK signal not found: " + scope + "/" + node.id);
                 ClockAddress clockAddress = new ClockAddress(scope, node.id);
-                clocks.put(clockAddress, new TimingSignalDriver(frequency, compiled.simulator(), signal, EDGE_SETTLE_BUDGET));
+                clocks.put(clockAddress, new TimingSignalDriver(frequency, simulator, signal, EDGE_SETTLE_BUDGET));
                 if (hasEnableWire(document, node.id)) {
                     Signal enable = compiled.inputSignal(scope, node.id, 0, 0);
                     if (enable == null) throw new IllegalStateException("Compiled CLOCK enable not found: " + scope + "/" + node.id);
-                    clockEnableSignals.put(clockAddress, enable);
+                    clockEnableSignalIds.put(clockAddress, enable.id());
                 }
             }
 
@@ -192,10 +210,28 @@ public final class CircuitTimingController {
         }
     }
 
-    private static boolean sampleHigh(int chancePercent) {
+    private static boolean sampleHigh(RandomState state) {
+        int chancePercent = state.chancePercent;
         if (chancePercent <= 0) return false;
         if (chancePercent >= 100) return true;
-        return ThreadLocalRandom.current().nextInt(100) < chancePercent;
+
+        // xorshift64: tiny state, no ThreadLocal lookup, and more than adequate for a simulated RANDOM component.
+        long x = state.rngState;
+        x ^= x << 13;
+        x ^= x >>> 7;
+        x ^= x << 17;
+        if (x == 0L) x = RNG_NONZERO_FALLBACK;
+        state.rngState = x;
+
+        long unsigned32 = (x >>> 32) & 0xFFFF_FFFFL;
+        int bucket0to99 = (int) ((unsigned32 * 100L) >>> 32);
+        return bucket0to99 < chancePercent;
+    }
+
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
     }
 
     private static boolean hasEnableWire(CircuitDocument document, int clockNodeId) {
