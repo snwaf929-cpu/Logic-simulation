@@ -6,27 +6,53 @@ import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import com.foreverspark.logicsim.mixin.client.CanvasAccess;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 
-import java.util.List;
+import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.WeakHashMap;
 
+/**
+ * Lightweight live timing preview for the one editor canvas that is actually on screen.
+ *
+ * Old versions ticked every CircuitCanvasWidget retained by old Screen instances/resizes. That meant closed editor
+ * previews could continue consuming the render thread forever. Only the most recently attached live canvas is now
+ * eligible to run, and all preview state is dropped as soon as the editor screen is not open.
+ */
 public final class EditorClockRuntime {
     private static final long EDGE_BUDGET_PER_CLOCK_PER_FRAME = 5_000L;
     private static final long DIAGNOSTIC_WINDOW_NANOS = 1_000_000_000L;
     private static final Map<CircuitCanvasWidget, State> STATES = new WeakHashMap<>();
+    private static WeakReference<CircuitCanvasWidget> activeCanvas = new WeakReference<>(null);
 
     static {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            for (CircuitCanvasWidget canvas : List.copyOf(STATES.keySet())) frame(canvas);
+            if (!(client.screen instanceof CircuitEditorScreen)) {
+                clearAll();
+                return;
+            }
+            CircuitCanvasWidget canvas;
+            synchronized (EditorClockRuntime.class) {
+                canvas = activeCanvas.get();
+            }
+            if (canvas != null) frame(canvas);
         });
     }
 
     private EditorClockRuntime() {}
 
-    public static synchronized void attach(CircuitCanvasWidget canvas) { frame(canvas); }
+    public static synchronized void attach(CircuitCanvasWidget canvas) {
+        if (canvas == null) return;
+        CircuitCanvasWidget previous = activeCanvas.get();
+        if (previous != canvas) {
+            STATES.clear();
+            activeCanvas = new WeakReference<>(canvas);
+        }
+        frame(canvas);
+    }
 
     public static synchronized void frame(CircuitCanvasWidget canvas) {
         if (canvas == null) return;
+        if (activeCanvas.get() != canvas) return;
+
         CanvasAccess access = (CanvasAccess)(Object)canvas;
         CompiledCircuit compiled = access.logic$getRuntime();
         if (compiled == null) {
@@ -36,6 +62,7 @@ public final class EditorClockRuntime {
         State state = STATES.get(canvas);
         if (state == null || state.compiled != compiled) {
             state = new State(compiled, new CircuitTimingController(compiled, access.logic$getRuntimeRootDocument(), access.logic$getChipLibrary()), System.nanoTime());
+            STATES.clear();
             STATES.put(canvas, state);
             return;
         }
@@ -49,13 +76,14 @@ public final class EditorClockRuntime {
 
     /** Process non-clock edge-triggered sources after a manual editor input changes. */
     public static synchronized int processRandomSources(CircuitCanvasWidget canvas) {
-        if (canvas == null) return 0;
+        if (canvas == null || activeCanvas.get() != canvas) return 0;
         frame(canvas);
         State state = STATES.get(canvas);
         return state == null ? 0 : state.timing.processRandomSources();
     }
 
     public static synchronized CircuitTimingController timing(CircuitCanvasWidget canvas) {
+        if (canvas == null || activeCanvas.get() != canvas) return null;
         State state = STATES.get(canvas);
         return state == null ? null : state.timing;
     }
@@ -90,7 +118,14 @@ public final class EditorClockRuntime {
     }
 
     public static synchronized void invalidate(CircuitCanvasWidget canvas) {
-        if (canvas != null) STATES.remove(canvas);
+        if (canvas == null) return;
+        STATES.remove(canvas);
+        if (activeCanvas.get() == canvas) activeCanvas = new WeakReference<>(null);
+    }
+
+    public static synchronized void clearAll() {
+        STATES.clear();
+        activeCanvas = new WeakReference<>(null);
     }
 
     private static final class State {
