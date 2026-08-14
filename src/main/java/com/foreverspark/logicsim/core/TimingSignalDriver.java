@@ -39,14 +39,15 @@ public final class TimingSignalDriver {
         boolean level = timing.high();
         long completed = 0L;
         try {
-            for (; completed < executable; completed++) {
+            while (completed < executable) {
                 level = !level;
                 simulator.driveLevel(signalId, level);
                 simulator.runUntilStable(settleBudget);
+                completed++;
                 if (afterSettledEdge != null) afterSettledEdge.run();
             }
         } finally {
-            // If a user circuit throws, account only the prefix that really completed.
+            // If a user callback throws, account the edge whose circuit already settled before that callback.
             timing.commitExecutedEdges(completed);
         }
         return completed;
@@ -63,10 +64,11 @@ public final class TimingSignalDriver {
         boolean level = timing.high();
         long completed = 0L;
         try {
-            for (; completed < edges; completed++) {
+            while (completed < edges) {
                 level = !level;
                 simulator.driveLevel(signalId, level);
                 simulator.runUntilStable(settleBudget);
+                completed++;
                 if (afterSettledEdge != null) afterSettledEdge.run();
             }
         } finally {
