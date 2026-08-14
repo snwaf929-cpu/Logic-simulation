@@ -10,6 +10,8 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
@@ -19,7 +21,7 @@ import java.util.Arrays;
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     private static final String PIXEL = "█";
     /**
-     * The model's visible screen starts at z=0.75/16 on its NORTH/front side.
+     * The model's visible screen starts at z=0.75/16 on its local NORTH/front side.
      * Keep pixels just in front of that surface so they are flush without z-fighting or visibly floating.
      */
     private static final double SCREEN_FACE_Z = (0.75 / 16.0) - 0.001;
@@ -39,6 +41,13 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                                    Vec3 cameraPos, @Nullable ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         BlockEntityRenderer.super.extractRenderState(blockEntity, state, tickProgress, cameraPos, crumblingOverlay);
         state.facing = DisplayPorts.front(blockEntity.getBlockState());
+        BlockPos pos = blockEntity.getBlockPos();
+        state.cameraOnFront = isCameraOnFront(
+                state.facing,
+                cameraPos.x - (pos.getX() + 0.5),
+                cameraPos.y - (pos.getY() + 0.5),
+                cameraPos.z - (pos.getZ() + 0.5)
+        );
         state.pixelWidth = blockEntity.pixelWidth();
         state.pixelHeight = blockEntity.pixelHeight();
         Arrays.fill(state.pixels, 0xFF000000);
@@ -51,10 +60,14 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
 
     @Override
     public void submit(DisplayWorldRenderState state, PoseStack matrices, SubmitNodeCollector queue, CameraRenderState cameraState) {
+        // A physical monitor is one-sided. This also prevents the old SEE_THROUGH-style illusion
+        // where the front pixels appeared pasted onto the back of the display.
+        if (!state.cameraOnFront) return;
+
         matrices.pushPose();
         matrices.translate(0.5, 0.5, 0.5);
-        // Match the blockstate model rotation exactly. The old EAST/WEST signs were reversed,
-        // putting pixels on the wrong physical face for those orientations.
+        // PoseStack uses the normal world-space Y rotation convention. These angles rotate the
+        // local NORTH screen plane toward the actual FACING direction.
         matrices.mulPose(Axis.YP.rotationDegrees(rotationDegrees(state.facing)));
         matrices.translate(-0.5, -0.5, -0.5);
 
@@ -76,8 +89,8 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
                         y * 9.0f,
                         Component.literal(PIXEL).getVisualOrderText(),
                         false,
-                        // NORMAL participates in the world depth buffer. SEE_THROUGH made pixels visible
-                        // through the display itself and through unrelated solid blocks.
+                        // NORMAL uses the world depth-tested text layer. Pixels are therefore hidden
+                        // by blocks between the camera and the display instead of drawing through them.
                         pixelDisplayMode(),
                         state.lightCoords,
                         color,
@@ -89,15 +102,19 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         matrices.popPose();
     }
 
-    /** Same rotations used by display_block.json: north=0, east=90, south=180, west=270. */
-    static float rotationDegrees(net.minecraft.core.Direction facing) {
+    /** Rotates the local NORTH screen plane to the requested world-facing direction. */
+    static float rotationDegrees(Direction facing) {
         return switch (facing) {
             case NORTH -> 0.0f;
-            case EAST -> 90.0f;
+            case EAST -> -90.0f;
             case SOUTH -> 180.0f;
-            case WEST -> 270.0f;
+            case WEST -> 90.0f;
             default -> 0.0f;
         };
+    }
+
+    static boolean isCameraOnFront(Direction facing, double dx, double dy, double dz) {
+        return dx * facing.getStepX() + dy * facing.getStepY() + dz * facing.getStepZ() > 0.0;
     }
 
     static Font.DisplayMode pixelDisplayMode() {
