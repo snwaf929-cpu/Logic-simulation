@@ -138,15 +138,16 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
         }
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK BULK] circuit={} active=true outputIndex={} randomLanes={} mode=packed-direct-boundary maxEdgeChunk={} batchPublication=true",
-                self.getBlockPos(), outputIndex, current.directRandomBoundaryRandomLanes(outputIndex), LOGIC_BULK_EDGE_CHUNK
+                "[CLOCK BULK] circuit={} active=true outputIndex={} randomLanes={} mode=packed-direct-display maxEdgeChunk={} displayPreFilter=true logical={}x{} batchPublication=true",
+                self.getBlockPos(), outputIndex, current.directRandomBoundaryRandomLanes(outputIndex), LOGIC_BULK_EDGE_CHUNK,
+                surface.logicalWidth(), surface.logicalHeight()
         );
     }
 
     /**
      * Both clock-worker calls (queue elapsed time with budget 0, then consume fixed chunks) pass through here. The
-     * compiled direct plan keeps exact virtual edge accounting but emits one primitive DATA64 array per rising-edge
-     * chunk. Generic circuits keep their 4K fairness chunk; this single-clock zero-gate path can safely amortize the
+     * compiled direct plan keeps exact virtual edge accounting but emits only DATA64 commands that can affect the local
+     * display. Generic circuits keep their 4K fairness chunk; this single-clock zero-gate path can safely amortize the
      * same bookkeeping over a much larger 64K chunk.
      */
     @WrapOperation(
@@ -174,10 +175,12 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
             if (edgeBudget >= LOGIC_GENERIC_EDGE_CHUNK) {
                 bulkBudget = Math.min(LOGIC_BULK_EDGE_CHUNK, edgeBudget << 4);
             }
-            long emitted = current.advanceDirectRandomBoundaryNanos(
+            long emitted = current.advanceDirectRandomDisplayBoundaryNanos(
                     elapsedNanos,
                     bulkBudget,
                     outputIndex,
+                    surface.logicalWidth(),
+                    surface.logicalHeight(),
                     surface::recordBatch
             );
             if (emitted >= 0L) return emitted;
