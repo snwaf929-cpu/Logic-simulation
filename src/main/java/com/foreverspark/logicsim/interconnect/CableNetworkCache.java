@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.interconnect;
 
 import com.foreverspark.logicsim.block.CableBlock;
+import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.block.CircuitPortBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayPorts;
@@ -61,7 +62,6 @@ public final class CableNetworkCache {
         Set<BlockPos> segments = CableRun.collect(level, start, MAX_SEGMENTS);
         if (segments.isEmpty()) return null;
 
-        // A merge can overlap other cached nets from the previous world tick. Seed all of them first.
         Set<Network> overlapping = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
         for (BlockPos segment : segments) {
             Network old = state.bySegment.get(segment);
@@ -105,6 +105,9 @@ public final class CableNetworkCache {
                         && level.getBlockEntity(devicePos) instanceof CircuitPortBlockEntity socket
                         && socket.accepts(cable)) {
                     endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.CIRCUIT_SOCKET));
+                } else if (level.getBlockEntity(devicePos) instanceof CircuitBlockEntity circuit
+                        && DirectPortResolver.unique(circuit, cable.cableKind(), cable.bitWidth()) != null) {
+                    endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.CIRCUIT_DIRECT));
                 } else if (state.getBlock() instanceof DisplayBlock
                         && DisplayPorts.accepts(state, deviceFace, cable.cableKind(), cable.bitWidth())) {
                     endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.DISPLAY));
@@ -126,7 +129,7 @@ public final class CableNetworkCache {
         private final Map<BlockPos, Long> seeds = new LinkedHashMap<>();
     }
 
-    public enum EndpointKind { CIRCUIT_SOCKET, DISPLAY }
+    public enum EndpointKind { CIRCUIT_SOCKET, CIRCUIT_DIRECT, DISPLAY }
     public record Endpoint(BlockPos devicePos, Direction deviceFace, EndpointKind kind) {}
 
     public static final class Network {
