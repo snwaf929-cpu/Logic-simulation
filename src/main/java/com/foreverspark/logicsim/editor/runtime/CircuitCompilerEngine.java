@@ -55,10 +55,35 @@ final class CircuitCompilerEngine {
         private final Set<NodePortKey> resolvingOutputs = new HashSet<>();
         private final Set<Integer> realizedNands = new HashSet<>();
         private final Map<Integer, List<Signal[]>> customOutputCache = new HashMap<>();
+        private final Map<Integer, EditorNode> nodesById = new HashMap<>();
+        private final Map<NodePortKey, WireConnection> incomingWires = new HashMap<>();
         private boolean resolvedAll;
 
         private BuildContext(CircuitDocument document, ChipLookup chips, LogicCircuit circuit, String path, Map<Integer, Signal[]> inputOverrides, Map<Integer, Signal[]> rootInputs, Set<String> chipStack, Map<String, Map<NodePortKey, Signal[]>> scopedInputs, Map<String, Map<NodePortKey, Signal[]>> scopedOutputs) {
-            this.document = document; this.chips = chips; this.circuit = circuit; this.path = path; this.inputOverrides = inputOverrides; this.rootInputs = rootInputs; this.chipStack = chipStack; this.scopedInputs = scopedInputs; this.scopedOutputs = scopedOutputs;
+            this.document = document;
+            this.chips = chips;
+            this.circuit = circuit;
+            this.path = path;
+            this.inputOverrides = inputOverrides;
+            this.rootInputs = rootInputs;
+            this.chipStack = chipStack;
+            this.scopedInputs = scopedInputs;
+            this.scopedOutputs = scopedOutputs;
+            indexDocument();
+        }
+
+        private void indexDocument() {
+            for (EditorNode node : document.nodes) {
+                if (nodesById.putIfAbsent(node.id, node) != null) {
+                    throw new CircuitCompileException("Duplicate node id " + node.id);
+                }
+            }
+            for (WireConnection wire : document.wires) {
+                NodePortKey target = new NodePortKey(wire.targetNodeId(), wire.targetPort());
+                if (incomingWires.putIfAbsent(target, wire) != null) {
+                    throw new CircuitCompileException("Multiple wires drive node " + wire.targetNodeId() + " input " + wire.targetPort());
+                }
+            }
         }
 
         private void resolveAll() {
@@ -81,15 +106,12 @@ final class CircuitCompilerEngine {
             List<PortSpec> inputPorts = NodePorts.inputs(node, chips);
             if (port < 0 || port >= inputPorts.size()) throw new CircuitCompileException("Invalid input port " + port + " on node " + node.id);
             int width = inputPorts.get(port).width();
-            WireConnection matching = null;
-            for (WireConnection wire : document.wires) if (wire.targetNodeId() == node.id && wire.targetPort() == port) {
-                if (matching != null) throw new CircuitCompileException("Multiple wires drive node " + node.id + " input " + port);
-                matching = wire;
-            }
+            WireConnection matching = incomingWires.get(key);
             Signal[] signals;
             if (matching == null) signals = createSignals(path + "/NODE" + node.id + "/IN" + port + "/FLOAT", width, LogicValue.LOW);
             else {
-                EditorNode sourceNode = document.node(matching.sourceNodeId());
+                EditorNode sourceNode = nodesById.get(matching.sourceNodeId());
+                if (sourceNode == null) throw new CircuitCompileException("Unknown source node " + matching.sourceNodeId());
                 List<PortSpec> sourcePorts = NodePorts.outputs(sourceNode, chips);
                 if (matching.sourcePort() < 0 || matching.sourcePort() >= sourcePorts.size()) throw new CircuitCompileException("Invalid source port on node " + sourceNode.id);
                 int sourceWidth = sourcePorts.get(matching.sourcePort()).width();
