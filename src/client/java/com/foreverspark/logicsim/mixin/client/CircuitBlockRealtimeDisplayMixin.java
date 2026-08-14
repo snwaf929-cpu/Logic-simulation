@@ -34,7 +34,10 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
 
     @Unique private static final Field logic$displayTargetsField = logic$findDisplayTargetsField();
     @Unique private volatile Map<Object, RealtimeDisplaySurface.Surface> logic$realtimeTargets = Map.of();
+    @Unique private volatile RealtimeDisplaySurface.Surface logic$bulkSurface;
+    @Unique private volatile int logic$bulkOutputIndex = -1;
     @Unique private int logic$lastLoggedRealtimeTargetCount = -1;
+    @Unique private int logic$lastLoggedBulkOutputIndex = Integer.MIN_VALUE;
 
     @Inject(method = "refreshDisplayStreamPorts", at = @At("TAIL"))
     private void logic$refreshRealtimeDisplayRoutes(CallbackInfo ci) {
@@ -44,12 +47,14 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
         CircuitProgramRuntime current = runtime;
         if (current == null) {
             logic$setRealtimeTargets(self, Map.of());
+            logic$setBulkTarget(self, null, -1, null);
             return;
         }
 
         Object[] targets = logic$displayTargets(self);
         if (targets.length == 0) {
             logic$setRealtimeTargets(self, Map.of());
+            logic$setBulkTarget(self, current, -1, null);
             return;
         }
 
@@ -63,7 +68,25 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
             RealtimeDisplaySurface.Surface surface = RealtimeDisplaySurface.route(self.getBlockPos(), port.name());
             if (surface != null) mapped.put(target, surface);
         }
-        logic$setRealtimeTargets(self, mapped.isEmpty() ? Map.of() : Map.copyOf(mapped));
+        Map<Object, RealtimeDisplaySurface.Surface> immutable = mapped.isEmpty() ? Map.of() : Map.copyOf(mapped);
+        logic$setRealtimeTargets(self, immutable);
+
+        // The aggressive path is deliberately exact and narrow. If the programmed circuit exposes only one output and
+        // that output is the compiled CLOCK -> RANDOM boundary feeding this realtime wall, there is no second external
+        // observer whose intermediate state could be lost by batching.
+        int bulkIndex = -1;
+        RealtimeDisplaySurface.Surface bulkSurface = null;
+        if (current.outputPortCount() == 1 && current.directRandomBoundaryBatchEligible(0)) {
+            Object target = targets.length > 0 ? targets[0] : null;
+            if (target != null) {
+                RealtimeDisplaySurface.Surface candidate = immutable.get(target);
+                if (candidate != null) {
+                    bulkIndex = 0;
+                    bulkSurface = candidate;
+                }
+            }
+        }
+        logic$setBulkTarget(self, current, bulkIndex, bulkSurface);
     }
 
     @Unique
@@ -89,6 +112,70 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
                     (long) first.backingWidth() * first.backingHeight() >= 2_000_000L ? 30 : 60
             );
         }
+    }
+
+    @Unique
+    private void logic$setBulkTarget(
+            CircuitBlockEntity self,
+            CircuitProgramRuntime current,
+            int outputIndex,
+            RealtimeDisplaySurface.Surface surface
+    ) {
+        logic$bulkOutputIndex = outputIndex;
+        logic$bulkSurface = surface;
+        if (outputIndex == logic$lastLoggedBulkOutputIndex) return;
+        logic$lastLoggedBulkOutputIndex = outputIndex;
+
+        if (outputIndex < 0 || surface == null || current == null) {
+            LogicSimulationMod.LOGGER.info(
+                    "[CLOCK BULK] circuit={} active=false mode=normal-edge-engine",
+                    self.getBlockPos()
+            );
+            return;
+        }
+
+        LogicSimulationMod.LOGGER.info(
+                "[CLOCK BULK] circuit={} active=true outputIndex={} randomLanes={} mode=packed-direct-boundary batchPublication=true",
+                self.getBlockPos(), outputIndex, current.directRandomBoundaryRandomLanes(outputIndex)
+        );
+    }
+
+    /**
+     * Both clock-worker calls (queue elapsed time with budget 0, then consume fixed chunks) pass through here. The
+     * compiled direct plan keeps exact virtual edge accounting but emits one primitive DATA64 array per rising-edge
+     * chunk. No per-edge Runnable, dirty-mask scan, boundary read, DisplayCommandBuffer write or volatile texture
+     * publication remains in the hot path.
+     */
+    @WrapOperation(
+            method = "runClockWorkerSlice",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lcom/foreverspark/logicsim/interconnect/CircuitProgramRuntime;advanceClocksNanos(JJLjava/lang/Runnable;)J"
+            )
+    )
+    private long logic$advancePackedRealtimeClock(
+            CircuitProgramRuntime current,
+            long elapsedNanos,
+            long edgeBudget,
+            Runnable afterSettledEdge,
+            Operation<Long> original
+    ) {
+        int outputIndex = logic$bulkOutputIndex;
+        RealtimeDisplaySurface.Surface surface = logic$bulkSurface;
+        if (surface != null
+                && outputIndex >= 0
+                && current == runtime
+                && current.outputPortCount() == 1
+                && current.directRandomBoundaryBatchEligible(outputIndex)) {
+            long emitted = current.advanceDirectRandomBoundaryNanos(
+                    elapsedNanos,
+                    edgeBudget,
+                    outputIndex,
+                    surface::recordBatch
+            );
+            if (emitted >= 0L) return emitted;
+        }
+        return original.call(current, elapsedNanos, edgeBudget, afterSettledEdge);
     }
 
     @WrapOperation(
@@ -139,7 +226,10 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
     private void logic$removeRealtimeDisplayRoutes(CallbackInfo ci) {
         RealtimeDisplaySurface.removeRoutes((CircuitBlockEntity) (Object) this);
         logic$realtimeTargets = Map.of();
+        logic$bulkSurface = null;
+        logic$bulkOutputIndex = -1;
         logic$lastLoggedRealtimeTargetCount = -1;
+        logic$lastLoggedBulkOutputIndex = Integer.MIN_VALUE;
     }
 
     @Unique
