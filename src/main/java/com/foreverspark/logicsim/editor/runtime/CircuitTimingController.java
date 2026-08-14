@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.editor.runtime;
 
+import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.core.CircuitSimulator;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TimingSignalDriver;
@@ -38,11 +39,6 @@ public final class CircuitTimingController {
         }
     }
 
-    /**
-     * RANDOM blocks very commonly share one CLOCK. One trigger check serves the entire group. The group also owns
-     * one xorshift stream; every generated 64-bit word supplies four independent 16-bit probability samples, cutting
-     * PRNG state transitions by ~4x for wide RANDOM buses while retaining fine probability resolution.
-     */
     private static final class RandomTriggerGroup {
         private final int triggerSignalId;
         private final RandomState[] sources;
@@ -90,6 +86,7 @@ public final class CircuitTimingController {
         this.simulator = compiled.simulator();
         collect(root, chips == null ? ChipLookup.empty() : chips, CompiledCircuit.ROOT_SCOPE, Set.of());
         compileRandomGroups();
+        logCompileTopology();
     }
 
     public Set<ClockAddress> clocks() { return Collections.unmodifiableSet(clocks.keySet()); }
@@ -150,9 +147,6 @@ public final class CircuitTimingController {
         return emitted;
     }
 
-    /**
-     * RANDOM hot path checks each distinct trigger once, then samples only that trigger's outputs on LOW -> HIGH.
-     */
     public int processRandomSources() {
         RandomTriggerGroup[] groups = randomGroups;
         if (groups.length == 0) return 0;
@@ -232,6 +226,27 @@ public final class CircuitTimingController {
         randomGroups = groups;
     }
 
+    private void logCompileTopology() {
+        int queueFreeClocks = 0;
+        int feedbackClocks = 0;
+        long totalConeGates = 0L;
+        int maxConeGates = 0;
+        for (TimingSignalDriver driver : clocks.values()) {
+            int cone = driver.compiledConeGateCount();
+            if (cone >= 0) {
+                queueFreeClocks++;
+                totalConeGates += cone;
+                maxConeGates = Math.max(maxConeGates, cone);
+            } else {
+                feedbackClocks++;
+            }
+        }
+        LogicSimulationMod.LOGGER.info(
+                "[SIM COMPILE] clocks={} queueFreeClocks={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={}",
+                clocks.size(), queueFreeClocks, feedbackClocks, totalConeGates, maxConeGates, randomSources.size(), randomGroups.length
+        );
+    }
+
     private void collect(CircuitDocument document, ChipLookup chips, String scope, Set<String> chipStack) {
         document.normalize();
         for (EditorNode node : document.nodes) {
@@ -281,7 +296,6 @@ public final class CircuitTimingController {
         if (chancePercent <= 0) return false;
         if (chancePercent >= 100) return true;
         int sample = group.nextUnsigned16();
-        // threshold is 0..65535; error versus an exact integer percentage is below 0.0016 percentage points.
         int threshold = (chancePercent * 65_536) / 100;
         return sample < threshold;
     }
