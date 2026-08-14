@@ -7,11 +7,15 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+import java.util.function.Consumer;
 
 @Mixin(value = CircuitCanvasWidget.class, priority = 1250)
 public abstract class CircuitCanvasTerminalInteractionMixin {
     @Shadow private double zoom;
+    @Shadow private Consumer<String> status;
     @Shadow private int screenX(double worldX) { throw new AssertionError(); }
     @Shadow private int screenY(double worldY) { throw new AssertionError(); }
     @Shadow private double nodeWidth(EditorNode node) { throw new AssertionError(); }
@@ -29,5 +33,15 @@ public abstract class CircuitCanvasTerminalInteractionMixin {
         double cy = y + h * 0.5;
         cir.setReturnValue(mouseX >= cx - size * 0.5 && mouseX <= cx + size * 0.5
                 && mouseY >= cy - size * 0.5 && mouseY <= cy + size * 0.5);
+    }
+
+    @Inject(method = "toggleInput", at = @At("RETURN"))
+    private void logic$explainExternalInput(EditorNode node, CallbackInfo ci) {
+        status.accept("INPUT switch = editor simulation only. In the physical Circuit Block this is an EXTERNAL INPUT port; drive it from a world cable/connector or a parent chip.");
+    }
+
+    @Inject(method = "toggleConstant", at = @At("RETURN"))
+    private void logic$explainStoredConstant(EditorNode node, CallbackInfo ci) {
+        status.accept("CONSTANT is stored in the board and really runs in the physical Circuit Block. Use CONSTANT for fixed screen test values.");
     }
 }
