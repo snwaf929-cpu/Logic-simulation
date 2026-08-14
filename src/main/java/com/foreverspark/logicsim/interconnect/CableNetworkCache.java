@@ -106,7 +106,7 @@ public final class CableNetworkCache {
                         && socket.accepts(cable)) {
                     endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.CIRCUIT_SOCKET));
                 } else if (state.getBlock() instanceof DisplayBlock
-                        && DisplayPorts.widthAt(state, deviceFace) == cable.bitWidth()) {
+                        && DisplayPorts.accepts(state, deviceFace, cable.cableKind(), cable.bitWidth())) {
                     endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.DISPLAY));
                 }
             }
