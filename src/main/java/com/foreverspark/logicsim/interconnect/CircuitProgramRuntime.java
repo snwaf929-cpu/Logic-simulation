@@ -23,6 +23,8 @@ public final class CircuitProgramRuntime {
     private final Map<String, BoundaryPort> exactOutputs = new HashMap<>();
     private final List<PortSpec> inputPortSpecs;
     private final List<PortSpec> outputPortSpecs;
+    private final BoundaryPort[] inputRuntimePorts;
+    private final BoundaryPort[] outputRuntimePorts;
 
     public CircuitProgramRuntime(CircuitProgram program) {
         if (program == null) throw new IllegalArgumentException("Circuit program is required");
@@ -30,14 +32,20 @@ public final class CircuitProgramRuntime {
         this.program = program;
         this.compiled = program.compile();
         indexBoundary();
-        // These collections never change after compile. Returning a new stream().toList() on every simulated edge
-        // was a major allocation source at MHz rates.
-        this.inputPortSpecs = inputs.values().stream().map(BoundaryPort::spec).toList();
-        this.outputPortSpecs = outputs.values().stream().map(BoundaryPort::spec).toList();
+
+        this.inputRuntimePorts = inputs.values().toArray(BoundaryPort[]::new);
+        this.outputRuntimePorts = outputs.values().toArray(BoundaryPort[]::new);
+        this.inputPortSpecs = java.util.Arrays.stream(inputRuntimePorts).map(BoundaryPort::spec).toList();
+        this.outputPortSpecs = java.util.Arrays.stream(outputRuntimePorts).map(BoundaryPort::spec).toList();
+
         initializeBoundaryInputDefaults();
-        // Create edge-triggered infrastructure after saved boundary defaults are applied so a RANDOM
-        // trigger that is already HIGH when a board loads does not look like a fresh 0 -> 1 edge.
+        // Create edge-triggered infrastructure after saved boundary defaults are applied so a RANDOM trigger that is
+        // already HIGH when a board loads does not look like a fresh 0 -> 1 edge.
         this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
+
+        // From here onward this object is physical running hardware, not an editor model. Primitive simulator state
+        // is authoritative and editor Signal objects no longer need to be mirrored on every transition.
+        this.compiled.simulator().enableTurboMode();
     }
 
     public CircuitProgram program() { return program; }
@@ -58,6 +66,8 @@ public final class CircuitProgramRuntime {
 
     public List<PortSpec> inputPorts() { return inputPortSpecs; }
     public List<PortSpec> outputPorts() { return outputPortSpecs; }
+    public int outputPortCount() { return outputRuntimePorts.length; }
+    public PortSpec outputPort(int index) { return outputRuntimePorts[index].spec(); }
 
     public PortSpec port(String name, PortDirection direction) {
         BoundaryPort port = table(direction).get(key(name));
@@ -74,16 +84,17 @@ public final class CircuitProgramRuntime {
 
     public long inputValue(String name) {
         BoundaryPort port = directOrNormalized(exactInputs, inputs, name, "input");
-        return compiled.simulator().readUnsigned(port.valueSignals());
+        return compiled.simulator().readUnsigned(port.valueSignalIds());
     }
 
-    /**
-     * Hot-path boundary read used after simulated clock edges. The exact PortSpec name normally hits the first map,
-     * avoiding trim/lower-case String creation, NodePortKey allocation, scope lookup, and LogicValue[] conversion.
-     */
     public long outputValue(String name) {
         BoundaryPort port = directOrNormalized(exactOutputs, outputs, name, "output");
-        return compiled.simulator().readUnsigned(port.valueSignals());
+        return compiled.simulator().readUnsigned(port.valueSignalIds());
+    }
+
+    /** Fastest physical-boundary read: no String/Map lookup at all. */
+    public long outputValue(int index) {
+        return compiled.simulator().readUnsigned(outputRuntimePorts[index].valueSignalIds());
     }
 
     private void indexBoundary() {
@@ -123,7 +134,8 @@ public final class CircuitProgramRuntime {
     ) {
         if (valueSignals == null) throw new IllegalStateException("Compiled boundary port is unavailable: " + spec.name());
         String normalized = key(spec.name());
-        BoundaryPort port = new BoundaryPort(spec, nodeId, valueSignals);
+        int[] valueSignalIds = compiled.simulator().signalIds(valueSignals);
+        BoundaryPort port = new BoundaryPort(spec, nodeId, valueSignalIds);
         if (normalizedTable.putIfAbsent(normalized, port) != null) {
             throw new IllegalArgumentException("Duplicate external port name: " + spec.name());
         }
@@ -147,5 +159,5 @@ public final class CircuitProgramRuntime {
 
     private static String key(String name) { return name == null ? "" : name.trim().toLowerCase(Locale.ROOT); }
     private static long mask(long value, int width) { return width >= 64 ? value : value & ((1L << width) - 1L); }
-    private record BoundaryPort(PortSpec spec, int nodeId, Signal[] valueSignals) {}
+    private record BoundaryPort(PortSpec spec, int nodeId, int[] valueSignalIds) {}
 }
