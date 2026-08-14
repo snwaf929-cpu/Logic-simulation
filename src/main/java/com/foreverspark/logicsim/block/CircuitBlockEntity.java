@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.interconnect.CableRuntime;
@@ -7,6 +8,8 @@ import com.foreverspark.logicsim.interconnect.CircuitPortCatalog;
 import com.foreverspark.logicsim.interconnect.CircuitPortLinks;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
@@ -16,10 +19,16 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
 public final class CircuitBlockEntity extends BlockEntity {
+    public static final int MAX_BOARD_JSON = 2_000_000;
+    private static final int MAX_PROGRAM_JSON = 2_000_000;
+    private static final Gson BOARD_GSON = new GsonBuilder().disableHtmlEscaping().create();
+
     private static final long CLOCK_WALL_BUDGET_NANOS = 2_000_000L;
     private static final long CLOCK_HARD_EDGE_LIMIT_PER_TICK = 500_000L;
     private static final long CLOCK_CHUNK_EDGES_PER_CLOCK = 256L;
 
+    /** Editable CAD board stored independently from the compiled/running program. */
+    private String boardJson = "";
     private String programJson = "";
     private CircuitProgramRuntime runtime;
     private String runtimeError = "";
@@ -53,6 +62,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     public boolean isProgrammed() { return runtime != null; }
     public String runtimeError() { return runtimeError; }
     public String programName() { return runtime == null ? "" : runtime.program().root.name; }
+    public String boardJson() { return boardJson; }
     public long lastClockExecutedEdges() { return lastClockExecutedEdges; }
     public long lastClockPendingEdges() { return lastClockPendingEdges; }
     public long lastClockWallNanos() { return lastClockWallNanos; }
@@ -65,6 +75,27 @@ public final class CircuitBlockEntity extends BlockEntity {
 
     public PortSpec portSpec(String name, PortDirection direction) {
         return runtime == null ? null : runtime.port(name, direction);
+    }
+
+    /**
+     * Stores the editable board itself. This is deliberately separate from installProgramJson():
+     * closing the editor must never require compiling or naming a reusable chip just to preserve work.
+     */
+    public void installBoardJson(String json) {
+        String source = json == null ? "" : json.trim();
+        if (source.length() > MAX_BOARD_JSON) throw new IllegalArgumentException("Circuit board is too large");
+        CircuitDocument board;
+        if (source.isBlank()) {
+            board = new CircuitDocument();
+        } else {
+            board = BOARD_GSON.fromJson(source, CircuitDocument.class);
+            if (board == null) throw new IllegalArgumentException("Circuit board is empty");
+        }
+        board.normalize();
+        String canonical = BOARD_GSON.toJson(board);
+        if (canonical.length() > MAX_BOARD_JSON) throw new IllegalArgumentException("Circuit board is too large");
+        this.boardJson = canonical;
+        setChanged();
     }
 
     public void installProgramJson(String json) {
@@ -83,10 +114,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         publishOutputs();
     }
 
-    private static final int MAX_PROGRAM_JSON = 2_000_000;
-
     private void advanceClocksAdaptive(long elapsedNanos) {
-        // Queue all elapsed virtual time first. A zero edge budget executes nothing yet.
         runtime.advanceClocksNanos(elapsedNanos, 0L, this::publishOutputs);
 
         int clockCount = runtime.timing().clocks().size();
@@ -171,6 +199,7 @@ public final class CircuitBlockEntity extends BlockEntity {
 
     @Override
     protected void saveAdditional(ValueOutput output) {
+        if (!boardJson.isBlank()) output.putString("board", boardJson);
         if (!programJson.isBlank()) output.putString("program", programJson);
         super.saveAdditional(output);
     }
@@ -178,6 +207,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
+        boardJson = input.getStringOr("board", "");
         programJson = input.getStringOr("program", "");
         runtime = null;
         runtimeError = "";

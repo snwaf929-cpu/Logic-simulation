@@ -4,7 +4,6 @@ import com.foreverspark.logicsim.block.ConnectorBlocks;
 import com.foreverspark.logicsim.block.ModBlocks;
 import com.foreverspark.logicsim.network.CircuitStatsRequest;
 import com.foreverspark.logicsim.network.RequestCircuitPortsPayload;
-import com.foreverspark.logicsim.platform.ClientEditorBridge;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.world.InteractionHand;
@@ -22,7 +21,9 @@ public final class CircuitBlockUseHandler {
                 if (player.isShiftKeyDown()) {
                     ClientPlayNetworking.send(new CircuitStatsRequest(hit.getBlockPos()));
                 } else {
-                    ClientEditorBridge.openEditor(hit.getBlockPos());
+                    // Ask the server for this block's editable board before opening the editor.
+                    // This makes the board world-save data instead of a temporary client screen.
+                    ClientBoardNetworking.requestOpen(hit.getBlockPos());
                 }
                 return InteractionResult.SUCCESS;
             }

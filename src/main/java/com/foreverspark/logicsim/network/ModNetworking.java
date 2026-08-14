@@ -14,11 +14,15 @@ public final class ModNetworking {
 
     public static void initialize() {
         PayloadTypeRegistry.serverboundPlay().register(ProgramCircuitPayload.TYPE, ProgramCircuitPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(RequestCircuitBoardPayload.TYPE, RequestCircuitBoardPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(SaveCircuitBoardPayload.TYPE, SaveCircuitBoardPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(CircuitBoardPayload.TYPE, CircuitBoardPayload.CODEC);
+
         ServerPlayNetworking.registerGlobalReceiver(ProgramCircuitPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
             if (payload.programJson() == null || payload.programJson().isBlank()
                     || payload.programJson().length() > ProgramCircuitPayload.MAX_JSON_LENGTH) return;
-            if (player.distanceToSqr(Vec3.atCenterOf(payload.pos())) > MAX_PROGRAM_DISTANCE_SQUARED) return;
+            if (!near(player, payload.pos())) return;
             if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
             try {
                 circuit.installProgramJson(payload.programJson());
@@ -28,5 +32,32 @@ public final class ModNetworking {
                 player.sendSystemMessage(Component.literal("Circuit program rejected: " + message));
             }
         });
+
+        ServerPlayNetworking.registerGlobalReceiver(RequestCircuitBoardPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!near(player, payload.pos())) return;
+            if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
+            String json = circuit.boardJson();
+            if (json.length() <= CircuitBlockEntity.MAX_BOARD_JSON) {
+                ServerPlayNetworking.send(player, new CircuitBoardPayload(payload.pos(), json));
+            }
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SaveCircuitBoardPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!near(player, payload.pos())) return;
+            if (payload.boardJson() == null || payload.boardJson().length() > CircuitBlockEntity.MAX_BOARD_JSON) return;
+            if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
+            try {
+                circuit.installBoardJson(payload.boardJson());
+            } catch (RuntimeException error) {
+                String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+                player.sendSystemMessage(Component.literal("Board autosave failed: " + message));
+            }
+        });
+    }
+
+    private static boolean near(ServerPlayer player, net.minecraft.core.BlockPos pos) {
+        return player.distanceToSqr(Vec3.atCenterOf(pos)) <= MAX_PROGRAM_DISTANCE_SQUARED;
     }
 }

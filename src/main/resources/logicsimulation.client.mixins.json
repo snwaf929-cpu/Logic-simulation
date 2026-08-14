@@ -15,6 +15,7 @@
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
     "CircuitEditorProgramMixin",
+    "CircuitEditorBoardPersistenceMixin",
     "ClientChipLibraryBuiltinMixin",
     "ComponentLibraryClockMixin",
     "CanvasAccess"
