@@ -34,6 +34,11 @@ public abstract class CircuitCanvasTerminalRenderMixin {
 
     @Inject(method = "drawNode", at = @At("HEAD"), cancellable = true)
     private void logic$terminal(GuiGraphicsExtractor graphics, EditorNode node, CallbackInfo ci) {
+        if (node.kind == NodeKind.CONSTANT && node.randomSource) {
+            logic$random(graphics, node);
+            ci.cancel();
+            return;
+        }
         if (node.kind == NodeKind.CONSTANT && node.clockSource) {
             logic$clock(graphics, node);
             ci.cancel();
@@ -69,16 +74,7 @@ public abstract class CircuitCanvasTerminalRenderMixin {
             graphics.fill(sx + 2, sy + 2, sx + indicator - 1, sy + indicator - 1, stateColor);
         }
 
-        List<PortSpec> inputs = safeInputs(node);
-        List<PortSpec> outputs = safeOutputs(node);
-        for (int i = 0; i < inputs.size(); i++) {
-            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5,
-                    portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
-        }
-        for (int i = 0; i < outputs.size(); i++) {
-            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5,
-                    portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
-        }
+        logic$drawPorts(graphics, node);
         ci.cancel();
     }
 
@@ -91,10 +87,45 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         graphics.fill(x, y, x + w, y + h, 0xF0121820);
         graphics.outline(x, y, w, h, border);
         graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(4 * zoom)), accent);
-        logic$smallText(graphics, "CLOCK", x + w / 2, y + Math.max(7, (int)Math.round(9 * zoom)), Math.max(8, w - 6), 0xFFF4F8FC);
+        logic$smallText(graphics, "CLK", x + w / 2, y + Math.max(7, (int)Math.round(9 * zoom)), Math.max(8, w - 6), 0xFFF4F8FC);
         logic$smallText(graphics, EditorNode.formatFrequency(node.clockFrequencyHz), x + w / 2,
                 y + h - Math.max(15, (int)Math.round(16 * zoom)), Math.max(8, w - 6), 0xFF9BCBFF);
+        logic$drawPorts(graphics, node);
+    }
+
+    @Unique private void logic$random(GuiGraphicsExtractor graphics, EditorNode node) {
+        int x = screenX(node.x), y = screenY(node.y);
+        int w = Math.max(30, (int)Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(24, (int)Math.round(nodeHeight(node) * zoom));
+        int accent = 0xFFB06CE8;
+        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : accent;
+        LogicValue[] values = valueForNode(node);
+        int stateColor = logic$valueColor(values);
+
+        graphics.fill(x, y, x + w, y + h, 0xF015121A);
+        graphics.outline(x, y, w, h, border);
+        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(4 * zoom)), accent);
+        logic$smallText(graphics, "RANDOM", x + w / 2, y + Math.max(7, (int)Math.round(9 * zoom)), Math.max(8, w - 6), 0xFFF7F1FB);
+        logic$smallText(graphics, node.randomChancePercent + "% -> 1", x + w / 2,
+                y + h - Math.max(15, (int)Math.round(16 * zoom)), Math.max(8, w - 14), 0xFFC9A7E8);
+
+        int lamp = Math.max(3, (int)Math.round(5 * zoom));
+        int lx = x + w - lamp - Math.max(2, (int)Math.round(4 * zoom));
+        int ly = y + Math.max(6, (int)Math.round(8 * zoom));
+        graphics.fill(lx, ly, lx + lamp, ly + lamp, logic$darken(stateColor, 0.45));
+        graphics.outline(lx, ly, lamp, lamp, stateColor);
+        if (logic$isHigh(values) && lamp >= 4) graphics.fill(lx + 1, ly + 1, lx + lamp, ly + lamp, stateColor);
+
+        logic$drawPorts(graphics, node);
+    }
+
+    @Unique private void logic$drawPorts(GuiGraphicsExtractor graphics, EditorNode node) {
+        List<PortSpec> inputs = safeInputs(node);
         List<PortSpec> outputs = safeOutputs(node);
+        for (int i = 0; i < inputs.size(); i++) {
+            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5,
+                    portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
+        }
         for (int i = 0; i < outputs.size(); i++) {
             logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5,
                     portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
