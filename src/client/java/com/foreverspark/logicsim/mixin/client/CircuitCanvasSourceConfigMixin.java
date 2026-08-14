@@ -28,7 +28,7 @@ public abstract class CircuitCanvasSourceConfigMixin {
         if (node == null || node.kind != NodeKind.CONSTANT) return;
 
         CircuitCanvasWidget canvas = (CircuitCanvasWidget)(Object)this;
-        var parent = Minecraft.getInstance().screen;
+        var parent = Minecraft.getInstance().gui.getScreen();
 
         if (node.clockSource) {
             Minecraft.getInstance().gui.setScreen(SourceConfigScreen.clock(parent, node.clockFrequencyHz, hz -> {
