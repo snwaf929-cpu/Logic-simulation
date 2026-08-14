@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -54,10 +55,7 @@ public final class DisplayBlock extends BaseEntityBlock {
         return RenderShape.MODEL;
     }
 
-    /**
-     * Empty-hand right click = explain the connected screen.
-     * Shift + right click = change pixels per display block and report the new total resolution.
-     */
+    /** Empty-hand right click = screen + electrical diagnostics. Shift + right click = density. */
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
         if (!level.isClientSide()) {
@@ -97,6 +95,20 @@ public final class DisplayBlock extends BaseEntityBlock {
         ));
         player.sendSystemMessage(Component.literal(
                 "Connection: one Bus Cable [64] to any side/back display block. Shift+Right Click changes pixels/block."
+        ));
+
+        DisplayBlockEntity.WallSignalInfo signal = DisplayBlockEntity.wallSignalInfo(level, pos, state);
+        if (signal == null || !signal.hasReceivedData()) {
+            player.sendSystemMessage(Component.literal(
+                    "DATA64 diagnostic: NO signal has reached this screen yet. Check that the Circuit Block is programmed and the 64-bit bus is connected."
+            ));
+            return;
+        }
+        player.sendSystemMessage(Component.literal(
+                "DATA64 last received: " + DisplayCommandCodec.hex(signal.lastReceivedData())
+        ));
+        player.sendSystemMessage(Component.literal(
+                "Screen action: " + signal.lastActionStatus()
         ));
     }
 
