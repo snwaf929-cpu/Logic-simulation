@@ -91,7 +91,7 @@ public final class CircuitSimulator {
 
     /** Physical programmed circuits call this after compile/initialization. */
     public void enableTurboMode() {
-        if (traceRecorder != null) return; // tracing requires object-level transition metadata
+        if (traceRecorder != null) return;
         mirrorSignalObjects = false;
     }
 
@@ -109,7 +109,6 @@ public final class CircuitSimulator {
         return turboMode() ? updateSignalTurbo(signalId, encode(value)) : updateSignalDetailed(signalId, encode(value));
     }
 
-    /** Safe 1-bit source drive with id validation. */
     public boolean driveLevel(Signal signal, boolean high) {
         if (signal == null) throw new IllegalArgumentException("signal is required");
         int signalId = requireSignalId(signal);
@@ -149,12 +148,10 @@ public final class CircuitSimulator {
         return decode(values[signalId]);
     }
 
-    /** Finds a compiled signal by its stable hierarchy path in O(1). */
     public Signal signalByPath(String path) {
         return path == null ? null : signalsByPath.get(path);
     }
 
-    /** Converts stable Signal handles into primitive ids once at compile time. */
     public int[] signalIds(Signal[] bus) {
         if (bus == null) throw new IllegalArgumentException("bus is required");
         int[] ids = new int[bus.length];
@@ -162,10 +159,6 @@ public final class CircuitSimulator {
         return ids;
     }
 
-    /**
-     * Marks a compiled bus as one dirty-watch bit. Up to 64 physical output ports can therefore be tracked with one
-     * machine word and consumed after each settled edge without re-reading untouched buses.
-     */
     public void watchDirtyBit(int bitIndex, int[] signalIds) {
         if (bitIndex < 0 || bitIndex >= 64) throw new IllegalArgumentException("dirty bit must be 0..63");
         if (signalIds == null) throw new IllegalArgumentException("signal ids are required");
@@ -201,7 +194,6 @@ public final class CircuitSimulator {
         return readUnsignedFast(signalIds);
     }
 
-    /** Compile-validated MHz bus read. */
     public long readUnsignedFast(int[] signalIds) {
         long result = 0L;
         int bits = Math.min(64, signalIds.length);
@@ -215,12 +207,16 @@ public final class CircuitSimulator {
 
     public long runUntilStable(long maxGateEvaluations) {
         if (maxGateEvaluations <= 0L) throw new IllegalArgumentException("maxGateEvaluations must be > 0");
-        return turboMode()
-                ? runUntilStableTurbo(maxGateEvaluations)
-                : runUntilStableDetailed(maxGateEvaluations);
+        return turboMode() ? runUntilStableTurboInternal(maxGateEvaluations) : runUntilStableDetailed(maxGateEvaluations);
     }
 
-    private long runUntilStableTurbo(long maxGateEvaluations) {
+    /** Compile-validated programmed-hardware settle path; skips the mode dispatch on every clock edge. */
+    public long runUntilStableFast(long maxGateEvaluations) {
+        if (maxGateEvaluations <= 0L) throw new IllegalArgumentException("maxGateEvaluations must be > 0");
+        return runUntilStableTurboInternal(maxGateEvaluations);
+    }
+
+    private long runUntilStableTurboInternal(long maxGateEvaluations) {
         long evaluations = 0L;
         while (queueSize > 0) {
             if (evaluations >= maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
@@ -264,7 +260,6 @@ public final class CircuitSimulator {
     public long totalGateEvaluations() { return totalGateEvaluations; }
     public long transitionSequence() { return transitionSequence; }
 
-    /** Minimal programmed-hardware transition path. */
     private boolean updateSignalTurbo(int signalId, byte next) {
         if (values[signalId] == next) return false;
         values[signalId] = next;
