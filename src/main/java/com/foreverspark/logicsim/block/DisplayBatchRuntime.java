@@ -9,7 +9,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 /**
@@ -26,8 +25,8 @@ public final class DisplayBatchRuntime {
 
     private DisplayBatchRuntime() {}
 
-    public static Result apply(Level level, BlockPos touchedTile, List<Long> commands) {
-        if (level == null || level.isClientSide() || touchedTile == null || commands == null || commands.isEmpty()) {
+    public static Result apply(Level level, BlockPos touchedTile, long[] commands) {
+        if (level == null || level.isClientSide() || touchedTile == null || commands == null || commands.length == 0) {
             return new Result(0, 0, 0);
         }
 
@@ -39,9 +38,9 @@ public final class DisplayBatchRuntime {
                 .min(Comparator.comparingLong(BlockPos::asLong))
                 .orElse(touchedTile);
         if (!(level.getBlockEntity(controllerPos) instanceof DisplayBlockEntity controller)) {
-            return new Result(0, 0, commands.size());
+            return new Result(0, 0, commands.length);
         }
-        if (!controller.wallPowered()) return new Result(0, 0, commands.size());
+        if (!controller.wallPowered()) return new Result(0, 0, commands.length);
 
         int density = controller.pixelWidth();
         int columns = wall.maxHorizontal() - wall.minHorizontal() + 1;
