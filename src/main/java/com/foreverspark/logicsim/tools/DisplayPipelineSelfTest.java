@@ -19,7 +19,7 @@ public final class DisplayPipelineSelfTest {
 
     public static void main(String[] args) {
         testCompiledBoardProducesPixelCommand();
-        testPhysicalInputsStartLow();
+        testPhysicalInputDefaultsPersist();
         System.out.println("Display compiled DATA64 pipeline self-test: PASS");
     }
 
@@ -66,22 +66,22 @@ public final class DisplayPipelineSelfTest {
         check(framebuffer.pixelArgb(1, 1) == 0xFFFFFFFF, "white RGB565 really renders as white ARGB");
     }
 
-    private static void testPhysicalInputsStartLow() {
+    private static void testPhysicalInputDefaultsPersist() {
         CircuitDocument board = new CircuitDocument();
         EditorNode input = board.addNode(NodeKind.INPUT, 0, 0);
         input.width = 1;
         input.label = "TEST_IN";
+        input.inputDefaultValue = 1L;
         EditorNode output = board.addNode(NodeKind.OUTPUT, 120, 0);
         output.width = 1;
         output.label = "TEST_OUT";
         board.connect(input.id, 0, output.id, 0);
 
-        CircuitProgramRuntime runtime = new CircuitProgramRuntime(
-                new CircuitProgram(new ChipDefinition("INPUT_TEST", board), Map.of())
-        );
-        check(runtime.outputValue("TEST_OUT") == 0L, "undriven physical INPUT starts LOW");
-        runtime.driveInput("TEST_IN", 1L);
-        check(runtime.outputValue("TEST_OUT") == 1L, "physical INPUT responds to real external drive");
+        CircuitProgram saved = new CircuitProgram(new ChipDefinition("INPUT_TEST", board), Map.of());
+        CircuitProgramRuntime runtime = new CircuitProgramRuntime(CircuitProgram.fromJson(saved.toJson()));
+        check(runtime.outputValue("TEST_OUT") == 1L, "saved ON input remains ON after program reload");
+        runtime.driveInput("TEST_IN", 0L);
+        check(runtime.outputValue("TEST_OUT") == 0L, "real external input can override the saved manual default");
     }
 
     private static EditorNode constant(CircuitDocument board, int width, long value, double y) {
