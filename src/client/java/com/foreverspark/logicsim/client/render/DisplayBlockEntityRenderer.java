@@ -5,7 +5,6 @@ import com.foreverspark.logicsim.block.DisplayPorts;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
@@ -20,6 +19,8 @@ import java.util.Arrays;
 
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
     private static final String PIXEL = "█";
+    /** Vanilla packed block-light 15 + sky-light 15. Kept local because the helper class moved in 26.2 mappings. */
+    private static final int FULL_BRIGHT = 0x00F000F0;
     /** display_block.json puts the visible local-NORTH screen surface at z=0.75/16. */
     private static final double SCREEN_FACE_Z = (0.75 / 16.0) - 0.001;
     private final Font font;
@@ -59,7 +60,7 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
 
         /*
          * Follow the same transform convention used by current 26.x block-entity text renderers:
-         * rotate around negative Y using the opposite direction's vanilla yaw.  This maps the model's
+         * rotate around negative Y using the opposite direction's vanilla yaw. This maps the model's
          * local NORTH screen plane to the block's FACING direction without copying blockstate JSON signs.
          */
         pose.mulPose(Axis.YN.rotationDegrees(surfaceYawDegrees(state.facing)));
@@ -68,9 +69,9 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         pose.translate(-0.499, 0.499, screenFaceZ() - 0.5);
 
         /*
-         * Do not mirror the PoseStack with a negative scale.  Mirroring flips geometry winding and made
-         * the glyph disappear with depth-tested text modes.  Rotate 180 degrees around Z and keep both
-         * scales positive, which is the normal surface-text pattern in current Minecraft renderers.
+         * Do not mirror the PoseStack with a negative scale. Mirroring flips geometry winding and can make
+         * depth-tested glyphs disappear. Rotate 180 degrees around Z and keep scales positive, which is the
+         * normal surface-text pattern in current Minecraft renderers.
          */
         pose.mulPose(Axis.ZN.rotationDegrees(180.0f));
         pose.scale(scaleX, scaleY, scaleX);
@@ -122,7 +123,7 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
 
     /** A monitor pixel is emissive; its RGB565 value should not become black because the block is unlit. */
     static int pixelLight() {
-        return LightTexture.FULL_BRIGHT;
+        return FULL_BRIGHT;
     }
 
     static double screenFaceZ() {
