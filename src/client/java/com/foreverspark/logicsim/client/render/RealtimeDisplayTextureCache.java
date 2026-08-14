@@ -43,6 +43,8 @@ public final class RealtimeDisplayTextureCache {
         if (view == null) return false;
 
         RealtimeDisplaySurface.Surface surface = view.surface();
+        // Acquire the writer's batch publication before reading the plain framebuffer metadata/pixel arrays.
+        long published = surface.publishedRevision();
         state.hasPixels = surface.nonZeroPixels() > 0;
         if (!state.hasPixels) {
             state.textureId = null;
@@ -59,7 +61,6 @@ public final class RealtimeDisplayTextureCache {
         }
         entry.lastUsedNanos = now;
 
-        long published = surface.publishedRevision();
         long minInterval = (long) surface.backingWidth() * surface.backingHeight() >= LARGE_SURFACE_PIXELS
                 ? LARGE_FRAME_INTERVAL_NANOS
                 : SMALL_FRAME_INTERVAL_NANOS;
