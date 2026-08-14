@@ -15,7 +15,8 @@ public final class DisplayWorldRenderState extends BlockEntityRenderState {
     public int pixelHeight = DisplayBlockEntity.pixelHeightFor(DisplayBlockEntity.DEFAULT_PIXEL_WIDTH);
     public int runCount;
 
-    /** Cache key for the logical run list; geometry is rebuilt only when framebuffer contents/density change. */
+    /** Cache key for the logical run list; geometry is rebuilt only when source/framebuffer/density changes. */
+    public long sourcePos = Long.MIN_VALUE;
     public long framebufferRevision = Long.MIN_VALUE;
     public int cachedPixelWidth = -1;
     public int cachedPixelHeight = -1;
