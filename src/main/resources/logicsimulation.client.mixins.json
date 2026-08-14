@@ -8,6 +8,7 @@
     "CircuitCanvasBitTerminalMixin",
     "CircuitCanvasCompactGeometryMixin",
     "CircuitCanvasCompactRenderMixin",
+    "CircuitCanvasDuplicateMixin",
     "CircuitCanvasRoutingWidthMixin",
     "CircuitCanvasSourceConfigMixin",
     "CircuitCanvasTerminalInteractionMixin",

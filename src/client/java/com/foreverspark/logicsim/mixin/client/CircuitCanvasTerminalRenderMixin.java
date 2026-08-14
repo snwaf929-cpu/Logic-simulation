@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.core.LogicValue;
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.PortSpec;
@@ -18,6 +19,7 @@ import java.util.List;
 
 @Mixin(value = CircuitCanvasWidget.class, priority = 1500)
 public abstract class CircuitCanvasTerminalRenderMixin {
+    @Shadow private CircuitDocument document;
     @Shadow private double zoom;
     @Shadow private int screenX(double worldX) { throw new AssertionError(); }
     @Shadow private int screenY(double worldY) { throw new AssertionError(); }
@@ -54,7 +56,6 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         int accent = nodeAccent(node);
         int border = isNodeSelected(node.id) ? 0xFFFFFFFF : logic$darken(accent, 0.90);
 
-        // A terminal is a tiny hardware pin control, not a full component card.
         graphics.fill(x, y, x + w, y + h, 0xF010151B);
         graphics.outline(x, y, w, h, border);
 
@@ -66,8 +67,6 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         int sy = y + (h - indicator) / 2;
         int stateColor = logic$valueColor(values);
 
-        // INPUT: this square is the clickable saved ON/OFF switch.
-        // OUTPUT: the same square is a read-only live state indicator.
         graphics.fill(sx, sy, sx + indicator, sy + indicator, logic$darken(stateColor, 0.42));
         graphics.outline(sx, sy, indicator, indicator, stateColor);
         if (logic$isHigh(values) && indicator >= 5) {
@@ -93,30 +92,73 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         logic$drawPorts(graphics, node);
     }
 
+    /** RANDOM is a one-bit source, so it uses the same 18x12 footprint as INPUT/OUTPUT. */
     @Unique private void logic$random(GuiGraphicsExtractor graphics, EditorNode node) {
         int x = screenX(node.x), y = screenY(node.y);
-        int w = Math.max(30, (int)Math.round(nodeWidth(node) * zoom));
-        int h = Math.max(24, (int)Math.round(nodeHeight(node) * zoom));
+        int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(6, (int)Math.round(nodeHeight(node) * zoom));
         int accent = 0xFFB06CE8;
-        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : accent;
-        LogicValue[] values = valueForNode(node);
-        int stateColor = logic$valueColor(values);
+        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : logic$darken(accent, 0.90);
+        int stateColor = logic$valueColor(valueForNode(node));
 
-        graphics.fill(x, y, x + w, y + h, 0xF015121A);
+        graphics.fill(x, y, x + w, y + h, 0xF010151B);
         graphics.outline(x, y, w, h, border);
-        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(4 * zoom)), accent);
-        logic$smallText(graphics, "RANDOM", x + w / 2, y + Math.max(7, (int)Math.round(9 * zoom)), Math.max(8, w - 6), 0xFFF7F1FB);
-        logic$smallText(graphics, node.randomChancePercent + "% -> 1", x + w / 2,
-                y + h - Math.max(15, (int)Math.round(16 * zoom)), Math.max(8, w - 14), 0xFFC9A7E8);
 
-        int lamp = Math.max(3, (int)Math.round(5 * zoom));
-        int lx = x + w - lamp - Math.max(2, (int)Math.round(4 * zoom));
-        int ly = y + Math.max(6, (int)Math.round(8 * zoom));
-        graphics.fill(lx, ly, lx + lamp, ly + lamp, logic$darken(stateColor, 0.45));
+        if (zoom >= 0.72 && w >= 12 && h >= 9) {
+            String mark = "R";
+            graphics.text(font(), mark, x + Math.max(2, (w - font().width(mark)) / 2 - 2), y + Math.max(1, (h - 8) / 2), accent, false);
+        } else {
+            int core = Math.max(2, Math.min(h - 2, (int)Math.round(4 * zoom)));
+            int cx = x + Math.max(1, (w - core) / 2 - 1);
+            int cy = y + Math.max(1, (h - core) / 2);
+            graphics.fill(cx, cy, cx + core, cy + core, accent);
+        }
+
+        int lamp = Math.max(3, Math.min(h - 2, (int)Math.round(5 * zoom)));
+        int lx = x + w - lamp - Math.max(1, (int)Math.round(2 * zoom));
+        int ly = y + (h - lamp) / 2;
+        graphics.fill(lx, ly, lx + lamp, ly + lamp, logic$darken(stateColor, 0.42));
         graphics.outline(lx, ly, lamp, lamp, stateColor);
-        if (logic$isHigh(values) && lamp >= 4) graphics.fill(lx + 1, ly + 1, lx + lamp, ly + lamp, stateColor);
+        if (logic$isHigh(valueForNode(node)) && lamp >= 4) {
+            graphics.fill(lx + 1, ly + 1, lx + lamp, ly + lamp, stateColor);
+        }
 
         logic$drawPorts(graphics, node);
+    }
+
+    /** The compact body cannot carry a percentage label, so expose the full RANDOM state on hover. */
+    @Inject(method = "drawPortHoverTooltip", at = @At("HEAD"), cancellable = true)
+    private void logic$randomTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY, CallbackInfo ci) {
+        EditorNode random = null;
+        for (int i = document.nodes.size() - 1; i >= 0; i--) {
+            EditorNode node = document.nodes.get(i);
+            if (node.kind != NodeKind.CONSTANT || !node.randomSource) continue;
+            int x = screenX(node.x), y = screenY(node.y);
+            int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
+            int h = Math.max(6, (int)Math.round(nodeHeight(node) * zoom));
+            if (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h) {
+                random = node;
+                break;
+            }
+        }
+        if (random == null) return;
+
+        LogicValue[] values = valueForNode(random);
+        String state = logic$isHigh(values) ? "OUT 1" : "OUT 0";
+        String text = "RANDOM " + random.randomChancePercent + "%   TRIGGER 0 -> 1   " + state + "   double-click to edit";
+        int padding = 5;
+        int boxW = font().width(text) + padding * 2;
+        int boxH = 17;
+        CircuitCanvasWidget self = (CircuitCanvasWidget)(Object)this;
+        int x = Math.min(mouseX + 12, self.getX() + self.getWidth() - boxW - 3);
+        int y = mouseY - boxH - 8;
+        if (x < self.getX() + 3) x = self.getX() + 3;
+        if (y < self.getY() + 3) y = mouseY + 12;
+        y = Math.min(y, self.getY() + self.getHeight() - boxH - 3);
+        graphics.fill(x, y, x + boxW, y + boxH, 0xF0181D23);
+        graphics.outline(x, y, boxW, boxH, 0xFFB06CE8);
+        graphics.text(font(), text, x + padding, y + 5, 0xFFE8EDF3, false);
+        ci.cancel();
     }
 
     @Unique private void logic$drawPorts(GuiGraphicsExtractor graphics, EditorNode node) {
