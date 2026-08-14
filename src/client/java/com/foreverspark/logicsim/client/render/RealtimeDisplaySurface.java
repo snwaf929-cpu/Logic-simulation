@@ -278,6 +278,24 @@ public final class RealtimeDisplaySurface {
 
         /** Called under CircuitBlockEntity.runtimeLock, so this surface has one serialized simulation writer. */
         public void record(long raw) {
+            long before = revision;
+            recordUnpublished(raw);
+            if (revision != before) publishedRevision = revision;
+        }
+
+        /**
+         * Bulk clock path: apply thousands of DATA64 commands under the same single-writer lock and execute exactly one
+         * volatile publication at the end. This removes a release fence from every simulated pixel at multi-MHz rates.
+         */
+        public void recordBatch(long[] raws, int count) {
+            if (raws == null || count <= 0) return;
+            int limit = Math.min(count, raws.length);
+            long before = revision;
+            for (int index = 0; index < limit; index++) recordUnpublished(raws[index]);
+            if (revision != before) publishedRevision = revision;
+        }
+
+        private void recordUnpublished(long raw) {
             int opcode = (int) ((raw >>> 48) & 0xFFL);
             if (opcode == DisplayCommandCodec.OP_CLEAR) {
                 if (nonZeroPixels == 0) return;
@@ -285,14 +303,13 @@ public final class RealtimeDisplaySurface {
                 nonZeroPixels = 0;
                 long next = ++revision;
                 Arrays.fill(tileRevisions, next);
-                publishedRevision = next;
                 return;
             }
             if (opcode != DisplayCommandCodec.OP_PIXEL) return;
 
             int globalX = (int) ((raw >>> 16) & 0xFFFFL);
             int globalY = (int) ((raw >>> 32) & 0xFFFFL);
-            if (globalX < 0 || globalY < 0 || globalX >= logicalWidth || globalY >= logicalHeight) return;
+            if (globalX >= logicalWidth || globalY >= logicalHeight) return;
 
             int rgb565 = (int) (raw & 0xFFFFL);
             int tileX = globalX / density;
@@ -302,6 +319,21 @@ public final class RealtimeDisplaySurface {
             int scale = BACKING_TILE_SIZE / density;
             int backingX = tileX * BACKING_TILE_SIZE + localX * scale;
             int backingY = tileY * BACKING_TILE_SIZE + localY * scale;
+            int tileIndex = tileY * columns + tileX;
+
+            // 64x64 pixels/block is the high-resolution stress path. One logical pixel maps to one backing element,
+            // so avoid two nested loops and all changed/non-zero accumulators for the overwhelmingly common case.
+            if (scale == 1) {
+                int index = backingY * backingWidth + backingX;
+                int previous = pixels[index];
+                if (previous == rgb565) return;
+                pixels[index] = rgb565;
+                if (previous == 0 && rgb565 != 0) nonZeroPixels++;
+                else if (previous != 0 && rgb565 == 0) nonZeroPixels--;
+                long next = ++revision;
+                tileRevisions[tileIndex] = next;
+                return;
+            }
 
             int changed = 0;
             int nonZeroDelta = 0;
@@ -321,9 +353,7 @@ public final class RealtimeDisplaySurface {
 
             if (nonZeroDelta != 0) nonZeroPixels += nonZeroDelta;
             long next = ++revision;
-            tileRevisions[tileY * columns + tileX] = next;
-            // Release publication: the render thread reads this volatile first, then plain tile/pixel arrays.
-            publishedRevision = next;
+            tileRevisions[tileIndex] = next;
         }
 
         public BlockPos controllerPos() { return controllerPos; }
