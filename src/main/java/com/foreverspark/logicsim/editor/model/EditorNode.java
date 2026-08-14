@@ -9,6 +9,8 @@ public final class EditorNode {
     public String label = "";
     public String chipName = "";
     public long constantValue = 0L;
+    /** Saved manual/default value for root INPUT nodes in a physical Circuit Block. */
+    public long inputDefaultValue = 0L;
     /** Infrastructure source subtype: CONSTANT=false, virtual CLOCK=true. */
     public boolean clockSource = false;
     public long clockFrequencyHz = 1_000_000L;
