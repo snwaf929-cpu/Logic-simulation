@@ -15,7 +15,7 @@ import java.util.WeakHashMap;
  *
  * Old versions ticked every CircuitCanvasWidget retained by old Screen instances/resizes. That meant closed editor
  * previews could continue consuming the render thread forever. Only the most recently attached live canvas is now
- * eligible to run, and all preview state is dropped as soon as the editor screen is not open.
+ * eligible to run. CircuitEditorBoardPersistenceMixin calls clearAll() deterministically when the editor closes.
  */
 public final class EditorClockRuntime {
     private static final long EDGE_BUDGET_PER_CLOCK_PER_FRAME = 5_000L;
@@ -25,10 +25,6 @@ public final class EditorClockRuntime {
 
     static {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (!(client.screen instanceof CircuitEditorScreen)) {
-                clearAll();
-                return;
-            }
             CircuitCanvasWidget canvas;
             synchronized (EditorClockRuntime.class) {
                 canvas = activeCanvas.get();
@@ -50,8 +46,7 @@ public final class EditorClockRuntime {
     }
 
     public static synchronized void frame(CircuitCanvasWidget canvas) {
-        if (canvas == null) return;
-        if (activeCanvas.get() != canvas) return;
+        if (canvas == null || activeCanvas.get() != canvas) return;
 
         CanvasAccess access = (CanvasAccess)(Object)canvas;
         CompiledCircuit compiled = access.logic$getRuntime();
@@ -123,6 +118,7 @@ public final class EditorClockRuntime {
         if (activeCanvas.get() == canvas) activeCanvas = new WeakReference<>(null);
     }
 
+    /** Called from the editor's removed() lifecycle hook; no hidden preview is allowed to survive closing it. */
     public static synchronized void clearAll() {
         STATES.clear();
         activeCanvas = new WeakReference<>(null);
