@@ -66,12 +66,15 @@ public final class CircuitProgram implements ChipLookup {
         return GSON.toJson(this);
     }
 
+    /**
+     * Parses and normalizes a saved program. Compilation/validation is deliberately performed by
+     * CircuitProgramRuntime so installing a physical Circuit Block compiles the program exactly once.
+     */
     public static CircuitProgram fromJson(String json) {
         if (json == null || json.isBlank()) throw new IllegalArgumentException("Circuit program is empty");
         CircuitProgram program = GSON.fromJson(json, CircuitProgram.class);
         if (program == null) throw new IllegalArgumentException("Circuit program is invalid");
         program.normalize();
-        program.compile();
         return program;
     }
 }
