@@ -17,6 +17,7 @@
     "CircuitCanvasDisplayPlacementMixin",
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
+    "CircuitEditorScreenContextMixin",
     "CircuitEditorProgramMixin",
     "CircuitEditorBoardPersistenceMixin",
     "ClientChipLibraryBuiltinMixin",
