@@ -60,6 +60,8 @@ public final class CircuitTimingController {
         private final RandomChanceBucket[] buckets;
         /** Non-null only when every RANDOM in this trigger group is structurally wired from the same CLOCK. */
         private final ClockAddress directClock;
+        /** False for direct device/boundary RANDOM buses with no NAND consumers; those need no settle pass per sample. */
+        private final boolean settleRequired;
         private boolean lastHigh;
         private long rng0;
         private long rng1;
@@ -69,6 +71,7 @@ public final class CircuitTimingController {
                 int sourceCount,
                 RandomChanceBucket[] buckets,
                 ClockAddress directClock,
+                boolean settleRequired,
                 boolean lastHigh,
                 long seed
         ) {
@@ -76,6 +79,7 @@ public final class CircuitTimingController {
             this.sourceCount = sourceCount;
             this.buckets = buckets;
             this.directClock = directClock;
+            this.settleRequired = settleRequired;
             this.lastHigh = lastHigh;
 
             // xoroshiro128++ needs a non-zero 128-bit state. SplitMix-style seeding keeps neighboring trigger ids
@@ -200,16 +204,11 @@ public final class CircuitTimingController {
 
             long next;
             if (pulseBatch) {
-                // ENABLE is sampled once per worker chunk just like the normal timing path. While it is HIGH, falling
-                // clock levels are irrelevant to RANDOM and ordinary sampled outputs, so consume H/L bookkeeping in
-                // O(1) and execute only useful rising-edge device work.
+                // ENABLE is sampled once per worker chunk just like the normal timing path. Falling clock levels are
+                // consumed arithmetically; only useful rising-edge RANDOM work reaches the MHz hot loop.
                 next = clock.advanceNanosPulseBatch(elapsedNanos, edgeBudgetPerClock);
                 long risingEdges = clock.lastPulseRisingEdges();
-                for (long cycle = 0L; cycle < risingEdges; cycle++) {
-                    boolean changed = sampleGroupOutputs(directRandom, true);
-                    if (changed) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
-                    runOutputCallbackIfNeeded(afterSettledEdge);
-                }
+                runDirectRandomPulses(directRandom, risingEdges, afterSettledEdge);
                 directRandom.lastHigh = clock.timing().high();
             } else {
                 next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, sourceCallback(afterSettledEdge));
@@ -218,6 +217,29 @@ public final class CircuitTimingController {
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
         return emitted;
+    }
+
+    /**
+     * Direct CLOCK -> RANDOM path used by high-rate device/display workloads. It is intentionally separate from the
+     * general trigger scanner: the clock relationship, probability buckets and zero-gate settle requirement were all
+     * compiled already, so every rising edge does only RNG, primitive lane writes and (when needed) output capture.
+     */
+    private void runDirectRandomPulses(RandomTriggerGroup group, long risingEdges, Runnable afterSettledEdge) {
+        long cycle = 0L;
+        // Small explicit unroll trims loop-control/dispatch overhead at multi-MHz rates without changing RNG order.
+        for (; cycle + 3L < risingEdges; cycle += 4L) {
+            runDirectRandomPulse(group, afterSettledEdge);
+            runDirectRandomPulse(group, afterSettledEdge);
+            runDirectRandomPulse(group, afterSettledEdge);
+            runDirectRandomPulse(group, afterSettledEdge);
+        }
+        for (; cycle < risingEdges; cycle++) runDirectRandomPulse(group, afterSettledEdge);
+    }
+
+    private void runDirectRandomPulse(RandomTriggerGroup group, Runnable afterSettledEdge) {
+        boolean changed = sampleGroupOutputsTurbo(group);
+        if (changed && group.settleRequired) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
+        runOutputCallbackIfNeeded(afterSettledEdge);
     }
 
     /**
@@ -233,6 +255,7 @@ public final class CircuitTimingController {
         int maxPasses = Math.max(4, groups.length * 4 + 4);
         for (int pass = 0; pass < maxPasses; pass++) {
             boolean outputChanged = false;
+            boolean settleRequired = false;
 
             for (int groupIndex = 0; groupIndex < groups.length; groupIndex++) {
                 RandomTriggerGroup group = groups[groupIndex];
@@ -244,12 +267,16 @@ public final class CircuitTimingController {
                 if (!rising) continue;
 
                 fired += group.sourceCount;
-                outputChanged |= sampleGroupOutputs(group, turbo);
+                boolean changed = turbo ? sampleGroupOutputsTurbo(group) : sampleGroupOutputsDetailed(group);
+                outputChanged |= changed;
+                settleRequired |= changed && group.settleRequired;
             }
 
             if (!outputChanged) break;
-            if (turbo) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
-            else simulator.runUntilStable(EDGE_SETTLE_BUDGET);
+            if (settleRequired) {
+                if (turbo) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
+                else simulator.runUntilStable(EDGE_SETTLE_BUDGET);
+            }
         }
         return fired;
     }
@@ -265,7 +292,29 @@ public final class CircuitTimingController {
         }
     }
 
-    private boolean sampleGroupOutputs(RandomTriggerGroup group, boolean turbo) {
+    /** Fast primitive path. The common <=64-lane case avoids the old base/count loop entirely. */
+    private boolean sampleGroupOutputsTurbo(RandomTriggerGroup group) {
+        boolean outputChanged = false;
+        RandomChanceBucket[] buckets = group.buckets;
+        for (int bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
+            RandomChanceBucket bucket = buckets[bucketIndex];
+            int[] outputSignalIds = bucket.outputSignalIds;
+            int length = outputSignalIds.length;
+            if (length <= 64) {
+                long highMask = sampleMask(group, bucket.chancePercent, length);
+                outputChanged |= simulator.driveBitVectorFast(outputSignalIds, 0, length, highMask);
+                continue;
+            }
+            for (int base = 0; base < length; base += 64) {
+                int count = Math.min(64, length - base);
+                long highMask = sampleMask(group, bucket.chancePercent, count);
+                outputChanged |= simulator.driveBitVectorFast(outputSignalIds, base, count, highMask);
+            }
+        }
+        return outputChanged;
+    }
+
+    private boolean sampleGroupOutputsDetailed(RandomTriggerGroup group) {
         boolean outputChanged = false;
         RandomChanceBucket[] buckets = group.buckets;
         for (int bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
@@ -274,15 +323,11 @@ public final class CircuitTimingController {
             for (int base = 0; base < outputSignalIds.length; base += 64) {
                 int count = Math.min(64, outputSignalIds.length - base);
                 long highMask = sampleMask(group, bucket.chancePercent, count);
-                if (turbo) {
-                    outputChanged |= simulator.driveBitVectorFast(outputSignalIds, base, count, highMask);
-                } else {
-                    for (int lane = 0; lane < count; lane++) {
-                        outputChanged |= simulator.driveLevel(
-                                outputSignalIds[base + lane],
-                                ((highMask >>> lane) & 1L) != 0L
-                        );
-                    }
+                for (int lane = 0; lane < count; lane++) {
+                    outputChanged |= simulator.driveLevel(
+                            outputSignalIds[base + lane],
+                            ((highMask >>> lane) & 1L) != 0L
+                    );
                 }
             }
         }
@@ -339,6 +384,7 @@ public final class CircuitTimingController {
             boolean high = simulator.isHigh(triggerSignalId);
 
             ClockAddress directClock = commonDirectClock(sourceList);
+            boolean settleRequired = randomOutputsNeedSettling(sourceList);
             Map<Integer, List<RandomState>> byChance = new LinkedHashMap<>();
             for (RandomState source : sourceList) {
                 byChance.computeIfAbsent(source.chancePercent, ignored -> new ArrayList<>()).add(source);
@@ -360,6 +406,7 @@ public final class CircuitTimingController {
                     sourceList.size(),
                     buckets,
                     directClock,
+                    settleRequired,
                     high,
                     seed
             );
@@ -370,6 +417,15 @@ public final class CircuitTimingController {
         randomGroups = groups;
         randomGroupByTriggerSignal = Map.copyOf(byTriggerSignal);
         randomGroupByDirectClock = Map.copyOf(byDirectClock);
+    }
+
+    /** Compile-time only: determine whether changing any RANDOM lane can reach NAND logic. */
+    private boolean randomOutputsNeedSettling(List<RandomState> sourceList) {
+        for (RandomState source : sourceList) {
+            int[] cone = simulator.compileAcyclicCone(source.outputSignalId);
+            if (cone == null || cone.length != 0) return true;
+        }
+        return false;
     }
 
     private static ClockAddress commonDirectClock(List<RandomState> sourceList) {
@@ -390,6 +446,7 @@ public final class CircuitTimingController {
         int pulseBatchEnableWired = 0;
         int pulseBatchStructuralFallbacks = 0;
         int pulseBatchNoDirectRandom = 0;
+        int randomNoSettleGroups = 0;
         long totalConeGates = 0L;
         int maxConeGates = 0;
         int chanceBuckets = 0;
@@ -416,12 +473,15 @@ public final class CircuitTimingController {
                 pulseBatchNoDirectRandom++;
             }
         }
-        for (RandomTriggerGroup group : randomGroups) chanceBuckets += group.buckets.length;
+        for (RandomTriggerGroup group : randomGroups) {
+            chanceBuckets += group.buckets.length;
+            if (!group.settleRequired) randomNoSettleGroups++;
+        }
         LogicSimulationMod.LOGGER.info(
-                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} pulseBatchBoundaryBlocked={} pulseBatchEnableWired={} pulseBatchStructuralFallbacks={} pulseBatchNoDirectRandom={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={} losslessBoundarySignals={}",
+                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} pulseBatchBoundaryBlocked={} pulseBatchEnableWired={} pulseBatchStructuralFallbacks={} pulseBatchNoDirectRandom={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={} randomNoSettleGroups={} losslessBoundarySignals={}",
                 clocks.size(), queueFreeClocks, pulseBatchClocks, pulseBatchBoundaryBlocked, pulseBatchEnableWired,
                 pulseBatchStructuralFallbacks, pulseBatchNoDirectRandom, feedbackClocks, totalConeGates, maxConeGates,
-                randomSources.size(), randomGroups.length, chanceBuckets, losslessBoundarySignalIds.size()
+                randomSources.size(), randomGroups.length, chanceBuckets, randomNoSettleGroups, losslessBoundarySignalIds.size()
         );
     }
 
