@@ -131,6 +131,25 @@ public final class CircuitSimulator {
         return updateSignalTurbo(signalId, high ? HIGH : LOW);
     }
 
+    /**
+     * Drives up to 64 compile-validated one-bit lanes from one packed mask. This is intentionally validation-free:
+     * RANDOM/GPU/device compilers construct the id arrays once, then MHz execution stays in one primitive loop.
+     */
+    public boolean driveBitVectorFast(int[] signalIds, int offset, int count, long highMask) {
+        boolean changed = false;
+        int end = offset + count;
+        if (topologicalGateOrder != null) {
+            for (int index = offset, lane = 0; index < end; index++, lane++) {
+                changed |= setSignalTurboNoSchedule(signalIds[index], ((highMask >>> lane) & 1L) != 0L ? HIGH : LOW);
+            }
+        } else {
+            for (int index = offset, lane = 0; index < end; index++, lane++) {
+                changed |= updateSignalTurbo(signalIds[index], ((highMask >>> lane) & 1L) != 0L ? HIGH : LOW);
+            }
+        }
+        return changed;
+    }
+
     public boolean isHigh(Signal signal) {
         return values[requireSignalId(signal)] == HIGH;
     }
@@ -142,6 +161,18 @@ public final class CircuitSimulator {
 
     public boolean isHighFast(int signalId) {
         return values[signalId] == HIGH;
+    }
+
+    public boolean dirtyWatchEnabledFast() {
+        return dirtyWatchEnabled;
+    }
+
+    public boolean hasDirtyWatchBitsFast() {
+        return dirtyWatchBits != 0L;
+    }
+
+    public boolean isDirtyWatchedSignalFast(int signalId) {
+        return dirtyWatchBitsBySignal[signalId] != 0L;
     }
 
     public LogicValue read(Signal signal) {
@@ -292,7 +323,6 @@ public final class CircuitSimulator {
 
     private long runTopologicalFullPass(long maxGateEvaluations) {
         if (topologicalGateOrder.length > maxGateEvaluations) throw new UnstableCircuitException(maxGateEvaluations);
-        // Turbo DAG updates never queue consumers; defensive reset handles any queue left by pre-turbo initialization.
         clearScheduledQueue();
         for (int index = 0; index < topologicalGateOrder.length; index++) {
             int gateId = topologicalGateOrder[index];
@@ -402,7 +432,7 @@ public final class CircuitSimulator {
         Arrays.fill(producerBySignal, -1);
         for (int gateId = 0; gateId < gateCount; gateId++) {
             int outputSignal = gateOutput[gateId];
-            if (producerBySignal[outputSignal] != -1) return null; // multiple NAND drivers on one net
+            if (producerBySignal[outputSignal] != -1) return null;
             producerBySignal[outputSignal] = gateId;
         }
 
