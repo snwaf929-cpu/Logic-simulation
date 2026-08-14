@@ -38,6 +38,8 @@ public final class DisplayBlockEntity extends BlockEntity {
     private final DisplayFramebuffer framebuffer = new DisplayFramebuffer(MAX_WIDTH, MAX_HEIGHT);
     private int pixelWidth = DEFAULT_PIXEL_WIDTH;
     private boolean syncPending;
+    /** Send one authoritative framebuffer packet after a server-side block entity/chunk load. */
+    private boolean initialClientSyncSent;
     private long lastWallCommand = Long.MIN_VALUE;
     /** Last raw DATA64 observed by this physical tile; used to avoid rescanning an unchanged wall every tick. */
     private long lastCableValue = Long.MIN_VALUE;
@@ -129,8 +131,32 @@ public final class DisplayBlockEntity extends BlockEntity {
         );
     }
 
+    /** Returns the authoritative server RGB565 value for a global screen coordinate, or -1 when invalid/missing. */
+    public static int wallPixelRgb565(Level level, BlockPos start, BlockState startState, int globalX, int globalY) {
+        DisplayWall wall = collectWall(level, start, startState);
+        if (wall == null || wall.blocks().isEmpty()) return -1;
+        int density = level.getBlockEntity(start) instanceof DisplayBlockEntity display
+                ? display.pixelWidth()
+                : DEFAULT_PIXEL_WIDTH;
+        int columns = wall.maxHorizontal() - wall.minHorizontal() + 1;
+        int rows = wall.maxY() - wall.minY() + 1;
+        if (globalX < 0 || globalY < 0 || globalX >= columns * density || globalY >= rows * density) return -1;
+
+        BlockPos target = targetForGlobalPixel(wall, start, density, globalX, globalY);
+        if (target == null || !wall.blocks().contains(target)) return -1;
+        if (!(level.getBlockEntity(target) instanceof DisplayBlockEntity display)) return -1;
+        return display.framebuffer.pixelRgb565(globalX % density, globalY % density);
+    }
+
     public static void tick(Level level, BlockPos pos, BlockState state, DisplayBlockEntity display) {
         if (level.isClientSide()) return;
+
+        // Chunk/block-entity sync must not depend on another DRAW changing the framebuffer.  This sends the
+        // saved framebuffer once after load, preventing a valid server pixel from appearing black client-side.
+        if (!display.initialClientSyncSent) {
+            display.initialClientSyncSent = true;
+            display.syncPending = true;
+        }
 
         for (Direction direction : Direction.values()) {
             if (direction == DisplayPorts.front(state)) continue;
@@ -202,15 +228,8 @@ public final class DisplayBlockEntity extends BlockEntity {
             return;
         }
 
-        int targetHorizontal = wall.minHorizontal() + globalX / density;
-        int targetY = wall.maxY() - globalY / density;
-        BlockPos target = touchedTile.offset(
-                wall.right().getStepX() * targetHorizontal,
-                targetY - touchedTile.getY(),
-                wall.right().getStepZ() * targetHorizontal
-        );
-
-        if (!wall.blocks().contains(target)) {
+        BlockPos target = targetForGlobalPixel(wall, touchedTile, density, globalX, globalY);
+        if (target == null || !wall.blocks().contains(target)) {
             controller.lastActionStatus = "DRAW rejected: target tile is missing at (" + globalX + "," + globalY + ")";
             controller.setChanged();
             return;
@@ -221,6 +240,16 @@ public final class DisplayBlockEntity extends BlockEntity {
                     + " color=" + String.format(java.util.Locale.ROOT, "0x%04X", rgb565);
             controller.setChanged();
         }
+    }
+
+    private static BlockPos targetForGlobalPixel(DisplayWall wall, BlockPos origin, int density, int globalX, int globalY) {
+        int targetHorizontal = wall.minHorizontal() + globalX / density;
+        int targetY = wall.maxY() - globalY / density;
+        return origin.offset(
+                wall.right().getStepX() * targetHorizontal,
+                targetY - origin.getY(),
+                wall.right().getStepZ() * targetHorizontal
+        );
     }
 
     private static BlockPos controllerPos(DisplayWall wall, BlockPos fallback) {
@@ -272,14 +301,23 @@ public final class DisplayBlockEntity extends BlockEntity {
     public void writePixel(int x, int y, int rgb565) {
         if (x < 0 || x >= pixelWidth || y < 0 || y >= pixelHeight()) return;
         long before = framebuffer.revision();
-        framebuffer.writePixel(x, y, rgb565);
-        if (framebuffer.revision() != before) setChanged();
+        if (!framebuffer.writePixel(x, y, rgb565)) return;
+        if (framebuffer.revision() != before) {
+            setChanged();
+        } else {
+            // Re-sending an already-equal pixel is still a valid opportunity to repair a stale client copy.
+            syncPending = true;
+        }
     }
 
     public void clearScreen() {
         long before = framebuffer.revision();
         framebuffer.clear(0);
-        if (framebuffer.revision() != before) setChanged();
+        if (framebuffer.revision() != before) {
+            setChanged();
+        } else {
+            syncPending = true;
+        }
     }
 
     @Override
@@ -306,6 +344,7 @@ public final class DisplayBlockEntity extends BlockEntity {
             if (value != 0) framebuffer.writePixel(index % width, index / width, value);
         }
         framebuffer.markAllDirty();
+        initialClientSyncSent = false;
         lastWallCommand = Long.MIN_VALUE;
         lastCableValue = Long.MIN_VALUE;
         hasReceivedData = false;
