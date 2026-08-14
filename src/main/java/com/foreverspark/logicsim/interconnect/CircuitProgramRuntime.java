@@ -25,6 +25,8 @@ public final class CircuitProgramRuntime {
     private final List<PortSpec> outputPortSpecs;
     private final BoundaryPort[] inputRuntimePorts;
     private final BoundaryPort[] outputRuntimePorts;
+    private final boolean dirtyOutputTracking;
+    private long forcedDirtyOutputMask;
 
     public CircuitProgramRuntime(CircuitProgram program) {
         if (program == null) throw new IllegalArgumentException("Circuit program is required");
@@ -37,6 +39,20 @@ public final class CircuitProgramRuntime {
         this.outputRuntimePorts = outputs.values().toArray(BoundaryPort[]::new);
         this.inputPortSpecs = java.util.Arrays.stream(inputRuntimePorts).map(BoundaryPort::spec).toList();
         this.outputPortSpecs = java.util.Arrays.stream(outputRuntimePorts).map(BoundaryPort::spec).toList();
+
+        if (outputRuntimePorts.length <= 64) {
+            dirtyOutputTracking = true;
+            for (int index = 0; index < outputRuntimePorts.length; index++) {
+                compiled.simulator().watchDirtyBit(index, outputRuntimePorts[index].valueSignalIds());
+            }
+            forcedDirtyOutputMask = outputRuntimePorts.length == 64
+                    ? -1L
+                    : (outputRuntimePorts.length == 0 ? 0L : (1L << outputRuntimePorts.length) - 1L);
+        } else {
+            // Extremely wide physical interfaces fall back to polling all ports; normal CPU/GPU boards are <=64.
+            dirtyOutputTracking = false;
+            forcedDirtyOutputMask = -1L;
+        }
 
         initializeBoundaryInputDefaults();
         // Create edge-triggered infrastructure after saved boundary defaults are applied so a RANDOM trigger that is
@@ -68,6 +84,17 @@ public final class CircuitProgramRuntime {
     public List<PortSpec> outputPorts() { return outputPortSpecs; }
     public int outputPortCount() { return outputRuntimePorts.length; }
     public PortSpec outputPort(int index) { return outputRuntimePorts[index].spec(); }
+
+    /**
+     * Returns a 64-bit mask of boundary outputs that changed since the previous call. A freshly compiled runtime
+     * forces every output dirty once so its initial physical state is published.
+     */
+    public long consumeDirtyOutputMask() {
+        if (!dirtyOutputTracking) return -1L;
+        long result = forcedDirtyOutputMask | compiled.simulator().consumeDirtyWatchBits();
+        forcedDirtyOutputMask = 0L;
+        return result;
+    }
 
     public PortSpec port(String name, PortDirection direction) {
         BoundaryPort port = table(direction).get(key(name));
