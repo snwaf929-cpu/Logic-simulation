@@ -8,15 +8,14 @@ import java.util.concurrent.locks.LockSupport;
 /**
  * Dedicated wall-clock simulation worker for programmed circuit blocks.
  *
- * Minecraft ticks are deliberately NOT the clock source.  The worker repeatedly asks every
- * registered CircuitBlockEntity to advance from System.nanoTime().  Minecraft's server thread is
- * used only later for safe physical world I/O (cables, displays, block entities).
+ * Minecraft ticks are deliberately NOT the clock source. The worker repeatedly asks every registered
+ * CircuitBlockEntity to advance from System.nanoTime(). Minecraft's server thread is used only later for safe
+ * physical world I/O (cables, displays, block entities).
  */
 public final class CircuitSimulationWorker {
     private static final Set<CircuitBlockEntity> CIRCUITS = ConcurrentHashMap.newKeySet();
     private static final AtomicBoolean STARTED = new AtomicBoolean();
     private static final long IDLE_PARK_NANOS = 250_000L;
-    private static final long BUSY_PARK_NANOS = 25_000L;
 
     private CircuitSimulationWorker() {}
 
@@ -50,7 +49,15 @@ public final class CircuitSimulationWorker {
                     circuit.recordWorkerFailure(error);
                 }
             }
-            LockSupport.parkNanos(didWork ? BUSY_PARK_NANOS : IDLE_PARK_NANOS);
+
+            /*
+             * Never use a micro-sleep while the simulator is behind. Windows is free to oversleep a nominal
+             * 25 microseconds by a large amount, which was visibly capping MHz circuits while pendingEdges grew.
+             * When work was performed, immediately give the next slice a chance to consume the backlog. Only park
+             * when every registered circuit is caught up/idle.
+             */
+            if (didWork) Thread.onSpinWait();
+            else LockSupport.parkNanos(IDLE_PARK_NANOS);
         }
     }
 }
