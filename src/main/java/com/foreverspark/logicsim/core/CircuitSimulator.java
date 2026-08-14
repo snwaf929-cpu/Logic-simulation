@@ -134,14 +134,25 @@ public final class CircuitSimulator {
     /**
      * Drives up to 64 compile-validated one-bit lanes from one packed mask. This is intentionally validation-free:
      * RANDOM/GPU/device compilers construct the id arrays once, then MHz execution stays in one primitive loop.
+     *
+     * The queue-free topology path is deliberately inlined here. RANDOM-heavy display workloads call this millions
+     * of times per second; avoiding one helper call and one dirty-watch OR per lane materially reduces CPU work.
      */
     public boolean driveBitVectorFast(int[] signalIds, int offset, int count, long highMask) {
         boolean changed = false;
         int end = offset + count;
         if (topologicalGateOrder != null) {
+            boolean watchDirty = dirtyWatchEnabled;
+            long dirty = 0L;
             for (int index = offset, lane = 0; index < end; index++, lane++) {
-                changed |= setSignalTurboNoSchedule(signalIds[index], ((highMask >>> lane) & 1L) != 0L ? HIGH : LOW);
+                int signalId = signalIds[index];
+                byte next = (byte) ((highMask >>> lane) & 1L);
+                if (values[signalId] == next) continue;
+                values[signalId] = next;
+                changed = true;
+                if (watchDirty) dirty |= dirtyWatchBitsBySignal[signalId];
             }
+            if (watchDirty) dirtyWatchBits |= dirty;
         } else {
             for (int index = offset, lane = 0; index < end; index++, lane++) {
                 changed |= updateSignalTurbo(signalIds[index], ((highMask >>> lane) & 1L) != 0L ? HIGH : LOW);
@@ -299,13 +310,47 @@ public final class CircuitSimulator {
         return readUnsignedFast(signalIds);
     }
 
+    /**
+     * MHz boundary reads are usually 64-bit buses. Process eight lanes per branch so valid LOW/HIGH data avoids the
+     * old per-bit UNKNOWN/HIGH branch pair. The rare UNKNOWN slow path still reports the exact offending bit.
+     */
     public long readUnsignedFast(int[] signalIds) {
         long result = 0L;
         int bits = Math.min(64, signalIds.length);
-        for (int bit = 0; bit < bits; bit++) {
+        int bit = 0;
+
+        for (; bit + 8 <= bits; bit += 8) {
+            int v0 = values[signalIds[bit]];
+            int v1 = values[signalIds[bit + 1]];
+            int v2 = values[signalIds[bit + 2]];
+            int v3 = values[signalIds[bit + 3]];
+            int v4 = values[signalIds[bit + 4]];
+            int v5 = values[signalIds[bit + 5]];
+            int v6 = values[signalIds[bit + 6]];
+            int v7 = values[signalIds[bit + 7]];
+
+            if (((v0 | v1 | v2 | v3 | v4 | v5 | v6 | v7) & UNKNOWN) != 0) {
+                for (int lane = 0; lane < 8; lane++) {
+                    if (values[signalIds[bit + lane]] == UNKNOWN) {
+                        throw new IllegalStateException("Port contains UNKNOWN at bit " + (bit + lane));
+                    }
+                }
+            }
+
+            result |= (long) (v0 & 1) << bit;
+            result |= (long) (v1 & 1) << (bit + 1);
+            result |= (long) (v2 & 1) << (bit + 2);
+            result |= (long) (v3 & 1) << (bit + 3);
+            result |= (long) (v4 & 1) << (bit + 4);
+            result |= (long) (v5 & 1) << (bit + 5);
+            result |= (long) (v6 & 1) << (bit + 6);
+            result |= (long) (v7 & 1) << (bit + 7);
+        }
+
+        for (; bit < bits; bit++) {
             byte value = values[signalIds[bit]];
             if (value == UNKNOWN) throw new IllegalStateException("Port contains UNKNOWN at bit " + bit);
-            if (value == HIGH) result |= (1L << bit);
+            result |= (long) (value & 1) << bit;
         }
         return result;
     }
@@ -317,7 +362,11 @@ public final class CircuitSimulator {
 
     public long runUntilStableFast(long maxGateEvaluations) {
         if (maxGateEvaluations <= 0L) throw new IllegalArgumentException("maxGateEvaluations must be > 0");
-        if (topologicalGateOrder != null) return runTopologicalFullPass(maxGateEvaluations);
+        if (topologicalGateOrder != null) {
+            // Zero-gate device/RANDOM topologies are common in display stress tests. Nothing can be scheduled here.
+            if (topologicalGateOrder.length == 0) return 0L;
+            return runTopologicalFullPass(maxGateEvaluations);
+        }
         return runEventTurbo(maxGateEvaluations);
     }
 
