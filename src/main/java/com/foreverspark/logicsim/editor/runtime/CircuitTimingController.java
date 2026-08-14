@@ -4,6 +4,7 @@ import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.core.CircuitSimulator;
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.core.TimingSignalDriver;
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipLookup;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
@@ -26,6 +27,7 @@ public final class CircuitTimingController {
     private static final long RNG_SEED_GAMMA = 0x9E3779B97F4A7C15L;
     private static final int DIRECT_RANDOM_MAX_LANES = 64;
     private static final int DIRECT_BOUNDARY_MAX_BITS = 64;
+    private static final long DATA64_OPCODE_MASK = 0xFFL << 48;
 
     @FunctionalInterface
     public interface LongBatchConsumer {
@@ -176,12 +178,30 @@ public final class CircuitTimingController {
         }
     }
 
+    private static final class BoundaryRequirement {
+        private static final BoundaryRequirement IMPOSSIBLE = new BoundaryRequirement(false, 0L, 0L);
+
+        private final boolean possible;
+        private final long zeroLanes;
+        private final long oneLanes;
+
+        private BoundaryRequirement(boolean possible, long zeroLanes, long oneLanes) {
+            this.possible = possible;
+            this.zeroLanes = zeroLanes;
+            this.oneLanes = oneLanes;
+        }
+
+        private boolean matches(long laneMask) {
+            return possible && (laneMask & zeroLanes) == 0L && (laneMask & oneLanes) == oneLanes;
+        }
+    }
+
     /**
      * Compiled zero-gate CLOCK -> RANDOM -> one boundary bus plan.
      *
      * Instead of writing 48 RANDOM signals and rereading a 64-bit output for every virtual cycle, this plan keeps
-     * RANDOM values packed in one long, scatters those lanes directly into the boundary word through six tiny lookup
-     * tables for the 48-lane benchmark, and commits only the final RANDOM state back to the simulator.
+     * RANDOM values packed in one long, scatters those lanes directly into the boundary word through tiny lookup
+     * tables, and commits only the final RANDOM state back to the simulator.
      */
     public final class DirectRandomBoundaryPlan {
         private final int generation;
@@ -189,6 +209,7 @@ public final class CircuitTimingController {
         private final TimingSignalDriver clock;
         private final RandomTriggerGroup group;
         private final int[] boundarySignalIds;
+        private final long[] laneBoundaryMasks;
         private final long randomBoundaryMask;
         private final long clockBoundaryMask;
         private final long[][] scatterTables;
@@ -200,6 +221,7 @@ public final class CircuitTimingController {
                 TimingSignalDriver clock,
                 RandomTriggerGroup group,
                 int[] boundarySignalIds,
+                long[] laneBoundaryMasks,
                 long randomBoundaryMask,
                 long clockBoundaryMask,
                 long[][] scatterTables
@@ -209,6 +231,7 @@ public final class CircuitTimingController {
             this.clock = clock;
             this.group = group;
             this.boundarySignalIds = boundarySignalIds;
+            this.laneBoundaryMasks = laneBoundaryMasks;
             this.randomBoundaryMask = randomBoundaryMask;
             this.clockBoundaryMask = clockBoundaryMask;
             this.scatterTables = scatterTables;
@@ -235,6 +258,30 @@ public final class CircuitTimingController {
                 result |= scatterTables[chunk][(int) ((laneMask >>> (chunk * 8)) & 0xFFL)];
             }
             return result;
+        }
+
+        private long lanesForBoundaryMask(long boundaryMask) {
+            long lanes = 0L;
+            for (int lane = 0; lane < laneBoundaryMasks.length; lane++) {
+                if ((laneBoundaryMasks[lane] & boundaryMask) != 0L) lanes |= 1L << lane;
+            }
+            return lanes;
+        }
+
+        private BoundaryRequirement compileRequirement(long baseRising, long zeroBoundaryMask, long oneBoundaryMask) {
+            if ((zeroBoundaryMask & oneBoundaryMask) != 0L) return BoundaryRequirement.IMPOSSIBLE;
+
+            long fixedMask = ~randomBoundaryMask;
+            long fixedZero = zeroBoundaryMask & fixedMask;
+            long fixedOne = oneBoundaryMask & fixedMask;
+            if ((baseRising & fixedZero) != 0L || (baseRising & fixedOne) != fixedOne) {
+                return BoundaryRequirement.IMPOSSIBLE;
+            }
+
+            long zeroLanes = lanesForBoundaryMask(zeroBoundaryMask & randomBoundaryMask);
+            long oneLanes = lanesForBoundaryMask(oneBoundaryMask & randomBoundaryMask);
+            if ((zeroLanes & oneLanes) != 0L) return BoundaryRequirement.IMPOSSIBLE;
+            return new BoundaryRequirement(true, zeroLanes, oneLanes);
         }
     }
 
@@ -371,6 +418,7 @@ public final class CircuitTimingController {
                 clock,
                 group,
                 boundary,
+                laneBoundaryMasks,
                 randomBoundaryMask,
                 clockBoundaryMask,
                 scatterTables
@@ -385,6 +433,42 @@ public final class CircuitTimingController {
             DirectRandomBoundaryPlan plan,
             long elapsedNanos,
             long edgeBudget,
+            LongBatchConsumer sink
+    ) {
+        return advanceDirectRandomBoundaryInternal(plan, elapsedNanos, edgeBudget, 0, 0, false, sink);
+    }
+
+    /**
+     * DATA64 display specialization. RANDOM still samples every rising edge, but commands that provably cannot affect
+     * the framebuffer are discarded before lane scatter, scratch writes, or framebuffer iteration. CLEAR is retained.
+     * Power-of-two display dimensions get exact X/Y high-bit rejection; other sizes retain exact bounds in the sink.
+     */
+    public long advanceDirectRandomDisplayBoundaryNanos(
+            DirectRandomBoundaryPlan plan,
+            long elapsedNanos,
+            long edgeBudget,
+            int displayWidth,
+            int displayHeight,
+            LongBatchConsumer sink
+    ) {
+        return advanceDirectRandomBoundaryInternal(
+                plan,
+                elapsedNanos,
+                edgeBudget,
+                displayWidth,
+                displayHeight,
+                true,
+                sink
+        );
+    }
+
+    private long advanceDirectRandomBoundaryInternal(
+            DirectRandomBoundaryPlan plan,
+            long elapsedNanos,
+            long edgeBudget,
+            int displayWidth,
+            int displayHeight,
+            boolean displayFilter,
             LongBatchConsumer sink
     ) {
         if (plan == null || plan.generation != randomGeneration || randomGroups.length != 1 || clocks.size() != 1) return -1L;
@@ -417,20 +501,59 @@ public final class CircuitTimingController {
         // the sampling instant. Falling-only bus changes are transport noise for this edge-triggered device stream.
         long baseRising = (currentBoundary & ~(plan.randomBoundaryMask | plan.clockBoundaryMask)) | plan.clockBoundaryMask;
 
+        BoundaryRequirement pixelRequirement = null;
+        BoundaryRequirement clearRequirement = null;
+        if (displayFilter) {
+            long pixelOpcode = (long) DisplayCommandCodec.OP_PIXEL << 48;
+            long clearOpcode = (long) DisplayCommandCodec.OP_CLEAR << 48;
+            long coordinateZeroMask = powerOfTwoCoordinateZeroMask(displayWidth, 16)
+                    | powerOfTwoCoordinateZeroMask(displayHeight, 32);
+            pixelRequirement = plan.compileRequirement(
+                    baseRising,
+                    (DATA64_OPCODE_MASK & ~pixelOpcode) | coordinateZeroMask,
+                    pixelOpcode
+            );
+            clearRequirement = plan.compileRequirement(
+                    baseRising,
+                    DATA64_OPCODE_MASK & ~clearOpcode,
+                    clearOpcode
+            );
+        }
+
         long finalLaneMask = 0L;
+        int outputCount = 0;
         for (int cycle = 0; cycle < count; cycle++) {
             long laneMask = samplePackedGroupMask(plan.group);
             finalLaneMask = laneMask;
-            plan.scratch[cycle] = baseRising | plan.scatter(laneMask);
+
+            if (displayFilter
+                    && !pixelRequirement.matches(laneMask)
+                    && !clearRequirement.matches(laneMask)) {
+                continue;
+            }
+            plan.scratch[outputCount++] = baseRising | plan.scatter(laneMask);
         }
 
         // Commit only the final RANDOM state to the primitive simulator. This replaces 48 signal writes per cycle with
-        // one packed write per worker chunk while preserving the exact boundary word produced on every rising edge.
+        // one packed write per worker chunk while preserving the exact final world/cable level.
         simulator.driveBitVectorFast(plan.group.packedOutputSignalIds, 0, plan.group.sourceCount, finalLaneMask);
         plan.group.lastHigh = clock.timing().high();
 
-        if (sink != null) sink.accept(plan.scratch, count);
+        if (sink != null && outputCount > 0) sink.accept(plan.scratch, outputCount);
         return emitted;
+    }
+
+    /**
+     * For a power-of-two 16-bit coordinate limit, coordinates are in range iff all bits above log2(limit)-1 are zero.
+     * Returning zero for non-power-of-two sizes disables only the early coordinate filter; the framebuffer still does
+     * its ordinary exact integer bounds check.
+     */
+    private static long powerOfTwoCoordinateZeroMask(int limit, int boundaryShift) {
+        if (limit <= 0 || limit >= 65_536 || (limit & (limit - 1)) != 0) return 0L;
+        int lowBits = Integer.numberOfTrailingZeros(limit);
+        long lowMask = lowBits == 0 ? 0L : (1L << lowBits) - 1L;
+        long highMask = 0xFFFFL & ~lowMask;
+        return highMask << boundaryShift;
     }
 
     public long stepEdges(String scopePath, int nodeId, long edges) {
