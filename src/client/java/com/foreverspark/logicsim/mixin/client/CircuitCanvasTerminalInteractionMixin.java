@@ -36,12 +36,12 @@ public abstract class CircuitCanvasTerminalInteractionMixin {
     }
 
     @Inject(method = "toggleInput", at = @At("RETURN"))
-    private void logic$explainExternalInput(EditorNode node, CallbackInfo ci) {
-        status.accept("INPUT switch = editor simulation only. In the physical Circuit Block this is an EXTERNAL INPUT port; drive it from a world cable/connector or a parent chip.");
+    private void logic$explainPersistentInput(EditorNode node, CallbackInfo ci) {
+        status.accept("INPUT manual state saved: leaving the editor keeps this value running in the Circuit Block. A real external input can still drive this port later.");
     }
 
     @Inject(method = "toggleConstant", at = @At("RETURN"))
     private void logic$explainStoredConstant(EditorNode node, CallbackInfo ci) {
-        status.accept("CONSTANT is stored in the board and really runs in the physical Circuit Block. Use CONSTANT for fixed screen test values.");
+        status.accept("CONSTANT is stored in the board and runs in the physical Circuit Block as a fixed internal source.");
     }
 }
