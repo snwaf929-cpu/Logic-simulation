@@ -10,9 +10,11 @@ import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.WireConnection;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -28,15 +30,30 @@ public final class CircuitTimingController {
         private final int outputSignalId;
         private final int triggerSignalId;
         private int chancePercent;
-        private boolean lastHigh;
         private long rngState;
 
-        private RandomState(int outputSignalId, int triggerSignalId, int chancePercent, boolean lastHigh, long seed) {
+        private RandomState(int outputSignalId, int triggerSignalId, int chancePercent, long seed) {
             this.outputSignalId = outputSignalId;
             this.triggerSignalId = triggerSignalId;
             this.chancePercent = chancePercent;
-            this.lastHigh = lastHigh;
             this.rngState = seed == 0L ? RNG_NONZERO_FALLBACK : seed;
+        }
+    }
+
+    /**
+     * RANDOM blocks very commonly share one CLOCK. Wires are flattened to identical Signal ids by the compiler, so
+     * checking that trigger once per group is equivalent to checking it once for every RANDOM block but dramatically
+     * cheaper at MHz rates.
+     */
+    private static final class RandomTriggerGroup {
+        private final int triggerSignalId;
+        private final RandomState[] sources;
+        private boolean lastHigh;
+
+        private RandomTriggerGroup(int triggerSignalId, RandomState[] sources, boolean lastHigh) {
+            this.triggerSignalId = triggerSignalId;
+            this.sources = sources;
+            this.lastHigh = lastHigh;
         }
     }
 
@@ -45,7 +62,8 @@ public final class CircuitTimingController {
     private final Map<ClockAddress, TimingSignalDriver> clocks = new LinkedHashMap<>();
     private final Map<ClockAddress, Integer> clockEnableSignalIds = new LinkedHashMap<>();
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
-    private RandomState[] randomRuntime = new RandomState[0];
+    private RandomTriggerGroup[] randomGroups = new RandomTriggerGroup[0];
+    private int randomSourceCount;
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
@@ -53,7 +71,7 @@ public final class CircuitTimingController {
         this.compiled = compiled;
         this.simulator = compiled.simulator();
         collect(root, chips == null ? ChipLookup.empty() : chips, CompiledCircuit.ROOT_SCOPE, Set.of());
-        randomRuntime = randomSources.values().toArray(RandomState[]::new);
+        compileRandomGroups();
     }
 
     public Set<ClockAddress> clocks() { return Collections.unmodifiableSet(clocks.keySet()); }
@@ -115,53 +133,94 @@ public final class CircuitTimingController {
     }
 
     /**
-     * RANDOM hot path uses only primitive ids once the physical runtime enters turbo mode. Its xorshift state is
-     * stored directly per source, avoiding ThreadLocalRandom and object/port lookups at MHz rates.
+     * RANDOM hot path checks each distinct trigger signal once per pass, then samples only that trigger's sources on
+     * LOW -> HIGH. If 32 RANDOM blocks share one clock, falling edges now perform one signal read instead of 32.
      */
     public int processRandomSources() {
-        RandomState[] states = randomRuntime;
-        if (states.length == 0) return 0;
+        RandomTriggerGroup[] groups = randomGroups;
+        if (groups.length == 0) return 0;
 
         boolean turbo = simulator.turboMode();
         int fired = 0;
-        int maxPasses = Math.max(4, states.length * 4 + 4);
+        int maxPasses = Math.max(4, groups.length * 4 + 4);
         for (int pass = 0; pass < maxPasses; pass++) {
             boolean outputChanged = false;
-            for (int index = 0; index < states.length; index++) {
-                RandomState state = states[index];
-                boolean high = turbo ? simulator.isHighFast(state.triggerSignalId) : simulator.isHigh(state.triggerSignalId);
-                boolean rising = high && !state.lastHigh;
-                state.lastHigh = high;
+            boolean sawRising = false;
+
+            for (int groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+                RandomTriggerGroup group = groups[groupIndex];
+                boolean high = turbo
+                        ? simulator.isHighFast(group.triggerSignalId)
+                        : simulator.isHigh(group.triggerSignalId);
+                boolean rising = high && !group.lastHigh;
+                group.lastHigh = high;
                 if (!rising) continue;
 
-                fired++;
-                boolean nextHigh = sampleHigh(state);
-                outputChanged |= turbo
-                        ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
-                        : simulator.driveLevel(state.outputSignalId, nextHigh);
+                sawRising = true;
+                RandomState[] sources = group.sources;
+                fired += sources.length;
+                for (int sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+                    RandomState state = sources[sourceIndex];
+                    boolean nextHigh = sampleHigh(state);
+                    outputChanged |= turbo
+                            ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
+                            : simulator.driveLevel(state.outputSignalId, nextHigh);
+                }
             }
+
             if (!outputChanged) break;
             if (turbo) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
             else simulator.runUntilStable(EDGE_SETTLE_BUDGET);
+
+            // No source rose in this pass means the settled RANDOM outputs cannot create a cascading trigger edge.
+            if (!sawRising) break;
         }
         return fired;
     }
 
     public void synchronizeRandomInputs() {
-        RandomState[] states = randomRuntime;
+        RandomTriggerGroup[] groups = randomGroups;
         boolean turbo = simulator.turboMode();
-        for (int index = 0; index < states.length; index++) {
-            RandomState state = states[index];
-            state.lastHigh = turbo ? simulator.isHighFast(state.triggerSignalId) : simulator.isHigh(state.triggerSignalId);
+        for (int index = 0; index < groups.length; index++) {
+            RandomTriggerGroup group = groups[index];
+            group.lastHigh = turbo
+                    ? simulator.isHighFast(group.triggerSignalId)
+                    : simulator.isHigh(group.triggerSignalId);
         }
     }
 
     private Runnable sourceCallback(Runnable afterSettledEdge) {
-        if (randomRuntime.length == 0) return afterSettledEdge;
+        if (randomGroups.length == 0) return afterSettledEdge;
         return () -> {
             processRandomSources();
             if (afterSettledEdge != null) afterSettledEdge.run();
         };
+    }
+
+    private void compileRandomGroups() {
+        if (randomSources.isEmpty()) {
+            randomGroups = new RandomTriggerGroup[0];
+            randomSourceCount = 0;
+            return;
+        }
+
+        Map<Integer, List<RandomState>> byTrigger = new LinkedHashMap<>();
+        for (RandomState state : randomSources.values()) {
+            byTrigger.computeIfAbsent(state.triggerSignalId, ignored -> new ArrayList<>()).add(state);
+        }
+
+        RandomTriggerGroup[] groups = new RandomTriggerGroup[byTrigger.size()];
+        int out = 0;
+        int sourceCount = 0;
+        for (Map.Entry<Integer, List<RandomState>> entry : byTrigger.entrySet()) {
+            RandomState[] sources = entry.getValue().toArray(RandomState[]::new);
+            sourceCount += sources.length;
+            int triggerSignalId = entry.getKey();
+            boolean high = simulator.isHigh(triggerSignalId);
+            groups[out++] = new RandomTriggerGroup(triggerSignalId, sources, high);
+        }
+        randomGroups = groups;
+        randomSourceCount = sourceCount;
     }
 
     private void collect(CircuitDocument document, ChipLookup chips, String scope, Set<String> chipStack) {
@@ -182,7 +241,6 @@ public final class CircuitTimingController {
                         output.id(),
                         trigger.id(),
                         node.randomChancePercent,
-                        simulator.isHigh(trigger.id()),
                         seed
                 ));
             } else if (node.kind == NodeKind.CONSTANT && node.clockSource) {
