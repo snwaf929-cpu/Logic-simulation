@@ -1,58 +1,83 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.LogicSimulationMod;
+
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.LockSupport;
+import java.util.stream.IntStream;
 
 /**
- * Dedicated wall-clock simulation worker for programmed circuit blocks.
+ * Dedicated wall-clock simulation workers for programmed circuit blocks.
  *
- * Minecraft ticks are deliberately NOT the clock source. The worker repeatedly asks every registered
- * CircuitBlockEntity to advance from System.nanoTime(). Minecraft's server/render threads must always win
- * scheduling contention: simulated MHz is allowed to run slower, but it is never allowed to freeze the game.
+ * Minecraft ticks are deliberately NOT the clock source. Each circuit is permanently assigned to one worker shard,
+ * so a single circuit remains deterministic/single-threaded while independent Circuit Blocks can execute on separate
+ * CPU cores. Minecraft's server/render threads still rely on the OS scheduler for pre-emption; the simulator no longer
+ * voluntarily yields after every hot slice because that destroyed cache locality and heavily penalized Windows/hybrid
+ * CPUs at MHz rates.
  */
 public final class CircuitSimulationWorker {
-    private static final Set<CircuitBlockEntity> CIRCUITS = ConcurrentHashMap.newKeySet();
+    private static final int PROCESSORS = Math.max(1, Runtime.getRuntime().availableProcessors());
+    private static final int WORKER_COUNT = chooseWorkerCount(PROCESSORS);
+    private static final int WORKER_PRIORITY = chooseWorkerPriority(PROCESSORS);
+
+    private static final List<Set<CircuitBlockEntity>> SHARDS = IntStream.range(0, WORKER_COUNT)
+            .mapToObj(ignored -> ConcurrentHashMap.<CircuitBlockEntity>newKeySet())
+            .toList();
     private static final AtomicBoolean STARTED = new AtomicBoolean();
-    private static final long IDLE_PARK_NANOS = 250_000L;
+
+    /** Idle workers may sleep; an active MHz worker should stay hot on its CPU/cache. */
+    private static final long IDLE_PARK_NANOS = 500_000L;
     /**
-     * Thread.yield() alone is only a scheduler hint and on Windows the same hot worker can immediately run again.
-     * Every few busy slices perform a real park/handoff. A 1 ns request is intentional: we want to leave the CPU,
-     * not sleep for a simulated-clock interval. The OS may round it upward, so do this infrequently.
+     * Java/Windows Thread.yield() can migrate the simulation thread and throw away its hot primitive-array cache.
+     * The OS already pre-empts normal-priority threads. Keep a very occasional real handoff only as a safety valve.
      */
-    private static final int HARD_HANDOFF_EVERY_BUSY_SLICES = 8;
+    private static final int HARD_HANDOFF_EVERY_BUSY_SLICES = 64;
 
     private CircuitSimulationWorker() {}
 
     public static void register(CircuitBlockEntity circuit) {
         if (circuit == null) return;
-        CIRCUITS.add(circuit);
+        SHARDS.get(shardIndex(circuit)).add(circuit);
         ensureStarted();
     }
 
     public static void unregister(CircuitBlockEntity circuit) {
-        if (circuit != null) CIRCUITS.remove(circuit);
+        if (circuit == null) return;
+        SHARDS.get(shardIndex(circuit)).remove(circuit);
     }
 
     private static void ensureStarted() {
         if (!STARTED.compareAndSet(false, true)) return;
-        Thread worker = Thread.ofPlatform()
-                .daemon(true)
-                .name("LogicSimulation-ClockWorker")
-                .unstarted(CircuitSimulationWorker::runLoop);
-        // Lowest Java priority is deliberate: spare CPU belongs to the virtual computer, but Minecraft's server,
-        // render, networking and chunk work must pre-empt it whenever they need time.
-        worker.setPriority(Thread.MIN_PRIORITY);
-        worker.start();
+
+        LogicSimulationMod.LOGGER.info(
+                "[CLOCK WORKERS] processors={} workers={} priority={} pacing=cache-hot-sharded minecraftTickIndependent=true",
+                PROCESSORS,
+                WORKER_COUNT,
+                WORKER_PRIORITY
+        );
+
+        for (int shard = 0; shard < WORKER_COUNT; shard++) {
+            final int workerShard = shard;
+            Thread worker = Thread.ofPlatform()
+                    .daemon(true)
+                    .name("LogicSimulation-ClockWorker-" + workerShard)
+                    .unstarted(() -> runLoop(workerShard));
+            worker.setPriority(WORKER_PRIORITY);
+            worker.start();
+        }
     }
 
-    private static void runLoop() {
+    private static void runLoop(int shardIndex) {
+        Set<CircuitBlockEntity> circuits = SHARDS.get(shardIndex);
         int consecutiveBusySlices = 0;
+
         while (true) {
             boolean didWork = false;
             long now = System.nanoTime();
-            for (CircuitBlockEntity circuit : CIRCUITS) {
+            for (CircuitBlockEntity circuit : circuits) {
                 try {
                     didWork |= circuit.runClockWorkerSlice(now);
                 } catch (Throwable error) {
@@ -64,15 +89,36 @@ public final class CircuitSimulationWorker {
                 consecutiveBusySlices++;
                 if (consecutiveBusySlices >= HARD_HANDOFF_EVERY_BUSY_SLICES) {
                     consecutiveBusySlices = 0;
-                    // Force an actual scheduler handoff so a saturated simulator cannot starve Minecraft for seconds.
+                    // Rare scheduler handoff. Normal OS pre-emption provides the actual Minecraft fairness.
                     LockSupport.parkNanos(1L);
                 } else {
-                    Thread.yield();
+                    // CPU hint only: unlike Thread.yield(), this does not voluntarily surrender the time slice.
+                    Thread.onSpinWait();
                 }
             } else {
                 consecutiveBusySlices = 0;
                 LockSupport.parkNanos(IDLE_PARK_NANOS);
             }
         }
+    }
+
+    private static int shardIndex(CircuitBlockEntity circuit) {
+        long position = circuit.getBlockPos().asLong();
+        int mixed = Long.hashCode(position);
+        return (mixed & 0x7FFFFFFF) % WORKER_COUNT;
+    }
+
+    private static int chooseWorkerCount(int processors) {
+        if (processors <= 4) return 1;
+        // Leave at least two logical CPUs for Minecraft/OS work and avoid spawning an excessive idle thread fleet.
+        return Math.max(2, Math.min(8, processors - 2));
+    }
+
+    private static int chooseWorkerPriority(int processors) {
+        // MIN_PRIORITY was a major throughput limiter on Windows hybrid CPUs. One notch above normal is reserved for
+        // machines with enough cores; smaller systems stay at normal priority so the game remains responsive.
+        return processors >= 8
+                ? Math.min(Thread.MAX_PRIORITY, Thread.NORM_PRIORITY + 1)
+                : Thread.NORM_PRIORITY;
     }
 }
