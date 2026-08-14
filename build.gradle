@@ -34,7 +34,7 @@ processResources {
     inputs.property "version", project.version
 
     filesMatching("fabric.mod.json") {
-        expand "version": project.version
+        expand "version", project.version
     }
 }
 
@@ -119,6 +119,14 @@ tasks.register('clientSelfTest', JavaExec) {
     dependsOn clientClasses
     classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
     mainClass = 'com.foreverspark.logicsim.client.chip.LibraryPersistenceSelfTest'
+}
+
+tasks.register('displayRendererSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates display front-face rotation, depth testing, and pixel-plane placement.'
+    dependsOn clientClasses
+    classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.client.render.DisplayRendererSelfTest'
 }
 
 tasks.register('benchmark', JavaExec) {
