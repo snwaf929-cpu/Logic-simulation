@@ -20,7 +20,9 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeWidth", at = @At("HEAD"), cancellable = true)
     private void logic$compactWidth(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            case INPUT, OUTPUT -> cir.setReturnValue(36.0);
+            // I/O terminals are deliberately tiny controls, not chip-sized nodes. 18x12 lets sixteen
+            // terminals stack exactly on the 12-unit bit rows of a 16-bit splitter/merger.
+            case INPUT, OUTPUT -> cir.setReturnValue(18.0);
             case NAND -> cir.setReturnValue(66.0);
             case CONSTANT -> cir.setReturnValue(66.0);
             case PROBE -> cir.setReturnValue(66.0);
@@ -33,7 +35,8 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "nodeHeight", at = @At("HEAD"), cancellable = true)
     private void logic$compactHeight(EditorNode node, CallbackInfoReturnable<Double> cir) {
         switch (node.kind) {
-            case INPUT, OUTPUT -> cir.setReturnValue(36.0);
+            // One terminal = one merger/splitter bit-row.
+            case INPUT, OUTPUT -> cir.setReturnValue(12.0);
             case CONSTANT, PROBE -> cir.setReturnValue(42.0);
             case NAND -> cir.setReturnValue(48.0);
             case BUS -> cir.setReturnValue(20.0);
