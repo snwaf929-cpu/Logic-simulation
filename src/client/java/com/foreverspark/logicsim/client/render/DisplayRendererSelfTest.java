@@ -1,7 +1,6 @@
 package com.foreverspark.logicsim.client.render;
 
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.core.Direction;
 
 /** Regression checks for display face orientation, depth behavior, and emissive pixels. */
@@ -16,8 +15,8 @@ public final class DisplayRendererSelfTest {
 
         check(DisplayBlockEntityRenderer.pixelDisplayMode() == Font.DisplayMode.POLYGON_OFFSET,
                 "pixels must use depth-tested polygon-offset surface rendering, never SEE_THROUGH");
-        check(DisplayBlockEntityRenderer.pixelLight() == LightTexture.FULL_BRIGHT,
-                "screen pixels must be emissive/full-bright");
+        check(DisplayBlockEntityRenderer.pixelLight() == 0x00F000F0,
+                "screen pixels must use vanilla packed full-bright light");
         double z = DisplayBlockEntityRenderer.screenFaceZ();
         check(z > 0.0 && z < 0.75 / 16.0, "pixel plane sits just outside the local NORTH model screen face");
         System.out.println("Display renderer face/depth self-test: PASS");
