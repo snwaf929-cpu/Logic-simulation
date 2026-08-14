@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,6 +26,11 @@ public abstract class CircuitCanvasTerminalInteractionMixin {
 
     @Inject(method = "inputToggleHit", at = @At("HEAD"), cancellable = true)
     private void logic$compactInputSwitch(EditorNode node, double mouseX, double mouseY, CallbackInfoReturnable<Boolean> cir) {
+        // CLOCK/RANDOM are CONSTANT subtypes. Never let the base constant-toggle click path mutate them.
+        if (node.kind == NodeKind.CONSTANT && (node.clockSource || node.randomSource)) {
+            cir.setReturnValue(false);
+            return;
+        }
         if (node.kind != NodeKind.INPUT) return;
 
         int x = screenX(node.x);
@@ -46,6 +52,7 @@ public abstract class CircuitCanvasTerminalInteractionMixin {
     private void logic$explainPersistentInput(EditorNode node, CallbackInfo ci) {
         long value = inputStates.getOrDefault(node.id, 0L);
         status.accept(node.displayName() + " = " + (value == 0L ? "OFF" : "ON") + " — saved as this board's default input");
+        EditorClockRuntime.processRandomSources((CircuitCanvasWidget)(Object)this);
     }
 
     @Inject(method = "toggleConstant", at = @At("RETURN"))
