@@ -31,6 +31,7 @@ public final class CircuitProgramRuntime {
     private final List<PortSpec> outputPortSpecs;
     private final BoundaryPort[] inputRuntimePorts;
     private final BoundaryPort[] outputRuntimePorts;
+    private final CircuitTimingController.DirectRandomBoundaryPlan[] directRandomBoundaryPlans;
     private final boolean dirtyOutputTracking;
     private long forcedDirtyOutputMask;
 
@@ -67,6 +68,15 @@ public final class CircuitProgramRuntime {
         // need each intermediate sequence transition, so a clock living only in bits 56..63 must not disable batching.
         this.timing.configureLosslessBoundarySignals(losslessBoundarySignalIds());
         this.compiled.simulator().enableTurboMode();
+
+        // Compile a structural direct-RANDOM plan for every boundary once. Most ports produce null. The important
+        // stress-test shape (one CLOCK -> <=64 RANDOM sources -> one 64-bit display bus, no NANDs) gets a packed plan
+        // that can synthesize boundary words without touching every simulator signal on every virtual cycle.
+        this.directRandomBoundaryPlans = new CircuitTimingController.DirectRandomBoundaryPlan[outputRuntimePorts.length];
+        for (int index = 0; index < outputRuntimePorts.length; index++) {
+            if (outputRuntimePorts[index].spec().width() > 64) continue;
+            directRandomBoundaryPlans[index] = timing.compileDirectRandomBoundaryPlan(outputRuntimePorts[index].valueSignalIds());
+        }
     }
 
     public CircuitProgram program() { return program; }
@@ -79,6 +89,36 @@ public final class CircuitProgramRuntime {
 
     public long advanceClocksNanos(long elapsedNanos, long edgeBudgetPerClock, Runnable afterSettledEdge) {
         return timing.advanceNanos(elapsedNanos, edgeBudgetPerClock, afterSettledEdge);
+    }
+
+    public boolean directRandomBoundaryBatchEligible(int outputIndex) {
+        return outputIndex >= 0
+                && outputIndex < directRandomBoundaryPlans.length
+                && directRandomBoundaryPlans[outputIndex] != null;
+    }
+
+    public int directRandomBoundaryRandomLanes(int outputIndex) {
+        if (!directRandomBoundaryBatchEligible(outputIndex)) return 0;
+        return directRandomBoundaryPlans[outputIndex].randomLaneCount();
+    }
+
+    /**
+     * Packed direct-RANDOM boundary execution. Returns -1 if the cached structural plan became stale so callers can
+     * immediately fall back to the ordinary edge engine without losing queued virtual time.
+     */
+    public long advanceDirectRandomBoundaryNanos(
+            long elapsedNanos,
+            long edgeBudget,
+            int outputIndex,
+            CircuitTimingController.LongBatchConsumer sink
+    ) {
+        if (!directRandomBoundaryBatchEligible(outputIndex)) return -1L;
+        return timing.advanceDirectRandomBoundaryNanos(
+                directRandomBoundaryPlans[outputIndex],
+                elapsedNanos,
+                edgeBudget,
+                sink
+        );
     }
 
     public void setClocksRunning(boolean running) {
