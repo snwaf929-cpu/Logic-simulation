@@ -34,13 +34,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * that same JVM is pure overhead and makes the display inherit Minecraft's 20 TPS stalls. This registry keeps the
  * authoritative transient display framebuffer in primitive memory instead. The simulation worker writes it directly;
  * the client renderer samples it at its own frame cadence.
- *
- * This class is client-source-only, so a dedicated server never sees this path and keeps the normal lossless server
- * display transport.
  */
 public final class RealtimeDisplaySurface {
     private static final int MAX_WALL_BLOCKS = 4096;
     private static final int BACKING_TILE_SIZE = DisplayBlockEntity.MAX_WIDTH;
+    private static final int BACKING_TILE_SHIFT = 6; // MAX_WIDTH is 64.
 
     private static final Map<RouteKey, Surface> ROUTES = new ConcurrentHashMap<>();
     private static final Map<Long, TileView> TILES = new ConcurrentHashMap<>();
@@ -49,7 +47,6 @@ public final class RealtimeDisplaySurface {
 
     private RealtimeDisplaySurface() {}
 
-    /** Called from CircuitBlockEntity.refreshDisplayStreamPorts(), therefore always on the integrated server thread. */
     public static void refreshRoutes(CircuitBlockEntity circuit) {
         if (circuit == null) return;
         Level level = circuit.getLevel();
@@ -59,7 +56,6 @@ public final class RealtimeDisplaySurface {
         ROUTES.keySet().removeIf(key -> key.circuitPos == circuitKey);
 
         Map<String, Surface> resolved = new HashMap<>();
-
         for (BlockPos socketPos : CircuitPortLinks.sockets(level, circuit.getBlockPos())) {
             if (!(level.getBlockEntity(socketPos) instanceof CircuitPortBlockEntity socket)) continue;
             if (socket.direction() != PortDirection.OUTPUT || socket.width() != DisplayBlockEntity.DISPLAY_BUS_WIDTH) continue;
@@ -107,7 +103,6 @@ public final class RealtimeDisplaySurface {
         return tilePos == null ? null : TILES.get(tilePos.asLong());
     }
 
-    /** Marks the current simulation callback so the old per-tick DisplayCommandBuffer can be bypassed safely. */
     public static void beginCapture(boolean realtimeDisplayMapped) {
         BYPASS_BUFFER.set(realtimeDisplayMapped);
     }
@@ -243,7 +238,7 @@ public final class RealtimeDisplaySurface {
         public int tileY() { return tileY; }
     }
 
-    /** Single-writer framebuffer. Volatile publication makes completed DATA64 writes visible to the render thread. */
+    /** Single-writer framebuffer. publishedRevision is the release/acquire publication barrier for the render thread. */
     public static final class Surface {
         private final BlockPos controllerPos;
         private final int columns;
@@ -254,12 +249,14 @@ public final class RealtimeDisplaySurface {
         private final int backingWidth;
         private final int backingHeight;
         private final int tileCount;
-        private final int[] pixels;
+        /** RGB565 is exactly 16 bits. char[] halves the 2048x2048 transient surface from 16 MiB to 8 MiB. */
+        private final char[] pixels;
         private final long[] tileRevisions;
         private long[] tileKeys;
         private long revision;
         private volatile long publishedRevision;
-        private volatile int nonZeroPixels;
+        /** Published by the same volatile revision barrier; intentionally not volatile in the MHz writer loop. */
+        private int nonZeroPixels;
 
         private Surface(BlockPos controllerPos, int columns, int rows, int density, int tileCount) {
             this.controllerPos = controllerPos.immutable();
@@ -271,38 +268,67 @@ public final class RealtimeDisplaySurface {
             this.backingWidth = columns * BACKING_TILE_SIZE;
             this.backingHeight = rows * BACKING_TILE_SIZE;
             this.tileCount = tileCount;
-            this.pixels = new int[Math.multiplyExact(backingWidth, backingHeight)];
+            this.pixels = new char[Math.multiplyExact(backingWidth, backingHeight)];
             this.tileRevisions = new long[columns * rows];
             this.tileKeys = new long[columns * rows];
         }
 
-        /** Called under CircuitBlockEntity.runtimeLock, so this surface has one serialized simulation writer. */
         public void record(long raw) {
             long before = revision;
             recordUnpublished(raw);
             if (revision != before) publishedRevision = revision;
         }
 
-        /**
-         * Bulk clock path: apply thousands of DATA64 commands under the same single-writer lock and execute exactly one
-         * volatile publication at the end. This removes a release fence from every simulated pixel at multi-MHz rates.
-         */
+        /** Apply a complete simulator batch with one release publication instead of one volatile write per pixel. */
         public void recordBatch(long[] raws, int count) {
             if (raws == null || count <= 0) return;
             int limit = Math.min(count, raws.length);
             long before = revision;
-            for (int index = 0; index < limit; index++) recordUnpublished(raws[index]);
+
+            if (density == BACKING_TILE_SIZE) {
+                recordNative64Batch(raws, limit);
+            } else {
+                for (int index = 0; index < limit; index++) recordUnpublished(raws[index]);
+            }
+
             if (revision != before) publishedRevision = revision;
+        }
+
+        /**
+         * 64 pixels/block makes logical coordinates identical to backing coordinates. This is the 2048x2048 stress
+         * path, so avoid division/modulo, scaling loops and helper dispatch inside the command loop.
+         */
+        private void recordNative64Batch(long[] raws, int limit) {
+            for (int commandIndex = 0; commandIndex < limit; commandIndex++) {
+                long raw = raws[commandIndex];
+                int opcode = (int) ((raw >>> 48) & 0xFFL);
+                if (opcode == DisplayCommandCodec.OP_PIXEL) {
+                    int globalX = (int) ((raw >>> 16) & 0xFFFFL);
+                    int globalY = (int) ((raw >>> 32) & 0xFFFFL);
+                    if (globalX >= logicalWidth || globalY >= logicalHeight) continue;
+
+                    int rgb565 = (int) raw & 0xFFFF;
+                    int pixelIndex = globalY * backingWidth + globalX;
+                    int previous = pixels[pixelIndex];
+                    if (previous == rgb565) continue;
+                    pixels[pixelIndex] = (char) rgb565;
+                    if (previous == 0 && rgb565 != 0) nonZeroPixels++;
+                    else if (previous != 0 && rgb565 == 0) nonZeroPixels--;
+
+                    long next = ++revision;
+                    int tileIndex = (globalY >>> BACKING_TILE_SHIFT) * columns + (globalX >>> BACKING_TILE_SHIFT);
+                    tileRevisions[tileIndex] = next;
+                    continue;
+                }
+
+                if (opcode == DisplayCommandCodec.OP_CLEAR) clearUnpublished();
+            }
         }
 
         private void recordUnpublished(long raw) {
             int opcode = (int) ((raw >>> 48) & 0xFFL);
             if (opcode == DisplayCommandCodec.OP_CLEAR) {
-                if (nonZeroPixels == 0) return;
-                Arrays.fill(pixels, 0);
-                nonZeroPixels = 0;
-                long next = ++revision;
-                Arrays.fill(tileRevisions, next);
+                clearUnpublished();
                 return;
             }
             if (opcode != DisplayCommandCodec.OP_PIXEL) return;
@@ -311,7 +337,21 @@ public final class RealtimeDisplaySurface {
             int globalY = (int) ((raw >>> 32) & 0xFFFFL);
             if (globalX >= logicalWidth || globalY >= logicalHeight) return;
 
-            int rgb565 = (int) (raw & 0xFFFFL);
+            int rgb565 = (int) raw & 0xFFFF;
+
+            if (density == BACKING_TILE_SIZE) {
+                int pixelIndex = globalY * backingWidth + globalX;
+                int previous = pixels[pixelIndex];
+                if (previous == rgb565) return;
+                pixels[pixelIndex] = (char) rgb565;
+                if (previous == 0 && rgb565 != 0) nonZeroPixels++;
+                else if (previous != 0 && rgb565 == 0) nonZeroPixels--;
+                long next = ++revision;
+                int tileIndex = (globalY >>> BACKING_TILE_SHIFT) * columns + (globalX >>> BACKING_TILE_SHIFT);
+                tileRevisions[tileIndex] = next;
+                return;
+            }
+
             int tileX = globalX / density;
             int tileY = globalY / density;
             int localX = globalX - tileX * density;
@@ -321,20 +361,6 @@ public final class RealtimeDisplaySurface {
             int backingY = tileY * BACKING_TILE_SIZE + localY * scale;
             int tileIndex = tileY * columns + tileX;
 
-            // 64x64 pixels/block is the high-resolution stress path. One logical pixel maps to one backing element,
-            // so avoid two nested loops and all changed/non-zero accumulators for the overwhelmingly common case.
-            if (scale == 1) {
-                int index = backingY * backingWidth + backingX;
-                int previous = pixels[index];
-                if (previous == rgb565) return;
-                pixels[index] = rgb565;
-                if (previous == 0 && rgb565 != 0) nonZeroPixels++;
-                else if (previous != 0 && rgb565 == 0) nonZeroPixels--;
-                long next = ++revision;
-                tileRevisions[tileIndex] = next;
-                return;
-            }
-
             int changed = 0;
             int nonZeroDelta = 0;
             for (int y = 0; y < scale; y++) {
@@ -343,7 +369,7 @@ public final class RealtimeDisplaySurface {
                     int index = row + x;
                     int previous = pixels[index];
                     if (previous == rgb565) continue;
-                    pixels[index] = rgb565;
+                    pixels[index] = (char) rgb565;
                     if (previous == 0 && rgb565 != 0) nonZeroDelta++;
                     else if (previous != 0 && rgb565 == 0) nonZeroDelta--;
                     changed++;
@@ -354,6 +380,14 @@ public final class RealtimeDisplaySurface {
             if (nonZeroDelta != 0) nonZeroPixels += nonZeroDelta;
             long next = ++revision;
             tileRevisions[tileIndex] = next;
+        }
+
+        private void clearUnpublished() {
+            if (nonZeroPixels == 0) return;
+            Arrays.fill(pixels, (char) 0);
+            nonZeroPixels = 0;
+            long next = ++revision;
+            Arrays.fill(tileRevisions, next);
         }
 
         public BlockPos controllerPos() { return controllerPos; }
