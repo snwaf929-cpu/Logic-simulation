@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.client;
 
 import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
@@ -20,9 +21,24 @@ public final class ClientProgramUploader {
 
     private ClientProgramUploader() {}
 
+    /** Install a named reusable chip into a physical Circuit Block. */
     public static void upload(BlockPos target, String rootChipName, ClientChipLibrary library) throws IOException {
         if (target == null || rootChipName == null || rootChipName.isBlank()) return;
-        ChipDefinition root = library.load(rootChipName);
+        uploadDefinition(target, library.load(rootChipName), library);
+    }
+
+    /**
+     * Install the editable BOARD itself into the physical Circuit Block.
+     * This keeps world execution in sync with what the player sees when reopening that block;
+     * saving a reusable named chip is no longer required just to make the board run.
+     */
+    public static void uploadBoard(BlockPos target, CircuitDocument board, ClientChipLibrary library) throws IOException {
+        if (target == null || board == null) return;
+        board.normalize();
+        uploadDefinition(target, new ChipDefinition("BOARD", board), library);
+    }
+
+    private static void uploadDefinition(BlockPos target, ChipDefinition root, ClientChipLibrary library) throws IOException {
         LinkedHashMap<String, ChipDefinition> dependencies = new LinkedHashMap<>();
         collect(root, library, dependencies, new HashSet<>());
         CircuitProgram program = new CircuitProgram(root, dependencies);
