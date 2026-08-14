@@ -23,16 +23,18 @@ public final class CircuitStatsNetworking {
                 return;
             }
 
-            long executed = circuit.lastClockExecutedEdges();
+            long targetHz = circuit.lastClockTargetHz();
+            long actualHz = circuit.lastClockActualHz();
             long pending = circuit.lastClockPendingEdges();
             double wallMs = circuit.lastClockWallNanos() / 1_000_000.0;
             String state = circuit.runtimeError().isBlank()
-                    ? (pending == 0L ? "KEEPING UP / IDLE" : "BEHIND")
+                    ? (pending == 0L ? "KEEPING UP" : "BEHIND")
                     : "ERROR";
             String message = circuit.programName()
-                    + " | clock edges: " + executed
-                    + " | backlog: " + pending
-                    + " | CPU: " + String.format(java.util.Locale.ROOT, "%.3f", wallMs) + " ms"
+                    + " | target: " + targetHz + " Hz"
+                    + " | actual: " + actualHz + " Hz"
+                    + " | backlog: " + pending + " edges"
+                    + " | worker slice: " + String.format(java.util.Locale.ROOT, "%.3f", wallMs) + " ms"
                     + " | " + state;
             player.sendSystemMessage(Component.literal(message));
             if (!circuit.runtimeError().isBlank()) {
