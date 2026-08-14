@@ -61,7 +61,7 @@ public final class DisplayBlockEntity extends BlockEntity {
      * bits 16..31 global X
      * bits 32..47 global Y
      * bits 48..55 opcode (1=pixel, 2=clear)
-     * bits 56..63 sequence; increment it when issuing the same command twice.
+     * bits 56..63 optional sequence. DISPLAY OUT leaves these zero and uses WRITE low/high as the strobe.
      */
     public static long pixelCommand(int x, int y, int rgb565, int sequence) {
         return ((long)(sequence & 0xFF) << 56)
@@ -96,6 +96,26 @@ public final class DisplayBlockEntity extends BlockEntity {
             }
         }
         return changed;
+    }
+
+    /** Human-facing geometry/status for one connected, same-facing display wall. */
+    public static WallInfo wallInfo(Level level, BlockPos start, BlockState startState) {
+        DisplayWall wall = collectWall(level, start, startState);
+        if (wall == null || wall.blocks().isEmpty()) return null;
+        int density = level.getBlockEntity(start) instanceof DisplayBlockEntity display
+                ? display.pixelWidth()
+                : DEFAULT_PIXEL_WIDTH;
+        int columns = wall.maxHorizontal() - wall.minHorizontal() + 1;
+        int rows = wall.maxY() - wall.minY() + 1;
+        return new WallInfo(
+                wall.blocks().size(),
+                columns,
+                rows,
+                density,
+                columns * density,
+                rows * density,
+                DISPLAY_BUS_WIDTH
+        );
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, DisplayBlockEntity display) {
@@ -277,5 +297,6 @@ public final class DisplayBlockEntity extends BlockEntity {
         return DEFAULT_PIXEL_WIDTH;
     }
 
+    public record WallInfo(int tileCount, int columns, int rows, int pixelsPerTile, int pixelWidth, int pixelHeight, int dataBusWidth) {}
     private record DisplayWall(Set<BlockPos> blocks, Direction right, int minHorizontal, int maxHorizontal, int minY, int maxY) {}
 }

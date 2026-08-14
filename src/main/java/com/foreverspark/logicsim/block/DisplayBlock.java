@@ -3,6 +3,7 @@ package com.foreverspark.logicsim.block;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -56,12 +57,23 @@ public final class DisplayBlock extends BaseEntityBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
         if (!player.isShiftKeyDown()) return InteractionResult.PASS;
+
         int current = level.getBlockEntity(pos) instanceof DisplayBlockEntity display
                 ? display.pixelWidth()
                 : DisplayBlockEntity.DEFAULT_PIXEL_WIDTH;
         int next = DisplayBlockEntity.nextPixelWidth(current);
+
         if (!level.isClientSide()) {
             DisplayBlockEntity.setWallPixelWidth(level, pos, state, next);
+            DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(level, pos, state);
+            if (info != null) {
+                player.sendSystemMessage(Component.literal(
+                        "Display: " + info.pixelWidth() + "x" + info.pixelHeight()
+                                + " px  |  " + info.columns() + "x" + info.rows() + " tiles"
+                                + "  |  " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " px/tile"
+                                + "  |  DATA" + info.dataBusWidth()
+                ));
+            }
         }
         return InteractionResult.SUCCESS;
     }

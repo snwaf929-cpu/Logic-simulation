@@ -8,34 +8,88 @@ import com.foreverspark.logicsim.editor.model.NodeKind;
 
 /** Built-in peripherals exposed through the same port model as reusable chips. */
 public final class BuiltinDevices {
+    /** Internal stable ID kept as DISPLAY so older editor documents continue to load. */
     public static final String DISPLAY = "DISPLAY";
-    public static final int DISPLAY_WIDTH = 32;
-    public static final int DISPLAY_HEIGHT = 18;
-    private static final ChipDefinition DISPLAY_DEFINITION = makeDisplay();
+    public static final String DISPLAY_LABEL = "DISPLAY OUT";
+    public static final int DISPLAY_COLOR = 0xFF3E8FA0;
+
+    private static final ChipDefinition DISPLAY_DEFINITION = makeDisplayOutput();
 
     private BuiltinDevices() {}
 
-    public static ChipDefinition find(String name) {
-        if (name != null && DISPLAY.equalsIgnoreCase(name.trim())) return DISPLAY_DEFINITION;
-        return null;
+    public static boolean isDisplay(String name) {
+        return name != null && DISPLAY.equalsIgnoreCase(name.trim());
     }
 
-    private static ChipDefinition makeDisplay() {
+    /** Read-only definition used by the live editor/compiler. */
+    public static ChipDefinition find(String name) {
+        return isDisplay(name) ? DISPLAY_DEFINITION : null;
+    }
+
+    /** Fresh copy used when the built-in is embedded into a CircuitProgram dependency graph. */
+    public static ChipDefinition copy(String name) {
+        return isDisplay(name) ? makeDisplayOutput() : null;
+    }
+
+    public static ChipVisualSettings displayVisual() {
+        return new ChipVisualSettings(180.0, 126.0, 18.0);
+    }
+
+    /**
+     * DISPLAY OUT packs normal logic ports into the physical screen's 64-bit DATA command:
+     *   bits  0..15  COLOR RGB565
+     *   bits 16..31  X
+     *   bits 32..47  Y
+     *   bit      48  WRITE  (opcode 1)
+     *   bit      49  CLEAR  (opcode 2)
+     *   bits 50..63  0
+     *
+     * WRITE and CLEAR should not be high together. Pull WRITE low then high again to resend
+     * the exact same pixel command.
+     */
+    private static ChipDefinition makeDisplayOutput() {
         CircuitDocument circuit = new CircuitDocument();
-        addInput(circuit, "X", 16, 0);
-        addInput(circuit, "Y", 16, 36);
-        addInput(circuit, "COLOR", 16, 72);
-        addInput(circuit, "WRITE", 1, 108);
-        addInput(circuit, "CLEAR", 1, 144);
-        ChipVisualSettings visual = new ChipVisualSettings(180.0, 120.0, 18.0);
-        ChipDefinition definition = new ChipDefinition(DISPLAY, circuit, visual);
-        definition.color = 0xFF34495E;
+
+        EditorNode x = addInput(circuit, "X", 16, 0);
+        EditorNode y = addInput(circuit, "Y", 16, 36);
+        EditorNode color = addInput(circuit, "COLOR", 16, 72);
+        EditorNode write = addInput(circuit, "WRITE", 1, 108);
+        EditorNode clear = addInput(circuit, "CLEAR", 1, 144);
+
+        EditorNode splitX = circuit.addNode(NodeKind.SPLITTER, 90, 0);
+        splitX.width = 16;
+        EditorNode splitY = circuit.addNode(NodeKind.SPLITTER, 90, 36);
+        splitY.width = 16;
+        EditorNode splitColor = circuit.addNode(NodeKind.SPLITTER, 90, 72);
+        splitColor.width = 16;
+        EditorNode merge = circuit.addNode(NodeKind.MERGER, 210, 54);
+        merge.width = 64;
+        EditorNode data = circuit.addNode(NodeKind.OUTPUT, 360, 54);
+        data.width = 64;
+        data.label = "DATA";
+
+        circuit.connect(x.id, 0, splitX.id, 0);
+        circuit.connect(y.id, 0, splitY.id, 0);
+        circuit.connect(color.id, 0, splitColor.id, 0);
+
+        for (int bit = 0; bit < 16; bit++) {
+            circuit.connect(splitColor.id, bit, merge.id, bit);
+            circuit.connect(splitX.id, bit, merge.id, 16 + bit);
+            circuit.connect(splitY.id, bit, merge.id, 32 + bit);
+        }
+        circuit.connect(write.id, 0, merge.id, 48);
+        circuit.connect(clear.id, 0, merge.id, 49);
+        circuit.connect(merge.id, 0, data.id, 0);
+
+        ChipDefinition definition = new ChipDefinition(DISPLAY, circuit, displayVisual());
+        definition.color = DISPLAY_COLOR;
         return definition;
     }
 
-    private static void addInput(CircuitDocument circuit, String label, int width, double y) {
+    private static EditorNode addInput(CircuitDocument circuit, String label, int width, double y) {
         EditorNode node = circuit.addNode(NodeKind.INPUT, 0, y);
         node.label = label;
         node.width = width;
+        return node;
     }
 }
