@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.client.ClientProgramUploader;
 import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
+import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.platform.ClientEditorBridge;
 import net.minecraft.core.BlockPos;
@@ -62,6 +63,8 @@ public abstract class CircuitEditorBoardPersistenceMixin {
 
     @Inject(method = "removed", at = @At("HEAD"))
     private void logic$autosaveWorldBoardOnClose(CallbackInfo ci) {
+        // Editor timing is preview-only. Never let old canvases keep simulating on the render thread after close.
+        EditorClockRuntime.clearAll();
         logic$saveAndProgramWorldBoard(false);
     }
 
