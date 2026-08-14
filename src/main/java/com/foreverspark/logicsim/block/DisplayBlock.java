@@ -37,6 +37,7 @@ public final class DisplayBlock extends BaseEntityBlock {
     @Nullable
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
+        // FACING is the visible screen/front direction: when placed, face the player who placed it.
         return defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
     }
 
@@ -94,7 +95,10 @@ public final class DisplayBlock extends BaseEntityBlock {
                         + " | " + info.pixelsPerTile() + "x" + info.pixelsPerTile() + " pixels/block"
         ));
         player.sendSystemMessage(Component.literal(
-                "Connection: one Bus Cable [64] to any side/back display block. Shift+Right Click changes pixels/block."
+                "Front/screen face: " + state.getValue(FACING) + " | Connection: one Bus Cable [64] on any side/back face."
+        ));
+        player.sendSystemMessage(Component.literal(
+                "Shift+Right Click changes pixels/block; screen resolution never changes the 64-bit cable width."
         ));
 
         DisplayBlockEntity.WallSignalInfo signal = DisplayBlockEntity.wallSignalInfo(level, pos, state);
