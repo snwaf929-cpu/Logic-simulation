@@ -430,6 +430,9 @@ public final class RealtimeDisplaySurface {
         public BlockPos controllerPos() { return controllerPos; }
         public int columns() { return columns; }
         public int rows() { return rows; }
+        public int density() { return density; }
+        public int logicalWidth() { return logicalWidth; }
+        public int logicalHeight() { return logicalHeight; }
         public int backingWidth() { return backingWidth; }
         public int backingHeight() { return backingHeight; }
         public int tileSlots() { return tileRevisions.length; }
