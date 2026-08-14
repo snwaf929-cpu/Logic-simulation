@@ -9,8 +9,8 @@ import java.util.concurrent.locks.LockSupport;
  * Dedicated wall-clock simulation worker for programmed circuit blocks.
  *
  * Minecraft ticks are deliberately NOT the clock source. The worker repeatedly asks every registered
- * CircuitBlockEntity to advance from System.nanoTime(). Minecraft's server thread is used only later for safe
- * physical world I/O (cables, displays, block entities).
+ * CircuitBlockEntity to advance from System.nanoTime(). Minecraft's server/render threads must always win
+ * scheduling contention: simulated MHz is allowed to run slower, but it is never allowed to freeze the game.
  */
 public final class CircuitSimulationWorker {
     private static final Set<CircuitBlockEntity> CIRCUITS = ConcurrentHashMap.newKeySet();
@@ -35,6 +35,9 @@ public final class CircuitSimulationWorker {
                 .daemon(true)
                 .name("LogicSimulation-ClockWorker")
                 .unstarted(CircuitSimulationWorker::runLoop);
+        // Keep the simulation below normal-priority Minecraft server/render work. On a many-core PC it can still
+        // consume otherwise-idle CPU, but it should not win when the game itself needs a core.
+        worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
         worker.start();
     }
 
@@ -50,14 +53,17 @@ public final class CircuitSimulationWorker {
                 }
             }
 
-            /*
-             * Never use a micro-sleep while the simulator is behind. Windows is free to oversleep a nominal
-             * 25 microseconds by a large amount, which was visibly capping MHz circuits while pendingEdges grew.
-             * When work was performed, immediately give the next slice a chance to consume the backlog. Only park
-             * when every registered circuit is caught up/idle.
-             */
-            if (didWork) Thread.onSpinWait();
-            else LockSupport.parkNanos(IDLE_PARK_NANOS);
+            if (didWork) {
+                /*
+                 * A pure spin loop let the worker immediately reacquire CircuitBlockEntity's runtime monitor after
+                 * every slice. At overloaded MHz rates that starved the server thread for seconds (program installs
+                 * measured 3+ seconds and Minecraft reported hundreds of ticks behind). yield() releases our time
+                 * slice without the inaccurate millisecond-scale oversleep of Windows micro-sleeps.
+                 */
+                Thread.yield();
+            } else {
+                LockSupport.parkNanos(IDLE_PARK_NANOS);
+            }
         }
     }
 }
