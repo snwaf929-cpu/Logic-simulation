@@ -20,7 +20,7 @@ jobs:
         with:
           gradle-version: '9.5.1'
       - name: Build Fabric 26.2 mod
-        run: gradle build selfTest infrastructureSelfTest clientSelfTest --stacktrace
+        run: gradle build selfTest infrastructureSelfTest clientSelfTest displayRendererSelfTest --stacktrace
       - name: Upload mod jar
         if: success()
         uses: actions/upload-artifact@v4
