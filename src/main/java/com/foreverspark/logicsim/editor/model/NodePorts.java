@@ -6,7 +6,9 @@ public final class NodePorts {
     public static List<PortSpec> inputs(EditorNode node, ChipLookup chips) {
         return switch (node.kind) {
             case INPUT -> List.of();
-            case CONSTANT -> node.clockSource
+            case CONSTANT -> node.randomSource
+                    ? List.of(new PortSpec("TRIGGER", PortDirection.INPUT, 1))
+                    : node.clockSource
                     ? List.of(new PortSpec("ENABLE", PortDirection.INPUT, 1))
                     : List.of();
             case OUTPUT -> List.of(new PortSpec("IN", PortDirection.INPUT, node.width));

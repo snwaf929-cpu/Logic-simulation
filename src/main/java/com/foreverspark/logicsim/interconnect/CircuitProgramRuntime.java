@@ -23,9 +23,11 @@ public final class CircuitProgramRuntime {
         program.normalize();
         this.program = program;
         this.compiled = program.compile();
-        this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
         indexBoundary();
         initializeBoundaryInputDefaults();
+        // Create edge-triggered infrastructure after saved boundary defaults are applied so a RANDOM
+        // trigger that is already HIGH when a board loads does not look like a fresh 0 -> 1 edge.
+        this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
     }
 
     public CircuitProgram program() { return program; }
@@ -55,6 +57,9 @@ public final class CircuitProgramRuntime {
     public void driveInput(String name, long value) {
         BoundaryPort port = require(inputs, name, "input");
         compiled.driveInputUnsigned(port.nodeId(), mask(value, port.spec().width()));
+        // External cable/input changes are real source updates. RANDOM samples immediately on a
+        // LOW -> HIGH TRIGGER edge and remains unchanged while TRIGGER stays HIGH.
+        timing.processRandomSources();
     }
 
     public long inputValue(String name) {

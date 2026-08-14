@@ -44,6 +44,14 @@ public final class EditorClockRuntime {
         state.timing.advanceNanos(elapsed, EDGE_BUDGET_PER_CLOCK_PER_FRAME);
     }
 
+    /** Process non-clock edge-triggered sources after a manual editor input changes. */
+    public static synchronized int processRandomSources(CircuitCanvasWidget canvas) {
+        if (canvas == null) return 0;
+        frame(canvas);
+        State state = STATES.get(canvas);
+        return state == null ? 0 : state.timing.processRandomSources();
+    }
+
     public static synchronized CircuitTimingController timing(CircuitCanvasWidget canvas) {
         State state = STATES.get(canvas);
         return state == null ? null : state.timing;
