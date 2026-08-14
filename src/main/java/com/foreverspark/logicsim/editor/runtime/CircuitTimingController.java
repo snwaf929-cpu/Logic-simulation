@@ -39,36 +39,46 @@ public final class CircuitTimingController {
         }
     }
 
+    /** Sources sharing both a trigger and probability are sampled together as a 64-lane bit vector. */
+    private static final class RandomChanceBucket {
+        private final int chancePercent;
+        private final RandomState[] sources;
+
+        private RandomChanceBucket(int chancePercent, RandomState[] sources) {
+            this.chancePercent = chancePercent;
+            this.sources = sources;
+        }
+    }
+
     private static final class RandomTriggerGroup {
         private final int triggerSignalId;
         private final RandomState[] sources;
+        private final RandomChanceBucket[] buckets;
         private boolean lastHigh;
         private long rngState;
-        private long samplePool;
-        private int samplesRemaining;
 
-        private RandomTriggerGroup(int triggerSignalId, RandomState[] sources, boolean lastHigh, long seed) {
+        private RandomTriggerGroup(
+                int triggerSignalId,
+                RandomState[] sources,
+                RandomChanceBucket[] buckets,
+                boolean lastHigh,
+                long seed
+        ) {
             this.triggerSignalId = triggerSignalId;
             this.sources = sources;
+            this.buckets = buckets;
             this.lastHigh = lastHigh;
             this.rngState = seed == 0L ? RNG_NONZERO_FALLBACK : seed;
         }
 
-        private int nextUnsigned16() {
-            if (samplesRemaining == 0) {
-                long x = rngState;
-                x ^= x << 13;
-                x ^= x >>> 7;
-                x ^= x << 17;
-                if (x == 0L) x = RNG_NONZERO_FALLBACK;
-                rngState = x;
-                samplePool = x;
-                samplesRemaining = 4;
-            }
-            int sample = (int) (samplePool & 0xFFFFL);
-            samplePool >>>= 16;
-            samplesRemaining--;
-            return sample;
+        private long nextLong() {
+            long x = rngState;
+            x ^= x << 13;
+            x ^= x >>> 7;
+            x ^= x << 17;
+            if (x == 0L) x = RNG_NONZERO_FALLBACK;
+            rngState = x;
+            return x;
         }
     }
 
@@ -101,6 +111,8 @@ public final class CircuitTimingController {
     public int randomChancePercent(String scopePath, int nodeId) { return requireRandom(scopePath, nodeId).chancePercent; }
     public void setRandomChancePercent(String scopePath, int nodeId, int chancePercent) {
         requireRandom(scopePath, nodeId).chancePercent = Math.max(0, Math.min(100, chancePercent));
+        // Chance changes are rare editor operations; rebuilding buckets keeps the MHz hot path branch-light.
+        compileRandomGroups();
     }
 
     public boolean enabled(String scopePath, int nodeId) {
@@ -147,6 +159,11 @@ public final class CircuitTimingController {
         return emitted;
     }
 
+    /**
+     * RANDOM sources are grouped by shared trigger and then by probability. Up to 64 equal-probability sources are
+     * sampled as one bit vector. Common 50/25/75% cases require only 1-2 PRNG state updates for an entire bus;
+     * arbitrary integer percentages use an 8-bit bit-sliced comparator (max probability error < 0.2%).
+     */
     public int processRandomSources() {
         RandomTriggerGroup[] groups = randomGroups;
         if (groups.length == 0) return 0;
@@ -166,14 +183,22 @@ public final class CircuitTimingController {
                 group.lastHigh = high;
                 if (!rising) continue;
 
-                RandomState[] sources = group.sources;
-                fired += sources.length;
-                for (int sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
-                    RandomState state = sources[sourceIndex];
-                    boolean nextHigh = sampleHigh(group, state.chancePercent);
-                    outputChanged |= turbo
-                            ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
-                            : simulator.driveLevel(state.outputSignalId, nextHigh);
+                fired += group.sources.length;
+                RandomChanceBucket[] buckets = group.buckets;
+                for (int bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
+                    RandomChanceBucket bucket = buckets[bucketIndex];
+                    RandomState[] sources = bucket.sources;
+                    for (int base = 0; base < sources.length; base += 64) {
+                        int count = Math.min(64, sources.length - base);
+                        long highMask = sampleMask(group, bucket.chancePercent, count);
+                        for (int lane = 0; lane < count; lane++) {
+                            RandomState state = sources[base + lane];
+                            boolean nextHigh = ((highMask >>> lane) & 1L) != 0L;
+                            outputChanged |= turbo
+                                    ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
+                                    : simulator.driveLevel(state.outputSignalId, nextHigh);
+                        }
+                    }
                 }
             }
 
@@ -220,8 +245,22 @@ public final class CircuitTimingController {
             RandomState[] sources = entry.getValue().toArray(RandomState[]::new);
             int triggerSignalId = entry.getKey();
             boolean high = simulator.isHigh(triggerSignalId);
+
+            Map<Integer, List<RandomState>> byChance = new LinkedHashMap<>();
+            for (RandomState source : sources) {
+                byChance.computeIfAbsent(source.chancePercent, ignored -> new ArrayList<>()).add(source);
+            }
+            RandomChanceBucket[] buckets = new RandomChanceBucket[byChance.size()];
+            int bucketOut = 0;
+            for (Map.Entry<Integer, List<RandomState>> chanceEntry : byChance.entrySet()) {
+                buckets[bucketOut++] = new RandomChanceBucket(
+                        chanceEntry.getKey(),
+                        chanceEntry.getValue().toArray(RandomState[]::new)
+                );
+            }
+
             long seed = mix64(System.nanoTime() ^ ((long) triggerSignalId << 32) ^ sources.length ^ out);
-            groups[out++] = new RandomTriggerGroup(triggerSignalId, sources, high, seed);
+            groups[out++] = new RandomTriggerGroup(triggerSignalId, sources, buckets, high, seed);
         }
         randomGroups = groups;
     }
@@ -231,6 +270,7 @@ public final class CircuitTimingController {
         int feedbackClocks = 0;
         long totalConeGates = 0L;
         int maxConeGates = 0;
+        int chanceBuckets = 0;
         for (TimingSignalDriver driver : clocks.values()) {
             int cone = driver.compiledConeGateCount();
             if (cone >= 0) {
@@ -241,9 +281,11 @@ public final class CircuitTimingController {
                 feedbackClocks++;
             }
         }
+        for (RandomTriggerGroup group : randomGroups) chanceBuckets += group.buckets.length;
         LogicSimulationMod.LOGGER.info(
-                "[SIM COMPILE] clocks={} queueFreeClocks={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={}",
-                clocks.size(), queueFreeClocks, feedbackClocks, totalConeGates, maxConeGates, randomSources.size(), randomGroups.length
+                "[SIM COMPILE] clocks={} queueFreeClocks={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={}",
+                clocks.size(), queueFreeClocks, feedbackClocks, totalConeGates, maxConeGates,
+                randomSources.size(), randomGroups.length, chanceBuckets
         );
     }
 
@@ -292,12 +334,35 @@ public final class CircuitTimingController {
         }
     }
 
-    private static boolean sampleHigh(RandomTriggerGroup group, int chancePercent) {
-        if (chancePercent <= 0) return false;
-        if (chancePercent >= 100) return true;
-        int sample = group.nextUnsigned16();
-        int threshold = (chancePercent * 65_536) / 100;
-        return sample < threshold;
+    private static long sampleMask(RandomTriggerGroup group, int chancePercent, int count) {
+        if (count <= 0) return 0L;
+        long validMask = count >= 64 ? -1L : (1L << count) - 1L;
+        if (chancePercent <= 0) return 0L;
+        if (chancePercent >= 100) return validMask;
+
+        // Very common digital-test probabilities have exact, exceptionally cheap bit-vector implementations.
+        if (chancePercent == 50) return group.nextLong() & validMask;
+        if (chancePercent == 25) return (~group.nextLong() & ~group.nextLong()) & validMask;
+        if (chancePercent == 75) return (~(group.nextLong() & group.nextLong())) & validMask;
+
+        // Eight independent 64-bit PRNG words represent the eight bits of 64 independent random bytes.
+        // Compare all 64 lanes against one scalar threshold simultaneously using bitwise less-than logic.
+        int threshold = (chancePercent * 256 + 50) / 100;
+        if (threshold <= 0) return 0L;
+        if (threshold >= 256) return validMask;
+
+        long less = 0L;
+        long equal = validMask;
+        for (int bit = 7; bit >= 0; bit--) {
+            long randomPlane = group.nextLong();
+            if (((threshold >>> bit) & 1) != 0) {
+                less |= equal & ~randomPlane;
+                equal &= randomPlane;
+            } else {
+                equal &= ~randomPlane;
+            }
+        }
+        return less & validMask;
     }
 
     private static long mix64(long z) {
