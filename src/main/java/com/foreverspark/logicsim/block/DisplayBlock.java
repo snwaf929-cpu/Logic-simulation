@@ -114,6 +114,17 @@ public final class DisplayBlock extends BaseEntityBlock {
         player.sendSystemMessage(Component.literal(
                 "Screen action: " + signal.lastActionStatus()
         ));
+
+        DisplayCommandCodec.Command command = DisplayCommandCodec.decode(signal.lastReceivedData());
+        if (command.isPixel()) {
+            int serverPixel = DisplayBlockEntity.wallPixelRgb565(level, pos, state, command.x(), command.y());
+            String pixelText = serverPixel < 0
+                    ? "missing/outside screen"
+                    : String.format(java.util.Locale.ROOT, "0x%04X (%s)", serverPixel, serverPixel == 0 ? "BLACK" : "LIT");
+            player.sendSystemMessage(Component.literal(
+                    "Server framebuffer pixel (" + command.x() + "," + command.y() + "): " + pixelText
+            ));
+        }
     }
 
     @Nullable
