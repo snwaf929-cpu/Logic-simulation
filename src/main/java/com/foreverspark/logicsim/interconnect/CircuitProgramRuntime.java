@@ -17,6 +17,8 @@ public final class CircuitProgramRuntime {
     private final CircuitTimingController timing;
     private final Map<String, BoundaryPort> inputs = new LinkedHashMap<>();
     private final Map<String, BoundaryPort> outputs = new LinkedHashMap<>();
+    private final List<PortSpec> inputPortSpecs;
+    private final List<PortSpec> outputPortSpecs;
 
     public CircuitProgramRuntime(CircuitProgram program) {
         if (program == null) throw new IllegalArgumentException("Circuit program is required");
@@ -24,6 +26,10 @@ public final class CircuitProgramRuntime {
         this.program = program;
         this.compiled = program.compile();
         indexBoundary();
+        // These collections never change after compile. Returning a new stream().toList() on every simulated edge
+        // was a major allocation source at MHz rates.
+        this.inputPortSpecs = inputs.values().stream().map(BoundaryPort::spec).toList();
+        this.outputPortSpecs = outputs.values().stream().map(BoundaryPort::spec).toList();
         initializeBoundaryInputDefaults();
         // Create edge-triggered infrastructure after saved boundary defaults are applied so a RANDOM
         // trigger that is already HIGH when a board loads does not look like a fresh 0 -> 1 edge.
@@ -46,8 +52,8 @@ public final class CircuitProgramRuntime {
         for (CircuitTimingController.ClockAddress address : timing.clocks()) timing.setRunning(address.scopePath(), address.nodeId(), running);
     }
 
-    public List<PortSpec> inputPorts() { return inputs.values().stream().map(BoundaryPort::spec).toList(); }
-    public List<PortSpec> outputPorts() { return outputs.values().stream().map(BoundaryPort::spec).toList(); }
+    public List<PortSpec> inputPorts() { return inputPortSpecs; }
+    public List<PortSpec> outputPorts() { return outputPortSpecs; }
 
     public PortSpec port(String name, PortDirection direction) {
         BoundaryPort port = table(direction).get(key(name));
@@ -93,7 +99,9 @@ public final class CircuitProgramRuntime {
 
     private void putUnique(Map<String, BoundaryPort> table, PortSpec spec, int nodeId) {
         String key = key(spec.name());
-        if (table.putIfAbsent(key, new BoundaryPort(spec, nodeId)) != null) throw new IllegalArgumentException("Duplicate external port name: " + spec.name());
+        if (table.putIfAbsent(key, new BoundaryPort(spec, nodeId)) != null) {
+            throw new IllegalArgumentException("Duplicate external port name: " + spec.name());
+        }
     }
 
     private Map<String, BoundaryPort> table(PortDirection direction) { return direction == PortDirection.INPUT ? inputs : outputs; }
