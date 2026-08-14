@@ -17,6 +17,8 @@ import java.util.Set;
 
 public final class CircuitProgramRuntime {
     private static final int LOSSLESS_STREAM_WIDTH = 64;
+    /** DATA64 bits 0..55 carry opcode/Y/X/RGB. Bits 56..63 are sequence metadata and may be coalesced. */
+    private static final int LOSSLESS_STREAM_SEMANTIC_BITS = 56;
 
     private final CircuitProgram program;
     private final CompiledCircuit compiled;
@@ -59,9 +61,10 @@ public final class CircuitProgramRuntime {
 
         initializeBoundaryInputDefaults();
         this.timing = new CircuitTimingController(compiled, program.root.circuit, program);
-        // Ordinary physical outputs are sampled/coalesced to their newest level. A 64-bit boundary is different: it
-        // may be a lossless DATA64 display command stream, so every signal participating in such a bus must retain
-        // exact edge history and therefore blocks CLOCK pulse batching when it directly observes the clock signal.
+        // Ordinary physical outputs are sampled/coalesced to their newest level. A DATA64 display stream is different:
+        // opcode/Y/X/RGB transitions contribute framebuffer intent and therefore must retain exact history. The top
+        // sequence byte is transport metadata only; framebuffer coalescing and the once-per-tick cable snapshot do not
+        // need each intermediate sequence transition, so a clock living only in bits 56..63 must not disable batching.
         this.timing.configureLosslessBoundarySignals(losslessBoundarySignalIds());
         this.compiled.simulator().enableTurboMode();
     }
@@ -148,7 +151,9 @@ public final class CircuitProgramRuntime {
         LinkedHashSet<Integer> ids = new LinkedHashSet<>();
         for (BoundaryPort port : outputRuntimePorts) {
             if (port.spec().width() != LOSSLESS_STREAM_WIDTH) continue;
-            for (int signalId : port.valueSignalIds()) ids.add(signalId);
+            int[] signalIds = port.valueSignalIds();
+            int semanticBits = Math.min(LOSSLESS_STREAM_SEMANTIC_BITS, signalIds.length);
+            for (int bit = 0; bit < semanticBits; bit++) ids.add(signalIds[bit]);
         }
         return Set.copyOf(ids);
     }
