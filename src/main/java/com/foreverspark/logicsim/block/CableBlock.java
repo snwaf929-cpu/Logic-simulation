@@ -1,10 +1,12 @@
 package com.foreverspark.logicsim.block;
 
 import com.foreverspark.logicsim.interconnect.CableKind;
+import com.foreverspark.logicsim.interconnect.CableRuntime;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -57,6 +59,7 @@ public final class CableBlock extends Block {
 
     protected BlockState updateShapeLegacy(BlockState state, Direction direction, BlockState neighborState,
                                            LevelAccessor level, BlockPos pos, BlockPos neighborPos) {
+        if (level instanceof Level realLevel) CableRuntime.invalidateTopology(realLevel, pos);
         return state.setValue(property(direction), connectsTo(level, pos, direction, neighborState));
     }
 
@@ -65,6 +68,7 @@ public final class CableBlock extends Block {
                                      net.minecraft.world.level.ScheduledTickAccess ticks, BlockPos pos,
                                      Direction direction, BlockPos neighborPos, BlockState neighborState,
                                      net.minecraft.util.RandomSource random) {
+        if (level instanceof Level realLevel) CableRuntime.invalidateTopology(realLevel, pos);
         return state.setValue(property(direction), connectsTo(level, pos, direction, neighborState));
     }
 
