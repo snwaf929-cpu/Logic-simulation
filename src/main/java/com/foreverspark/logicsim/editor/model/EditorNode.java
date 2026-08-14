@@ -14,6 +14,10 @@ public final class EditorNode {
     /** Infrastructure source subtype: CONSTANT=false, virtual CLOCK=true. */
     public boolean clockSource = false;
     public long clockFrequencyHz = 1_000_000L;
+    /** Infrastructure source subtype: edge-triggered RANDOM source. */
+    public boolean randomSource = false;
+    /** Probability that a RANDOM source emits HIGH on each 0 -> 1 trigger edge. */
+    public int randomChancePercent = 50;
 
     public EditorNode() {}
 
@@ -27,6 +31,7 @@ public final class EditorNode {
 
     public String displayName() {
         if (kind == NodeKind.CUSTOM_CHIP && chipName != null && !chipName.isBlank()) return chipName;
+        if (randomSource && kind == NodeKind.CONSTANT) return "RANDOM " + randomChancePercent + "%";
         if (clockSource && kind == NodeKind.CONSTANT) return "CLOCK " + formatFrequency(clockFrequencyHz);
         if (label != null && !label.isBlank()) return label;
         return switch (kind) {
