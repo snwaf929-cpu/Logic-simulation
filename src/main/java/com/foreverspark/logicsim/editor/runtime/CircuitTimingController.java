@@ -40,20 +40,20 @@ public final class CircuitTimingController {
         }
     }
 
-    /** Sources sharing both a trigger and probability are sampled together as a 64-lane bit vector. */
+    /** One probability bucket is stored as primitive output ids so the MHz loop never dereferences RandomState. */
     private static final class RandomChanceBucket {
         private final int chancePercent;
-        private final RandomState[] sources;
+        private final int[] outputSignalIds;
 
-        private RandomChanceBucket(int chancePercent, RandomState[] sources) {
+        private RandomChanceBucket(int chancePercent, int[] outputSignalIds) {
             this.chancePercent = chancePercent;
-            this.sources = sources;
+            this.outputSignalIds = outputSignalIds;
         }
     }
 
     private static final class RandomTriggerGroup {
         private final int triggerSignalId;
-        private final RandomState[] sources;
+        private final int sourceCount;
         private final RandomChanceBucket[] buckets;
         private boolean lastHigh;
         private long rng0;
@@ -61,13 +61,13 @@ public final class CircuitTimingController {
 
         private RandomTriggerGroup(
                 int triggerSignalId,
-                RandomState[] sources,
+                int sourceCount,
                 RandomChanceBucket[] buckets,
                 boolean lastHigh,
                 long seed
         ) {
             this.triggerSignalId = triggerSignalId;
-            this.sources = sources;
+            this.sourceCount = sourceCount;
             this.buckets = buckets;
             this.lastHigh = lastHigh;
 
@@ -78,12 +78,6 @@ public final class CircuitTimingController {
             if ((rng0 | rng1) == 0L) rng1 = RNG_NONZERO_FALLBACK;
         }
 
-        /**
-         * xoroshiro128++ output. The previous raw xorshift64 state was fast but linear: when lanes 0..47 were
-         * reassembled into X/Y/RGB buses, a huge random-pixel display exposed visible bands and rectangular
-         * sections. The ++ output scrambler removes those cross-bit lattice artifacts while keeping the vector path
-         * allocation-free and only a handful of integer operations per 64 RANDOM lanes.
-         */
         private long nextLong() {
             long s0 = rng0;
             long s1 = rng1;
@@ -102,6 +96,7 @@ public final class CircuitTimingController {
     private final Map<ClockAddress, Integer> clockEnableSignalIds = new LinkedHashMap<>();
     private final Map<RandomAddress, RandomState> randomSources = new LinkedHashMap<>();
     private RandomTriggerGroup[] randomGroups = new RandomTriggerGroup[0];
+    private Map<Integer, RandomTriggerGroup> randomGroupByTriggerSignal = Map.of();
 
     public CircuitTimingController(CompiledCircuit compiled, CircuitDocument root, ChipLookup chips) {
         if (compiled == null) throw new IllegalArgumentException("Compiled circuit is required");
@@ -125,7 +120,6 @@ public final class CircuitTimingController {
     public int randomChancePercent(String scopePath, int nodeId) { return requireRandom(scopePath, nodeId).chancePercent; }
     public void setRandomChancePercent(String scopePath, int nodeId, int chancePercent) {
         requireRandom(scopePath, nodeId).chancePercent = Math.max(0, Math.min(100, chancePercent));
-        // Chance changes are rare editor operations; rebuilding buckets keeps the MHz hot path branch-light.
         compileRandomGroups();
     }
 
@@ -158,25 +152,49 @@ public final class CircuitTimingController {
     public long advanceNanos(long elapsedNanos, long edgeBudgetPerClock, Runnable afterSettledEdge) {
         if (elapsedNanos < 0L) throw new IllegalArgumentException("elapsedNanos must be >= 0");
         if (edgeBudgetPerClock < 0L) throw new IllegalArgumentException("edgeBudgetPerClock must be >= 0");
-        Runnable callback = sourceCallback(afterSettledEdge);
+
         boolean turbo = simulator.turboMode();
         long emitted = 0L;
         for (Map.Entry<ClockAddress, TimingSignalDriver> entry : clocks.entrySet()) {
             ClockAddress address = entry.getKey();
             TimingSignalDriver clock = entry.getValue();
             if (!clock.timing().running()) continue;
+
             Integer enableId = clockEnableSignalIds.get(address);
             if (enableId != null && !(turbo ? simulator.isHighFast(enableId) : simulator.isHigh(enableId))) continue;
-            long next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, callback);
+
+            RandomTriggerGroup directRandom = randomGroupByTriggerSignal.get(clock.signalId());
+            boolean pulseBatch = turbo
+                    && enableId == null
+                    && randomGroups.length == 1
+                    && directRandom != null
+                    && clock.compiledConeGateCount() == 0
+                    && !simulator.isDirtyWatchedSignalFast(clock.signalId());
+
+            long next;
+            if (pulseBatch) {
+                // This specialized topology has no observer of the clock's falling level. Consume H/L clock edges in
+                // O(1), then execute only the useful LOW->HIGH RANDOM/device cycles.
+                next = clock.advanceNanosPulseBatch(elapsedNanos, edgeBudgetPerClock);
+                long risingEdges = clock.lastPulseRisingEdges();
+                for (long cycle = 0L; cycle < risingEdges; cycle++) {
+                    boolean changed = sampleGroupOutputs(directRandom, true);
+                    if (changed) simulator.runUntilStableFast(EDGE_SETTLE_BUDGET);
+                    runOutputCallbackIfNeeded(afterSettledEdge);
+                }
+                directRandom.lastHigh = clock.timing().high();
+            } else {
+                next = clock.advanceNanos(elapsedNanos, edgeBudgetPerClock, sourceCallback(afterSettledEdge));
+            }
+
             emitted = emitted > Long.MAX_VALUE - next ? Long.MAX_VALUE : emitted + next;
         }
         return emitted;
     }
 
     /**
-     * RANDOM sources are grouped by shared trigger and then by probability. Up to 64 equal-probability sources are
-     * sampled as one bit vector. Common 50/25/75% cases require only 1-2 PRNG state updates for an entire bus;
-     * arbitrary integer percentages use an 8-bit bit-sliced comparator (max probability error < 0.2%).
+     * RANDOM sources are grouped by shared trigger and probability. The turbo path writes up to 64 output lanes in
+     * one primitive simulator loop instead of making one Java method call and object dereference per RANDOM bit.
      */
     public int processRandomSources() {
         RandomTriggerGroup[] groups = randomGroups;
@@ -197,23 +215,8 @@ public final class CircuitTimingController {
                 group.lastHigh = high;
                 if (!rising) continue;
 
-                fired += group.sources.length;
-                RandomChanceBucket[] buckets = group.buckets;
-                for (int bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
-                    RandomChanceBucket bucket = buckets[bucketIndex];
-                    RandomState[] sources = bucket.sources;
-                    for (int base = 0; base < sources.length; base += 64) {
-                        int count = Math.min(64, sources.length - base);
-                        long highMask = sampleMask(group, bucket.chancePercent, count);
-                        for (int lane = 0; lane < count; lane++) {
-                            RandomState state = sources[base + lane];
-                            boolean nextHigh = ((highMask >>> lane) & 1L) != 0L;
-                            outputChanged |= turbo
-                                    ? simulator.driveLevelFast(state.outputSignalId, nextHigh)
-                                    : simulator.driveLevel(state.outputSignalId, nextHigh);
-                        }
-                    }
-                }
+                fired += group.sourceCount;
+                outputChanged |= sampleGroupOutputs(group, turbo);
             }
 
             if (!outputChanged) break;
@@ -234,17 +237,52 @@ public final class CircuitTimingController {
         }
     }
 
+    private boolean sampleGroupOutputs(RandomTriggerGroup group, boolean turbo) {
+        boolean outputChanged = false;
+        RandomChanceBucket[] buckets = group.buckets;
+        for (int bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
+            RandomChanceBucket bucket = buckets[bucketIndex];
+            int[] outputSignalIds = bucket.outputSignalIds;
+            for (int base = 0; base < outputSignalIds.length; base += 64) {
+                int count = Math.min(64, outputSignalIds.length - base);
+                long highMask = sampleMask(group, bucket.chancePercent, count);
+                if (turbo) {
+                    outputChanged |= simulator.driveBitVectorFast(outputSignalIds, base, count, highMask);
+                } else {
+                    for (int lane = 0; lane < count; lane++) {
+                        outputChanged |= simulator.driveLevel(
+                                outputSignalIds[base + lane],
+                                ((highMask >>> lane) & 1L) != 0L
+                        );
+                    }
+                }
+            }
+        }
+        return outputChanged;
+    }
+
     private Runnable sourceCallback(Runnable afterSettledEdge) {
-        if (randomGroups.length == 0) return afterSettledEdge;
+        if (randomGroups.length == 0) {
+            if (afterSettledEdge == null) return null;
+            return () -> runOutputCallbackIfNeeded(afterSettledEdge);
+        }
         return () -> {
             processRandomSources();
-            if (afterSettledEdge != null) afterSettledEdge.run();
+            runOutputCallbackIfNeeded(afterSettledEdge);
         };
+    }
+
+    private void runOutputCallbackIfNeeded(Runnable afterSettledEdge) {
+        if (afterSettledEdge == null) return;
+        // Programmed runtimes track boundary signals with dirty bits. Avoid entering the block/display bridge on
+        // clock edges that changed nothing externally. Editor/debug runtimes without watchers preserve old behavior.
+        if (!simulator.dirtyWatchEnabledFast() || simulator.hasDirtyWatchBitsFast()) afterSettledEdge.run();
     }
 
     private void compileRandomGroups() {
         if (randomSources.isEmpty()) {
             randomGroups = new RandomTriggerGroup[0];
+            randomGroupByTriggerSignal = Map.of();
             return;
         }
 
@@ -254,38 +292,52 @@ public final class CircuitTimingController {
         }
 
         RandomTriggerGroup[] groups = new RandomTriggerGroup[byTrigger.size()];
+        Map<Integer, RandomTriggerGroup> byTriggerSignal = new LinkedHashMap<>();
         int out = 0;
         for (Map.Entry<Integer, List<RandomState>> entry : byTrigger.entrySet()) {
-            RandomState[] sources = entry.getValue().toArray(RandomState[]::new);
+            List<RandomState> sourceList = entry.getValue();
             int triggerSignalId = entry.getKey();
             boolean high = simulator.isHigh(triggerSignalId);
 
             Map<Integer, List<RandomState>> byChance = new LinkedHashMap<>();
-            for (RandomState source : sources) {
+            for (RandomState source : sourceList) {
                 byChance.computeIfAbsent(source.chancePercent, ignored -> new ArrayList<>()).add(source);
             }
             RandomChanceBucket[] buckets = new RandomChanceBucket[byChance.size()];
             int bucketOut = 0;
             for (Map.Entry<Integer, List<RandomState>> chanceEntry : byChance.entrySet()) {
-                buckets[bucketOut++] = new RandomChanceBucket(
-                        chanceEntry.getKey(),
-                        chanceEntry.getValue().toArray(RandomState[]::new)
-                );
+                List<RandomState> chanceSources = chanceEntry.getValue();
+                int[] outputIds = new int[chanceSources.size()];
+                for (int index = 0; index < outputIds.length; index++) {
+                    outputIds[index] = chanceSources.get(index).outputSignalId;
+                }
+                buckets[bucketOut++] = new RandomChanceBucket(chanceEntry.getKey(), outputIds);
             }
 
-            long seed = mix64(System.nanoTime() ^ ((long) triggerSignalId << 32) ^ sources.length ^ out);
-            groups[out++] = new RandomTriggerGroup(triggerSignalId, sources, buckets, high, seed);
+            long seed = mix64(System.nanoTime() ^ ((long) triggerSignalId << 32) ^ sourceList.size() ^ out);
+            RandomTriggerGroup group = new RandomTriggerGroup(
+                    triggerSignalId,
+                    sourceList.size(),
+                    buckets,
+                    high,
+                    seed
+            );
+            groups[out++] = group;
+            byTriggerSignal.put(triggerSignalId, group);
         }
         randomGroups = groups;
+        randomGroupByTriggerSignal = Map.copyOf(byTriggerSignal);
     }
 
     private void logCompileTopology() {
         int queueFreeClocks = 0;
         int feedbackClocks = 0;
+        int pulseBatchClocks = 0;
         long totalConeGates = 0L;
         int maxConeGates = 0;
         int chanceBuckets = 0;
-        for (TimingSignalDriver driver : clocks.values()) {
+        for (Map.Entry<ClockAddress, TimingSignalDriver> entry : clocks.entrySet()) {
+            TimingSignalDriver driver = entry.getValue();
             int cone = driver.compiledConeGateCount();
             if (cone >= 0) {
                 queueFreeClocks++;
@@ -294,11 +346,18 @@ public final class CircuitTimingController {
             } else {
                 feedbackClocks++;
             }
+            if (clockEnableSignalIds.get(entry.getKey()) == null
+                    && randomGroups.length == 1
+                    && randomGroupByTriggerSignal.containsKey(driver.signalId())
+                    && cone == 0
+                    && !simulator.isDirtyWatchedSignalFast(driver.signalId())) {
+                pulseBatchClocks++;
+            }
         }
         for (RandomTriggerGroup group : randomGroups) chanceBuckets += group.buckets.length;
         LogicSimulationMod.LOGGER.info(
-                "[SIM COMPILE] clocks={} queueFreeClocks={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={}",
-                clocks.size(), queueFreeClocks, feedbackClocks, totalConeGates, maxConeGates,
+                "[SIM COMPILE] clocks={} queueFreeClocks={} pulseBatchClocks={} feedbackClocks={} totalClockConeGates={} maxClockConeGates={} randomSources={} randomTriggerGroups={} randomChanceBuckets={}",
+                clocks.size(), queueFreeClocks, pulseBatchClocks, feedbackClocks, totalConeGates, maxConeGates,
                 randomSources.size(), randomGroups.length, chanceBuckets
         );
     }
@@ -354,13 +413,10 @@ public final class CircuitTimingController {
         if (chancePercent <= 0) return 0L;
         if (chancePercent >= 100) return validMask;
 
-        // Very common digital-test probabilities have exact, exceptionally cheap bit-vector implementations.
         if (chancePercent == 50) return group.nextLong() & validMask;
         if (chancePercent == 25) return (~group.nextLong() & ~group.nextLong()) & validMask;
         if (chancePercent == 75) return (~(group.nextLong() & group.nextLong())) & validMask;
 
-        // Eight independent, scrambled 64-bit words represent the eight bits of 64 independent random bytes.
-        // Compare all 64 lanes against one scalar threshold simultaneously using bitwise less-than logic.
         int threshold = (chancePercent * 256 + 50) / 100;
         if (threshold <= 0) return 0L;
         if (threshold >= 256) return validMask;
