@@ -252,6 +252,8 @@ public final class RealtimeDisplaySurface {
         /** RGB565 is exactly 16 bits. char[] halves the 2048x2048 transient surface from 16 MiB to 8 MiB. */
         private final char[] pixels;
         private final long[] tileRevisions;
+        /** Reused 64-bit dirty words; a 32x32 tile wall needs only 16 longs. */
+        private final long[] batchDirtyTileWords;
         private long[] tileKeys;
         private long revision;
         private volatile long publishedRevision;
@@ -270,6 +272,7 @@ public final class RealtimeDisplaySurface {
             this.tileCount = tileCount;
             this.pixels = new char[Math.multiplyExact(backingWidth, backingHeight)];
             this.tileRevisions = new long[columns * rows];
+            this.batchDirtyTileWords = new long[(tileRevisions.length + 63) >>> 6];
             this.tileKeys = new long[columns * rows];
         }
 
@@ -279,26 +282,31 @@ public final class RealtimeDisplaySurface {
             if (revision != before) publishedRevision = revision;
         }
 
-        /** Apply a complete simulator batch with one release publication instead of one volatile write per pixel. */
+        /** Apply a complete simulator batch with one release publication and one tile-revision commit. */
         public void recordBatch(long[] raws, int count) {
             if (raws == null || count <= 0) return;
             int limit = Math.min(count, raws.length);
-            long before = revision;
 
             if (density == BACKING_TILE_SIZE) {
-                recordNative64Batch(raws, limit);
-            } else {
-                for (int index = 0; index < limit; index++) recordUnpublished(raws[index]);
+                if (recordNative64Batch(raws, limit)) publishedRevision = revision;
+                return;
             }
 
+            long before = revision;
+            for (int index = 0; index < limit; index++) recordUnpublished(raws[index]);
             if (revision != before) publishedRevision = revision;
         }
 
         /**
-         * 64 pixels/block makes logical coordinates identical to backing coordinates. This is the 2048x2048 stress
-         * path, so avoid division/modulo, scaling loops and helper dispatch inside the command loop.
+         * 64 pixels/block makes logical coordinates identical to backing coordinates. Pixel writes update only the
+         * 8 MiB RGB565 array plus a tiny 1024-bit tile-dirty mask. Revision/tile metadata is committed once per 64K
+         * edge chunk instead of once per virtual pixel write.
          */
-        private void recordNative64Batch(long[] raws, int limit) {
+        private boolean recordNative64Batch(long[] raws, int limit) {
+            Arrays.fill(batchDirtyTileWords, 0L);
+            boolean changed = false;
+            boolean allTilesDirty = false;
+
             for (int commandIndex = 0; commandIndex < limit; commandIndex++) {
                 long raw = raws[commandIndex];
                 int opcode = (int) ((raw >>> 48) & 0xFFL);
@@ -314,14 +322,43 @@ public final class RealtimeDisplaySurface {
                     pixels[pixelIndex] = (char) rgb565;
                     if (previous == 0 && rgb565 != 0) nonZeroPixels++;
                     else if (previous != 0 && rgb565 == 0) nonZeroPixels--;
+                    changed = true;
 
-                    long next = ++revision;
-                    int tileIndex = (globalY >>> BACKING_TILE_SHIFT) * columns + (globalX >>> BACKING_TILE_SHIFT);
-                    tileRevisions[tileIndex] = next;
+                    if (!allTilesDirty) {
+                        int tileIndex = (globalY >>> BACKING_TILE_SHIFT) * columns + (globalX >>> BACKING_TILE_SHIFT);
+                        batchDirtyTileWords[tileIndex >>> 6] |= 1L << (tileIndex & 63);
+                    }
                     continue;
                 }
 
-                if (opcode == DisplayCommandCodec.OP_CLEAR) clearUnpublished();
+                if (opcode == DisplayCommandCodec.OP_CLEAR && nonZeroPixels != 0) {
+                    Arrays.fill(pixels, (char) 0);
+                    nonZeroPixels = 0;
+                    changed = true;
+                    allTilesDirty = true;
+                    Arrays.fill(batchDirtyTileWords, 0L);
+                }
+            }
+
+            if (!changed) return false;
+            long next = ++revision;
+            if (allTilesDirty) {
+                Arrays.fill(tileRevisions, next);
+            } else {
+                commitDirtyTiles(next);
+            }
+            return true;
+        }
+
+        private void commitDirtyTiles(long revisionValue) {
+            for (int wordIndex = 0; wordIndex < batchDirtyTileWords.length; wordIndex++) {
+                long word = batchDirtyTileWords[wordIndex];
+                while (word != 0L) {
+                    int bit = Long.numberOfTrailingZeros(word);
+                    int tileIndex = (wordIndex << 6) + bit;
+                    if (tileIndex < tileRevisions.length) tileRevisions[tileIndex] = revisionValue;
+                    word &= word - 1L;
+                }
             }
         }
 
