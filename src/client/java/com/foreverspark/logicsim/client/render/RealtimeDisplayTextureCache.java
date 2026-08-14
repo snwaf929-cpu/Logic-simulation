@@ -63,7 +63,8 @@ public final class RealtimeDisplayTextureCache {
         long minInterval = (long) surface.backingWidth() * surface.backingHeight() >= LARGE_SURFACE_PIXELS
                 ? LARGE_FRAME_INTERVAL_NANOS
                 : SMALL_FRAME_INTERVAL_NANOS;
-        if (published != entry.uploadedPublishedRevision && now - entry.lastUploadNanos >= minInterval) {
+        if (published != entry.uploadedPublishedRevision
+                && (entry.lastUploadNanos == 0L || now - entry.lastUploadNanos >= minInterval)) {
             updateTexture(surface, entry, published, now);
         }
 
@@ -177,7 +178,7 @@ public final class RealtimeDisplayTextureCache {
         private final DynamicTexture texture;
         private final long[] tileRevisions;
         private long uploadedPublishedRevision = Long.MIN_VALUE;
-        private long lastUploadNanos = Long.MIN_VALUE;
+        private long lastUploadNanos;
         private long lastUsedNanos;
 
         private Entry(Identifier id, DynamicTexture texture, long[] tileRevisions, long now) {
