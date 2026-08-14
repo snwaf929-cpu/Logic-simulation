@@ -1,9 +1,8 @@
 package com.foreverspark.logicsim.client.render;
 
-import net.minecraft.client.gui.Font;
 import net.minecraft.core.Direction;
 
-/** Regression checks for display face orientation, depth behavior, and emissive pixels. */
+/** Regression checks for display face orientation, full-face geometry, and emissive pixels. */
 public final class DisplayRendererSelfTest {
     private DisplayRendererSelfTest() {}
 
@@ -13,13 +12,18 @@ public final class DisplayRendererSelfTest {
         checkFaces(Direction.SOUTH, 180.0f, 180.0f);
         checkFaces(Direction.WEST, 270.0f, 90.0f);
 
-        check(DisplayBlockEntityRenderer.pixelDisplayMode() == Font.DisplayMode.POLYGON_OFFSET,
-                "pixels must use depth-tested polygon-offset surface rendering, never SEE_THROUGH");
         check(DisplayBlockEntityRenderer.pixelLight() == 0x00F000F0,
                 "screen pixels must use vanilla packed full-bright light");
+        check(DisplayBlockEntityRenderer.screenMin() == 0.0f,
+                "pixel geometry must start at the exact block-face edge");
+        check(DisplayBlockEntityRenderer.screenMax() == 1.0f,
+                "pixel geometry must end at the exact block-face edge");
+        check(DisplayBlockEntityRenderer.screenMax() - DisplayBlockEntityRenderer.screenMin() == 1.0f,
+                "1x1 mode must cover the complete block face with zero renderer inset");
+
         double z = DisplayBlockEntityRenderer.screenFaceZ();
         check(z > 0.0 && z < 0.75 / 16.0, "pixel plane sits just outside the local NORTH model screen face");
-        System.out.println("Display renderer face/depth self-test: PASS");
+        System.out.println("Display renderer face/full-surface self-test: PASS");
     }
 
     private static void checkFaces(Direction expectedFacing, float expectedYnYaw, float expectedSignedDegrees) {
