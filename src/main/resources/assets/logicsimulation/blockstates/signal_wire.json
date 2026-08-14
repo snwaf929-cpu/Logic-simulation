@@ -5,7 +5,7 @@
     { "when": { "south": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "y": 180 } },
     { "when": { "east": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "y": 90 } },
     { "when": { "west": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "y": 270 } },
-    { "when": { "up": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "x": 90 } },
-    { "when": { "down": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "x": 270 } }
+    { "when": { "up": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "x": 270 } },
+    { "when": { "down": "true" }, "apply": { "model": "logicsimulation:block/signal_wire_arm", "x": 90 } }
   ]
 }

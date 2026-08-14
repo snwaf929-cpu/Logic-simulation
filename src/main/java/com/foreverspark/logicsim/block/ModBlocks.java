@@ -35,6 +35,7 @@ public final class ModBlocks {
     public static final CableBlock BUS_CABLE = registerBus(ModBlockItemIds.BUS_CABLE, 8);
     public static final CableBlock BUS_CABLE_16 = registerBus(ModBlockItemIds.BUS_CABLE_16, 16);
     public static final CableBlock BUS_CABLE_32 = registerBus(ModBlockItemIds.BUS_CABLE_32, 32);
+    public static final CableBlock BUS_CABLE_64 = registerBus(ModBlockItemIds.BUS_CABLE_64, 64);
 
     private ModBlocks() {}
 
@@ -66,6 +67,7 @@ public final class ModBlocks {
             tab.accept(BUS_CABLE.asItem());
             tab.accept(BUS_CABLE_16.asItem());
             tab.accept(BUS_CABLE_32.asItem());
+            tab.accept(BUS_CABLE_64.asItem());
         });
     }
 }

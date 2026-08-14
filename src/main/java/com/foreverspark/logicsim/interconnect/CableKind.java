@@ -7,7 +7,7 @@ public enum CableKind {
     SIGNAL,
     BUS;
 
-    private static final Set<Integer> PHYSICAL_BUS_WIDTHS = Set.of(2, 4, 8, 16, 32);
+    private static final Set<Integer> PHYSICAL_BUS_WIDTHS = Set.of(2, 4, 8, 16, 32, 64);
 
     public void validateWidth(int width) {
         if (this == SIGNAL) {
@@ -17,7 +17,7 @@ public enum CableKind {
             return;
         }
         if (!PHYSICAL_BUS_WIDTHS.contains(width)) {
-            throw new IllegalArgumentException("Physical bus cable width must be one of 2, 4, 8, 16, or 32 bits; got " + width);
+            throw new IllegalArgumentException("Physical bus cable width must be one of 2, 4, 8, 16, 32, or 64 bits; got " + width);
         }
     }
 
