@@ -1,32 +1,39 @@
 package com.foreverspark.logicsim.client.render;
 
+import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import com.foreverspark.logicsim.block.DisplayPorts;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.core.Direction;
-import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Arrays;
 
 public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity, DisplayWorldRenderState> {
-    private static final String PIXEL = "█";
-    /** Vanilla packed block-light 15 + sky-light 15. Kept local because the helper class moved in 26.2 mappings. */
+    /** Vanilla packed block-light 15 + sky-light 15. */
     private static final int FULL_BRIGHT = 0x00F000F0;
+    /** A one-pixel white texture; vertex color supplies the actual RGB565 display color. */
+    private static final Identifier WHITE_TEXTURE = Identifier.fromNamespaceAndPath(
+            LogicSimulationMod.MOD_ID,
+            "textures/misc/display_white.png"
+    );
     /** display_block.json puts the visible local-NORTH screen surface at z=0.75/16. */
     private static final double SCREEN_FACE_Z = (0.75 / 16.0) - 0.001;
-    private final Font font;
+    private static final float SCREEN_MIN = 0.0f;
+    private static final float SCREEN_MAX = 1.0f;
 
     public DisplayBlockEntityRenderer(BlockEntityRendererProvider.Context context) {
-        this.font = context.font();
+        // The renderer intentionally does not use Font anymore. A font glyph can never be a perfect pixel cell:
+        // glyph bearings/advance/line height create the visible gaps that the old renderer produced.
     }
 
     @Override
@@ -44,60 +51,55 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         Arrays.fill(state.pixels, 0xFF000000);
         for (int y = 0; y < state.pixelHeight; y++) {
             for (int x = 0; x < state.pixelWidth; x++) {
-                state.pixels[y * DisplayBlockEntity.MAX_WIDTH + x] = blockEntity.framebuffer().pixelArgb(x, y);
+                state.pixels[y * DisplayBlockEntity.MAX_WIDTH + x] = blockEntity.logicalPixelArgb(x, y);
             }
         }
     }
 
     @Override
     public void submit(DisplayWorldRenderState state, PoseStack pose, SubmitNodeCollector queue, CameraRenderState cameraState) {
-        int glyphWidth = Math.max(1, font.width(PIXEL));
-        float scaleX = 0.998f / Math.max(1.0f, state.pixelWidth * glyphWidth);
-        float scaleY = 0.998f / Math.max(1.0f, state.pixelHeight * 9.0f);
+        final int width = Math.max(1, state.pixelWidth);
+        final int height = Math.max(1, state.pixelHeight);
+        final int[] pixels = state.pixels;
+        final float cellWidth = (SCREEN_MAX - SCREEN_MIN) / width;
+        final float cellHeight = (SCREEN_MAX - SCREEN_MIN) / height;
 
         pose.pushPose();
         pose.translate(0.5, 0.5, 0.5);
-
-        /*
-         * Follow the same transform convention used by current 26.x block-entity text renderers:
-         * rotate around negative Y using the opposite direction's vanilla yaw. This maps the model's
-         * local NORTH screen plane to the block's FACING direction without copying blockstate JSON signs.
-         */
         pose.mulPose(Axis.YN.rotationDegrees(surfaceYawDegrees(state.facing)));
 
-        // Start at the top-left corner of the real local-NORTH screen, slightly outside the model surface.
-        pose.translate(-0.499, 0.499, screenFaceZ() - 0.5);
+        // Convert back to local block coordinates while keeping the plane just outside the real NORTH face.
+        pose.translate(-0.5, -0.5, screenFaceZ() - 0.5);
 
         /*
-         * Do not mirror the PoseStack with a negative scale. Mirroring flips geometry winding and can make
-         * depth-tested glyphs disappear. Rotate 180 degrees around Z and keep scales positive, which is the
-         * normal surface-text pattern in current Minecraft renderers.
+         * One real quad per logical pixel. Adjacent cells use the exact same calculated edge coordinate, so
+         * there is no font advance, line-height gap, inset, bezel, or artificial padding between pixels.
+         * At 1x1 the single quad is exactly 0..1 by 0..1: the ENTIRE block face is one pixel.
          */
-        pose.mulPose(Axis.ZN.rotationDegrees(180.0f));
-        pose.scale(scaleX, scaleY, scaleX);
+        queue.submitCustomGeometry(pose, RenderTypes.text(WHITE_TEXTURE), (matrix, consumer) -> {
+            for (int y = 0; y < height; y++) {
+                float top = SCREEN_MAX - y * cellHeight;
+                float bottom = SCREEN_MAX - (y + 1) * cellHeight;
+                for (int x = 0; x < width; x++) {
+                    int color = pixels[y * DisplayBlockEntity.MAX_WIDTH + x];
+                    if ((color & 0x00FFFFFF) == 0) continue;
 
-        for (int y = 0; y < state.pixelHeight; y++) {
-            for (int x = 0; x < state.pixelWidth; x++) {
-                int color = state.pixels[y * DisplayBlockEntity.MAX_WIDTH + x];
-                if ((color & 0x00FFFFFF) == 0) continue;
+                    float left = SCREEN_MIN + x * cellWidth;
+                    float right = SCREEN_MIN + (x + 1) * cellWidth;
 
-                // After the 180-degree Z rotation, negative text X advances toward screen-right.
-                float textX = -(x + 1) * glyphWidth;
-                float textY = y * 9.0f;
-                queue.submitText(
-                        pose,
-                        textX,
-                        textY,
-                        Component.literal(PIXEL).getVisualOrderText(),
-                        false,
-                        pixelDisplayMode(),
-                        pixelLight(),
-                        color,
-                        0,
-                        0
-                );
+                    // Front normal is local NORTH (-Z): TL -> TR -> BR -> BL gives the correct winding.
+                    consumer.addVertex(matrix, left, top, 0.0f)
+                            .setColor(color).setUv(0.0f, 0.0f).setLight(FULL_BRIGHT);
+                    consumer.addVertex(matrix, right, top, 0.0f)
+                            .setColor(color).setUv(1.0f, 0.0f).setLight(FULL_BRIGHT);
+                    consumer.addVertex(matrix, right, bottom, 0.0f)
+                            .setColor(color).setUv(1.0f, 1.0f).setLight(FULL_BRIGHT);
+                    consumer.addVertex(matrix, left, bottom, 0.0f)
+                            .setColor(color).setUv(0.0f, 1.0f).setLight(FULL_BRIGHT);
+                }
             }
-        }
+        });
+
         pose.popPose();
     }
 
@@ -117,16 +119,19 @@ public final class DisplayBlockEntityRenderer implements BlockEntityRenderer<Dis
         };
     }
 
-    static Font.DisplayMode pixelDisplayMode() {
-        return Font.DisplayMode.POLYGON_OFFSET;
-    }
-
-    /** A monitor pixel is emissive; its RGB565 value should not become black because the block is unlit. */
     static int pixelLight() {
         return FULL_BRIGHT;
     }
 
     static double screenFaceZ() {
         return SCREEN_FACE_Z;
+    }
+
+    static float screenMin() {
+        return SCREEN_MIN;
+    }
+
+    static float screenMax() {
+        return SCREEN_MAX;
     }
 }
