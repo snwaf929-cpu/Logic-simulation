@@ -10,34 +10,42 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.Map;
 import java.util.function.Consumer;
 
 @Mixin(value = CircuitCanvasWidget.class, priority = 1250)
 public abstract class CircuitCanvasTerminalInteractionMixin {
     @Shadow private double zoom;
     @Shadow private Consumer<String> status;
+    @Shadow private Map<Integer, Long> inputStates;
     @Shadow private int screenX(double worldX) { throw new AssertionError(); }
     @Shadow private int screenY(double worldY) { throw new AssertionError(); }
     @Shadow private double nodeWidth(EditorNode node) { throw new AssertionError(); }
     @Shadow private double nodeHeight(EditorNode node) { throw new AssertionError(); }
 
     @Inject(method = "inputToggleHit", at = @At("HEAD"), cancellable = true)
-    private void logic$centerInputSwitch(EditorNode node, double mouseX, double mouseY, CallbackInfoReturnable<Boolean> cir) {
+    private void logic$compactInputSwitch(EditorNode node, double mouseX, double mouseY, CallbackInfoReturnable<Boolean> cir) {
         if (node.kind != NodeKind.INPUT) return;
+
         int x = screenX(node.x);
         int y = screenY(node.y);
-        double w = nodeWidth(node) * zoom;
-        double h = nodeHeight(node) * zoom;
-        double size = Math.max(8.0, 12.0 * zoom);
-        double cx = x + w * 0.5;
-        double cy = y + h * 0.5;
-        cir.setReturnValue(mouseX >= cx - size * 0.5 && mouseX <= cx + size * 0.5
-                && mouseY >= cy - size * 0.5 && mouseY <= cy + size * 0.5);
+        int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
+        int h = Math.max(6, (int)Math.round(nodeHeight(node) * zoom));
+        int indicator = Math.max(4, Math.min(h - 2, (int)Math.round(7.0 * zoom)));
+        int inset = Math.max(1, (int)Math.round(3.0 * zoom));
+        int sx = x + inset;
+        int sy = y + (h - indicator) / 2;
+
+        // The visible square is the switch. Keep the rest of the tiny terminal available as a drag handle.
+        double padding = Math.max(1.0, zoom);
+        cir.setReturnValue(mouseX >= sx - padding && mouseX <= sx + indicator + padding
+                && mouseY >= sy - padding && mouseY <= sy + indicator + padding);
     }
 
     @Inject(method = "toggleInput", at = @At("RETURN"))
     private void logic$explainPersistentInput(EditorNode node, CallbackInfo ci) {
-        status.accept("INPUT manual state saved: leaving the editor keeps this value running in the Circuit Block. A real external input can still drive this port later.");
+        long value = inputStates.getOrDefault(node.id, 0L);
+        status.accept(node.displayName() + " = " + (value == 0L ? "OFF" : "ON") + " — saved as this board's default input");
     }
 
     @Inject(method = "toggleConstant", at = @At("RETURN"))
