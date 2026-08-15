@@ -63,13 +63,13 @@ public abstract class ComponentLibraryChipDeleteMixin {
         searchFocused = false;
         String deleting = selectedChip;
         try {
-            List<String> dependents = ((ChipDeletionAccess) library).logic$dependentsOf(deleting);
+            List<String> dependents = ((ChipDeletionAccess) (Object) library).logic$dependentsOf(deleting);
             if (!dependents.isEmpty()) {
                 String shown = String.join(", ", dependents.subList(0, Math.min(4, dependents.size())));
                 if (dependents.size() > 4) shown += " +" + (dependents.size() - 4) + " more";
                 status.accept("Cannot delete CHIP " + deleting + " — used by " + shown);
             } else {
-                ((ChipDeletionAccess) library).logic$deleteChip(deleting);
+                ((ChipDeletionAccess) (Object) library).logic$deleteChip(deleting);
                 selectedChip = null;
                 status.accept("Deleted CHIP " + deleting);
             }
