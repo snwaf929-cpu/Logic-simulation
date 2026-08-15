@@ -5,19 +5,14 @@ import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-/**
- * Bounded, document-level undo/redo history.
- *
- * <p>Call {@link #checkpoint(String, CircuitDocument)} immediately before an edit. No-op
- * checkpoints are discarded lazily while undoing, which makes it safe to checkpoint a possible
- * drag before knowing whether the pointer actually moved.</p>
- */
+/** Bounded, atomic document-level undo/redo history. */
 public final class EditorHistory {
     public static final int DEFAULT_LIMIT = 160;
 
     private final int limit;
     private final Deque<Entry> undo = new ArrayDeque<>();
     private final Deque<Entry> redo = new ArrayDeque<>();
+    private Entry pending;
 
     public EditorHistory() {
         this(DEFAULT_LIMIT);
@@ -30,45 +25,60 @@ public final class EditorHistory {
     public void clear() {
         undo.clear();
         redo.clear();
+        pending = null;
     }
 
+    /** Starts one edit transaction. Repeated calls before commit keep the oldest pre-edit state. */
     public void checkpoint(String label, CircuitDocument current) {
-        if (current == null) return;
-        CircuitDocument snapshot = EditorDocumentSnapshot.copy(current);
-        if (!undo.isEmpty() && EditorDocumentSnapshot.same(undo.peekLast().document, snapshot)) return;
-        undo.addLast(new Entry(cleanLabel(label), snapshot));
-        while (undo.size() > limit) undo.removeFirst();
+        if (current == null || pending != null) return;
+        pending = new Entry(cleanLabel(label), EditorDocumentSnapshot.copy(current));
+    }
+
+    /** Commits the pending transaction only if the document actually changed. */
+    public boolean commit(CircuitDocument current) {
+        if (pending == null || current == null) return false;
+        Entry before = pending;
+        pending = null;
+        if (EditorDocumentSnapshot.same(before.document, current)) return false;
+        pushUndo(before);
         redo.clear();
+        return true;
     }
 
     public Result undo(CircuitDocument current) {
         if (current == null) return null;
-        CircuitDocument now = EditorDocumentSnapshot.copy(current);
-        while (!undo.isEmpty()) {
-            Entry target = undo.removeLast();
-            if (EditorDocumentSnapshot.same(target.document, now)) continue;
-            redo.addLast(new Entry(target.label, now));
-            while (redo.size() > limit) redo.removeFirst();
-            return new Result(target.label, EditorDocumentSnapshot.copy(target.document));
-        }
-        return null;
+        commit(current);
+        if (undo.isEmpty()) return null;
+        Entry target = undo.removeLast();
+        redo.addLast(new Entry(target.label, EditorDocumentSnapshot.copy(current)));
+        trim(redo);
+        return new Result(target.label, EditorDocumentSnapshot.copy(target.document));
     }
 
     public Result redo(CircuitDocument current) {
         if (current == null || redo.isEmpty()) return null;
+        pending = null;
         Entry target = redo.removeLast();
-        CircuitDocument now = EditorDocumentSnapshot.copy(current);
-        undo.addLast(new Entry(target.label, now));
-        while (undo.size() > limit) undo.removeFirst();
+        pushUndo(new Entry(target.label, EditorDocumentSnapshot.copy(current)));
         return new Result(target.label, EditorDocumentSnapshot.copy(target.document));
     }
 
     public boolean canUndo() {
-        return !undo.isEmpty();
+        return pending != null || !undo.isEmpty();
     }
 
     public boolean canRedo() {
         return !redo.isEmpty();
+    }
+
+    private void pushUndo(Entry entry) {
+        if (!undo.isEmpty() && EditorDocumentSnapshot.same(undo.peekLast().document, entry.document)) return;
+        undo.addLast(entry);
+        trim(undo);
+    }
+
+    private void trim(Deque<Entry> entries) {
+        while (entries.size() > limit) entries.removeFirst();
     }
 
     private static String cleanLabel(String label) {
