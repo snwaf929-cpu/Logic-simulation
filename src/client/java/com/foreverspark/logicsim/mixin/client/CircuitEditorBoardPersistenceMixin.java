@@ -26,14 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Gives every physical Circuit Block its own persistent editable/running board.
- *
- * Opening or closing an unchanged editor is inspection, not a power cycle. The server-side Circuit Block runtime is
- * therefore left untouched unless the actual hardware graph changed (or a reusable dependency was explicitly saved).
- * A small client preview cache also keeps the inspector from visually reverting every NAND/register to UNKNOWN when
- * the same block is reopened.
- */
 @Mixin(value = CircuitEditorScreen.class, priority = 1400)
 public abstract class CircuitEditorBoardPersistenceMixin {
     @Unique private static final int MAX_PREVIEW_SESSIONS = 4;
@@ -48,7 +40,6 @@ public abstract class CircuitEditorBoardPersistenceMixin {
     @Unique private String logic$openedHardwareSignature;
     @Unique private PreviewSession logic$previewBeforeReinit;
 
-    /** Preserve the current client inspector state when Minecraft rebuilds this same Screen after a resize/config UI. */
     @Inject(method = "init", at = @At("HEAD"))
     private void logic$capturePreviewBeforeScreenReinit(CallbackInfo ci) {
         if (canvas == null) return;
@@ -90,14 +81,12 @@ public abstract class CircuitEditorBoardPersistenceMixin {
         }
     }
 
-    /** New circuit explicitly means replace this physical block's board with a fresh board. */
     @Inject(method = "newCircuit", at = @At("RETURN"))
     private void logic$newWorldBoard(CallbackInfo ci) {
         if (logic$worldBoardPos == null || canvas == null) return;
         logic$worldBoardRoot = ((CanvasAccess)(Object)canvas).logic$getRuntimeRootDocument();
     }
 
-    /** Ctrl+S may change a reusable dependency used by this board, so this is an intentional hardware reinstall. */
     @Inject(method = "applySave", at = @At("RETURN"))
     private void logic$checkpointBoardAfterModuleSave(CallbackInfo ci) {
         logic$saveAndMaybeProgramWorldBoard(true, true);
@@ -112,12 +101,10 @@ public abstract class CircuitEditorBoardPersistenceMixin {
             if (session != null) logic$putPreview(logic$worldBoardPos, session);
         }
 
-        // Stop the client-only inspector clock. The physical Circuit Block keeps running on its server worker.
         EditorClockRuntime.clearAll();
         logic$saveAndMaybeProgramWorldBoard(false, false);
     }
 
-    /** Save the CAD board every time, but do not reinstall an unchanged physical runtime. */
     @Unique
     private void logic$saveAndMaybeProgramWorldBoard(boolean showStatus, boolean forceProgram) {
         if (logic$worldBoardPos == null || logic$worldBoardRoot == null) return;
@@ -185,20 +172,17 @@ public abstract class CircuitEditorBoardPersistenceMixin {
         }
     }
 
-    /**
-     * Electrical/configuration signature. Canvas positions and wire route points are intentionally ignored so merely
-     * organizing the schematic cannot reboot the computer.
-     */
     @Unique
     private static String logic$hardwareSignature(CircuitDocument board) {
         if (board == null) return "";
         board.normalize();
-        StringBuilder out = new StringBuilder(Math.max(64, board.nodes.size() * 48 + board.wires.size() * 20));
+        StringBuilder out = new StringBuilder(Math.max(64, board.nodes.size() * 52 + board.wires.size() * 20));
 
         List<EditorNode> nodes = new ArrayList<>(board.nodes);
         nodes.sort(Comparator.comparingInt(node -> node.id));
         for (EditorNode node : nodes) {
-            out.append('N').append(node.id).append('|').append(node.kind).append('|').append(node.width).append('|');
+            out.append('N').append(node.id).append('|').append(node.kind).append('|')
+                    .append(node.width).append('|').append(node.laneWidth).append('|');
             logic$appendString(out, node.label);
             logic$appendString(out, node.chipName);
             out.append(node.constantValue).append('|')
