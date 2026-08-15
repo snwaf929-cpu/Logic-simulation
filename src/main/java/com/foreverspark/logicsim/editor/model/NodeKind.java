@@ -9,5 +9,7 @@ public enum NodeKind {
     BUS,
     SPLITTER,
     MERGER,
+    BUS_SLICE,
+    NET_LABEL,
     CUSTOM_CHIP
 }

@@ -4,10 +4,12 @@ import com.foreverspark.logicsim.core.CircuitSimulator;
 import com.foreverspark.logicsim.core.LogicCircuit;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.core.Signal;
+import com.foreverspark.logicsim.editor.model.BusSliceOutput;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipLookup;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.NodePorts;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.model.WireConnection;
@@ -16,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -80,6 +83,7 @@ final class CircuitCompilerEngine {
         private final Map<Integer, CustomInstance> customInstances = new HashMap<>();
         private final Map<Integer, EditorNode> nodesById = new HashMap<>();
         private final Map<NodePortKey, WireConnection> incomingWires = new HashMap<>();
+        private final Map<String, Signal[]> floatingNets = new HashMap<>();
         private boolean resolvedAll;
 
         private BuildContext(
@@ -121,47 +125,33 @@ final class CircuitCompilerEngine {
 
         private void instantiateHierarchy() {
             for (EditorNode node : document.nodes) {
-                if (node.kind == com.foreverspark.logicsim.editor.model.NodeKind.CUSTOM_CHIP) {
-                    customInstance(node).child().instantiateHierarchy();
-                }
+                if (node.kind == NodeKind.CUSTOM_CHIP) customInstance(node).child().instantiateHierarchy();
             }
         }
 
         private void preallocateNandsRecursive() {
             for (EditorNode node : document.nodes) {
-                if (node.kind == com.foreverspark.logicsim.editor.model.NodeKind.NAND) {
-                    preallocateNand(node, new NodePortKey(node.id, 0));
-                }
+                if (node.kind == NodeKind.NAND) preallocateNand(node, new NodePortKey(node.id, 0));
             }
-            for (CustomInstance instance : customInstances.values()) {
-                instance.child().preallocateNandsRecursive();
-            }
+            for (CustomInstance instance : customInstances.values()) instance.child().preallocateNandsRecursive();
         }
 
         private void resolveAllRecursive() {
             resolveAll();
-            for (CustomInstance instance : customInstances.values()) {
-                instance.child().resolveAllRecursive();
-            }
+            for (CustomInstance instance : customInstances.values()) instance.child().resolveAllRecursive();
         }
 
         private void realizeNandsRecursive() {
             for (EditorNode node : document.nodes) {
-                if (node.kind == com.foreverspark.logicsim.editor.model.NodeKind.NAND) {
-                    resolveNand(node, new NodePortKey(node.id, 0));
-                }
+                if (node.kind == NodeKind.NAND) resolveNand(node, new NodePortKey(node.id, 0));
             }
-            for (CustomInstance instance : customInstances.values()) {
-                instance.child().realizeNandsRecursive();
-            }
+            for (CustomInstance instance : customInstances.values()) instance.child().realizeNandsRecursive();
         }
 
         private void publishScopesRecursive() {
             scopedInputs.put(path, new HashMap<>(inputCache));
             scopedOutputs.put(path, new HashMap<>(outputCache));
-            for (CustomInstance instance : customInstances.values()) {
-                instance.child().publishScopesRecursive();
-            }
+            for (CustomInstance instance : customInstances.values()) instance.child().publishScopesRecursive();
         }
 
         private void resolveAll() {
@@ -223,24 +213,10 @@ final class CircuitCompilerEngine {
                     case NAND -> resolveNand(node, key);
                     case CONSTANT -> resolveConstant(node, key);
                     case BUS -> resolveInput(node, 0);
-                    case SPLITTER -> {
-                        Signal[] bus = resolveInput(node, 0);
-                        int laneWidth = node.normalizedLaneWidth();
-                        int start = port * laneWidth;
-                        Signal[] lane = new Signal[laneWidth];
-                        System.arraycopy(bus, start, lane, 0, laneWidth);
-                        yield lane;
-                    }
-                    case MERGER -> {
-                        int laneWidth = node.normalizedLaneWidth();
-                        int laneCount = Math.max(1, node.width / laneWidth);
-                        Signal[] merged = new Signal[node.width];
-                        for (int lane = 0; lane < laneCount; lane++) {
-                            Signal[] laneSignals = resolveInput(node, lane);
-                            System.arraycopy(laneSignals, 0, merged, lane * laneWidth, laneWidth);
-                        }
-                        yield merged;
-                    }
+                    case SPLITTER -> resolveSplitter(node, port);
+                    case MERGER -> resolveMerger(node);
+                    case BUS_SLICE -> resolveBusSlice(node, port);
+                    case NET_LABEL -> resolveNetLabel(node);
                     case CUSTOM_CHIP -> resolveCustomOutput(node, port);
                     case OUTPUT, PROBE -> throw new CircuitCompileException(node.kind + " node " + node.id + " has no output ports");
                 };
@@ -251,10 +227,85 @@ final class CircuitCompilerEngine {
             }
         }
 
+        private Signal[] resolveSplitter(EditorNode node, int port) {
+            Signal[] bus = resolveInput(node, 0);
+            int laneWidth = node.normalizedLaneWidth();
+            int start = port * laneWidth;
+            Signal[] lane = new Signal[laneWidth];
+            System.arraycopy(bus, start, lane, 0, laneWidth);
+            return lane;
+        }
+
+        private Signal[] resolveMerger(EditorNode node) {
+            int laneWidth = node.normalizedLaneWidth();
+            int laneCount = Math.max(1, node.width / laneWidth);
+            Signal[] merged = new Signal[node.width];
+            for (int lane = 0; lane < laneCount; lane++) {
+                Signal[] laneSignals = resolveInput(node, lane);
+                System.arraycopy(laneSignals, 0, merged, lane * laneWidth, laneWidth);
+            }
+            return merged;
+        }
+
+        private Signal[] resolveBusSlice(EditorNode node, int port) {
+            List<BusSliceOutput> slices = node.normalizedSlices();
+            if (port < 0 || port >= slices.size()) {
+                throw new CircuitCompileException("Invalid BUS_SLICE output " + port + " on node " + node.id);
+            }
+            BusSliceOutput slice = slices.get(port);
+            Signal[] bus = resolveInput(node, 0);
+            if (slice.startBit < 0 || slice.width <= 0 || slice.startBit + slice.width > bus.length) {
+                throw new CircuitCompileException(
+                        "Invalid BUS_SLICE range " + slice.name + " [" + (slice.startBit + slice.width - 1)
+                                + ":" + slice.startBit + "] for " + bus.length + "-bit input"
+                );
+            }
+            Signal[] result = new Signal[slice.width];
+            System.arraycopy(bus, slice.startBit, result, 0, slice.width);
+            return result;
+        }
+
+        private Signal[] resolveNetLabel(EditorNode node) {
+            String net = normalizedNetName(node);
+            WireConnection driver = null;
+            EditorNode driverLabel = null;
+            for (EditorNode candidate : document.nodes) {
+                if (candidate.kind != NodeKind.NET_LABEL || !normalizedNetName(candidate).equals(net)) continue;
+                if (candidate.width != node.width) {
+                    throw new CircuitCompileException(
+                            "NET_LABEL " + net + " width mismatch: node " + node.id + " is " + node.width
+                                    + "-bit but node " + candidate.id + " is " + candidate.width + "-bit"
+                    );
+                }
+                WireConnection incoming = incomingWires.get(new NodePortKey(candidate.id, 0));
+                if (incoming == null) continue;
+                if (driver != null && (driver.sourceNodeId() != incoming.sourceNodeId() || driver.sourcePort() != incoming.sourcePort())) {
+                    throw new CircuitCompileException("NET_LABEL " + net + " has multiple drivers");
+                }
+                driver = incoming;
+                driverLabel = candidate;
+            }
+            if (driverLabel == null) {
+                return floatingNets.computeIfAbsent(net + "/" + node.width,
+                        ignored -> createSignals(path + "/NET/" + sanitize(net) + "/FLOAT", node.width, LogicValue.LOW));
+            }
+            return resolveInput(driverLabel, 0);
+        }
+
+        private String normalizedNetName(EditorNode node) {
+            String value = node.label == null ? "" : node.label.trim();
+            if (value.isEmpty()) throw new CircuitCompileException("NET_LABEL node " + node.id + " has no net name");
+            return value.toUpperCase(Locale.ROOT);
+        }
+
+        private static String sanitize(String value) {
+            return value.replaceAll("[^A-Z0-9_\\-]", "_");
+        }
+
         private CircuitCompileException structuralLoop(EditorNode node, int port) {
             return new CircuitCompileException(
                     "Structural wiring loop detected at " + node.displayName() + " output " + port
-                            + ". BUS/SPLITTER/MERGER routing cannot feed back into itself. "
+                            + ". BUS/SPLITTER/MERGER/BUS_SLICE/NET_LABEL routing cannot feed back into itself. "
                             + "Feedback used for latches must pass through NAND logic."
             );
         }

@@ -32,6 +32,8 @@ public abstract class CircuitCanvasCompactGeometryMixin {
             case PROBE -> cir.setReturnValue(66.0);
             case BUS -> cir.setReturnValue(node.width <= 1 ? 20.0 : 30.0);
             case SPLITTER, MERGER -> cir.setReturnValue(72.0);
+            case BUS_SLICE -> cir.setReturnValue(84.0);
+            case NET_LABEL -> cir.setReturnValue(66.0);
             case CUSTOM_CHIP -> { }
         }
     }
@@ -45,7 +47,8 @@ public abstract class CircuitCanvasCompactGeometryMixin {
             case PROBE -> cir.setReturnValue(42.0);
             case NAND -> cir.setReturnValue(48.0);
             case BUS -> cir.setReturnValue(20.0);
-            case SPLITTER, MERGER -> {
+            case NET_LABEL -> cir.setReturnValue(24.0);
+            case SPLITTER, MERGER, BUS_SLICE -> {
                 int ports = Math.max(safeInputs(node).size(), safeOutputs(node).size());
                 double height = Math.max(42.0, 34.0 + Math.max(0, ports - 1) * 12.0);
                 cir.setReturnValue(Math.ceil(height / 6.0) * 6.0);
@@ -68,6 +71,8 @@ public abstract class CircuitCanvasCompactGeometryMixin {
     @Inject(method = "portStep", at = @At("HEAD"), cancellable = true)
     private void logic$compactPortStep(EditorNode node, CallbackInfoReturnable<Double> cir) {
         if (node.kind == NodeKind.NAND) cir.setReturnValue(14.0);
-        if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) cir.setReturnValue(12.0);
+        if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER || node.kind == NodeKind.BUS_SLICE) {
+            cir.setReturnValue(12.0);
+        }
     }
 }

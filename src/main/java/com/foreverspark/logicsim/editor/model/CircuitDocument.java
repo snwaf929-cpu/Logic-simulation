@@ -82,21 +82,29 @@ public final class CircuitDocument {
         nextNodeId = Math.max(nextNodeId, maxId + 1);
         for (EditorNode node : nodes) {
             if (node.kind == null) node.kind = NodeKind.NAND;
-            if (node.width <= 0 || node.width > 64) node.width = 1;
+            node.width = Math.max(1, Math.min(64, node.width));
             if (node.label == null) node.label = "";
             if (node.chipName == null) node.chipName = "";
 
             if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) {
                 int lane = node.laneWidth;
-                if (lane <= 0 || lane > node.width || node.width % lane != 0 || (lane & (lane - 1)) != 0) {
-                    node.laneWidth = 1;
-                }
+                if (lane <= 0 || lane > node.width || node.width % lane != 0) node.laneWidth = 1;
             } else {
                 node.laneWidth = 1;
             }
 
+            if (node.kind == NodeKind.BUS_SLICE) node.normalizedSlices();
+            else if (node.slices == null) node.slices = new ArrayList<>();
+
+            if (node.kind == NodeKind.NET_LABEL) {
+                node.label = node.label == null || node.label.isBlank() ? "NET" : node.label.trim();
+            }
+
             if (node.kind == NodeKind.INPUT && node.width < 64) {
                 node.inputDefaultValue &= (1L << node.width) - 1L;
+            }
+            if (node.kind == NodeKind.CONSTANT && node.width < 64) {
+                node.constantValue &= (1L << node.width) - 1L;
             }
             if (node.kind == NodeKind.CONSTANT && node.randomSource) {
                 node.clockSource = false;
