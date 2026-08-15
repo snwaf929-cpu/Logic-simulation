@@ -3,6 +3,7 @@ package com.foreverspark.logicsim.mixin.client;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
 import com.foreverspark.logicsim.client.screen.v2.EditorHistoryAccess;
+import com.foreverspark.logicsim.editor.model.BusSliceOutput;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
@@ -23,11 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-/**
- * Deep-copy support for editor components. Ctrl+D stacks the copied bounding box directly below
- * the source selection using the shared Editor V2 grid. Because the pasted group becomes the new
- * selection, repeated Ctrl+D naturally continues down from the newest duplicate.
- */
+/** Deep-copy support for smart, grid-aligned editor duplication. */
 @Mixin(value = CircuitCanvasWidget.class, priority = 1600)
 public abstract class CircuitCanvasDuplicateMixin {
     @Unique private static final double LOGIC_PASTE_OFFSET = EditorGrid.MAJOR_STEP;
@@ -120,15 +117,10 @@ public abstract class CircuitCanvasDuplicateMixin {
         for (WireConnection wire : document.wires) {
             if (!selectedNodeIds.contains(wire.sourceNodeId()) || !selectedNodeIds.contains(wire.targetNodeId())) continue;
             List<RoutePoint> route = new ArrayList<>();
-            for (RoutePoint point : wire.routePoints()) {
-                route.add(new RoutePoint(point.x() - minX, point.y() - minY));
-            }
+            for (RoutePoint point : wire.routePoints()) route.add(new RoutePoint(point.x() - minX, point.y() - minY));
             RoutePoint branch = wire.branchStart();
             RoutePoint relativeBranch = branch == null ? null : new RoutePoint(branch.x() - minX, branch.y() - minY);
-            wires.add(new WireSnapshot(
-                    wire.sourceNodeId(), wire.sourcePort(), wire.targetNodeId(), wire.targetPort(),
-                    List.copyOf(route), relativeBranch
-            ));
+            wires.add(new WireSnapshot(wire.sourceNodeId(), wire.sourcePort(), wire.targetNodeId(), wire.targetPort(), List.copyOf(route), relativeBranch));
         }
         return new LogicClipboard(minX, minY, Math.max(0.0, maxY - minY), List.copyOf(nodes), List.copyOf(wires));
     }
@@ -141,11 +133,7 @@ public abstract class CircuitCanvasDuplicateMixin {
         double originY = EditorGrid.snap(copy.originY() + offsetY);
 
         for (NodeSnapshot snapshot : copy.nodes()) {
-            EditorNode node = document.addNode(
-                    snapshot.kind(),
-                    EditorGrid.snap(originX + snapshot.relativeX()),
-                    EditorGrid.snap(originY + snapshot.relativeY())
-            );
+            EditorNode node = document.addNode(snapshot.kind(), EditorGrid.snap(originX + snapshot.relativeX()), EditorGrid.snap(originY + snapshot.relativeY()));
             snapshot.apply(node);
             if (snapshot.hasInputState()) inputStates.put(node.id, snapshot.inputState());
             ids.put(snapshot.originalId(), node.id);
@@ -160,16 +148,10 @@ public abstract class CircuitCanvasDuplicateMixin {
             WireConnection pastedWire = document.wires.getLast();
             pastedWire.routePoints().clear();
             for (RoutePoint point : wireSnapshot.routePoints()) {
-                pastedWire.routePoints().add(new RoutePoint(
-                        EditorGrid.snap(originX + point.x()),
-                        EditorGrid.snap(originY + point.y())));
+                pastedWire.routePoints().add(new RoutePoint(EditorGrid.snap(originX + point.x()), EditorGrid.snap(originY + point.y())));
             }
             RoutePoint branch = wireSnapshot.branchStart();
-            if (branch != null) {
-                pastedWire.setBranchStart(new RoutePoint(
-                        EditorGrid.snap(originX + branch.x()),
-                        EditorGrid.snap(originY + branch.y())));
-            }
+            if (branch != null) pastedWire.setBranchStart(new RoutePoint(EditorGrid.snap(originX + branch.x()), EditorGrid.snap(originY + branch.y())));
         }
 
         setSelectedNodes(pastedIds);
@@ -178,26 +160,17 @@ public abstract class CircuitCanvasDuplicateMixin {
         recompile();
     }
 
-    @Unique
-    private void logic$checkpoint(String label) {
+    @Unique private void logic$checkpoint(String label) {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$checkpoint(label);
     }
 
-    @Unique
-    private void logic$commitHistory() {
+    @Unique private void logic$commitHistory() {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$commitHistory();
     }
 
-    @Unique
-    private record LogicClipboard(
-            double originX,
-            double originY,
-            double height,
-            List<NodeSnapshot> nodes,
-            List<WireSnapshot> wires
-    ) {}
+    @Unique private record LogicClipboard(double originX, double originY, double height, List<NodeSnapshot> nodes, List<WireSnapshot> wires) {}
 
     @Unique
     private record NodeSnapshot(
@@ -213,29 +186,24 @@ public abstract class CircuitCanvasDuplicateMixin {
             long clockFrequencyHz,
             boolean randomSource,
             int randomChancePercent,
+            List<BusSliceOutput> slices,
             boolean hasInputState,
             long inputState,
             double relativeX,
             double relativeY
     ) {
         static NodeSnapshot from(EditorNode node, double originX, double originY, boolean hasInputState, long inputState) {
+            List<BusSliceOutput> sliceCopy = new ArrayList<>();
+            if (node.slices != null) for (BusSliceOutput slice : node.slices) if (slice != null) sliceCopy.add(slice.copy());
             return new NodeSnapshot(
-                    node.id,
-                    node.kind,
-                    node.width,
-                    node.laneWidth,
+                    node.id, node.kind, node.width, node.laneWidth,
                     node.label == null ? "" : node.label,
                     node.chipName == null ? "" : node.chipName,
-                    node.constantValue,
-                    node.inputDefaultValue,
-                    node.clockSource,
-                    node.clockFrequencyHz,
-                    node.randomSource,
-                    node.randomChancePercent,
-                    hasInputState,
-                    inputState,
-                    node.x - originX,
-                    node.y - originY
+                    node.constantValue, node.inputDefaultValue,
+                    node.clockSource, node.clockFrequencyHz,
+                    node.randomSource, node.randomChancePercent,
+                    List.copyOf(sliceCopy), hasInputState, inputState,
+                    node.x - originX, node.y - originY
             );
         }
 
@@ -250,16 +218,10 @@ public abstract class CircuitCanvasDuplicateMixin {
             node.clockFrequencyHz = clockFrequencyHz;
             node.randomSource = randomSource;
             node.randomChancePercent = randomChancePercent;
+            node.slices = new ArrayList<>();
+            for (BusSliceOutput slice : slices) node.slices.add(slice.copy());
         }
     }
 
-    @Unique
-    private record WireSnapshot(
-            int sourceNodeId,
-            int sourcePort,
-            int targetNodeId,
-            int targetPort,
-            List<RoutePoint> routePoints,
-            RoutePoint branchStart
-    ) {}
+    @Unique private record WireSnapshot(int sourceNodeId, int sourcePort, int targetNodeId, int targetPort, List<RoutePoint> routePoints, RoutePoint branchStart) {}
 }
