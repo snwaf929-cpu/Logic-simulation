@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.client.screen.v2;
 
+import com.foreverspark.logicsim.editor.model.BusSliceOutput;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.RoutePoint;
@@ -57,6 +58,10 @@ public final class EditorDocumentSnapshot {
         node.clockFrequencyHz = source.clockFrequencyHz;
         node.randomSource = source.randomSource;
         node.randomChancePercent = source.randomChancePercent;
+        node.slices = new ArrayList<>();
+        if (source.slices != null) {
+            for (BusSliceOutput slice : source.slices) if (slice != null) node.slices.add(slice.copy());
+        }
         return node;
     }
 
@@ -85,7 +90,14 @@ public final class EditorDocumentSnapshot {
                 && a.clockSource == b.clockSource
                 && a.clockFrequencyHz == b.clockFrequencyHz
                 && a.randomSource == b.randomSource
-                && a.randomChancePercent == b.randomChancePercent;
+                && a.randomChancePercent == b.randomChancePercent
+                && slicesEqual(a, b);
+    }
+
+    private static boolean slicesEqual(EditorNode a, EditorNode b) {
+        var as = a.slices == null ? java.util.List.<BusSliceOutput>of() : a.slices;
+        var bs = b.slices == null ? java.util.List.<BusSliceOutput>of() : b.slices;
+        return as.equals(bs);
     }
 
     private static String safe(String value) {
