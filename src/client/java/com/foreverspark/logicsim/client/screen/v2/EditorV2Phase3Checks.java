@@ -17,6 +17,7 @@ import java.util.List;
 /** Dependency-light PCB routing regression checks for Logic Editor V2 Phase 3. */
 public final class EditorV2Phase3Checks {
     private static final List<String> HISTORY_BRIDGE_MIXINS = List.of(
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasPhase4TemplateMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPcbLayerMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPhase2ConfigMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasWiringV2Mixin",
