@@ -28,8 +28,13 @@ public abstract class CircuitCanvasClockDiagnosticsMixin {
     @Shadow private double nodeWidth(EditorNode node) { throw new AssertionError(); }
     @Shadow private Font font() { throw new AssertionError(); }
 
-    @Inject(method = "drawPortHoverTooltip", at = @At("HEAD"), cancellable = true)
-    private void logic$clockRuntimeTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY, CallbackInfo ci) {
+    /**
+     * Render after the complete canvas instead of piggybacking on drawPortHoverTooltip(). The old hook was reached
+     * through the pin-tooltip path and therefore did not reliably appear when the mouse was over the CLOCK body.
+     * TAIL also keeps this panel above nodes, wires, selection handles and ordinary pin tooltips.
+     */
+    @Inject(method = "extractWidgetRenderState", at = @At("TAIL"))
+    private void logic$clockRuntimeTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         EditorNode node = nodeAt(mouseX, mouseY);
         if (node == null || node.kind != NodeKind.CONSTANT || !node.clockSource) return;
 
@@ -43,7 +48,7 @@ public abstract class CircuitCanvasClockDiagnosticsMixin {
 
         int border = 0xFF6E879A;
         if (circuitPos == null) {
-            lines.add(new Line("World runtime unavailable — this is not a physical BOARD", 0xFF9AA6B2));
+            lines.add(new Line("World runtime unavailable — open a physical Circuit Block", 0xFF9AA6B2));
         } else if (snapshot == null) {
             lines.add(new Line("World runtime: waiting for first ~1 s sample...", 0xFFFFC45C));
         } else {
@@ -88,7 +93,6 @@ public abstract class CircuitCanvasClockDiagnosticsMixin {
             graphics.text(font(), line.text, x + padding, textY, line.color, false);
             textY += lineHeight;
         }
-        ci.cancel();
     }
 
     @Unique
