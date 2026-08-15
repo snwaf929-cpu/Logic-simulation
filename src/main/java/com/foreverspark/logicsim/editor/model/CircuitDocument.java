@@ -5,7 +5,11 @@ import java.util.Comparator;
 import java.util.List;
 
 public final class CircuitDocument {
-    public int formatVersion = 3;
+    /**
+     * Keep the existing document version: Phase 4 adds optional Gson fields only, so old BOARD/CHIP
+     * documents remain loadable without a format migration or version-gated decoder.
+     */
+    public int formatVersion = 2;
     public int nextNodeId = 1;
     /** Stable monotonically increasing id for cloned BOARD template groups. */
     public int nextTemplateInstanceId = 1;
@@ -85,7 +89,6 @@ public final class CircuitDocument {
         int maxTemplateInstanceId = nodes.stream().mapToInt(node -> Math.max(0, node.templateInstanceId)).max().orElse(0);
         nextNodeId = Math.max(nextNodeId, maxId + 1);
         nextTemplateInstanceId = Math.max(nextTemplateInstanceId, maxTemplateInstanceId + 1);
-        formatVersion = Math.max(formatVersion, 3);
 
         for (EditorNode node : nodes) {
             if (node.kind == null) node.kind = NodeKind.NAND;
