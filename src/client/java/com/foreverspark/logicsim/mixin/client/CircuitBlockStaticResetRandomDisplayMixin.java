@@ -95,6 +95,8 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                         "active:device=" + index
                                 + ":groups=" + existing.triggerGroupCount()
                                 + ":lanes=" + existing.randomLaneCount()
+                                + ":external=" + existing.externalTriggerGroupCount()
+                                + ":prefilter=" + existing.coordinatePrefilterLaneCount()
                                 + ":resetSignal=" + existingTracker.signalId());
                 return;
             }
@@ -122,6 +124,8 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                     "active:device=" + index
                             + ":groups=" + result.plan().triggerGroupCount()
                             + ":lanes=" + result.plan().randomLaneCount()
+                            + ":external=" + result.plan().externalTriggerGroupCount()
+                            + ":prefilter=" + result.plan().coordinatePrefilterLaneCount()
                             + ":resetSignal=" + resetSignalId);
             return;
         }
@@ -194,15 +198,19 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
             RealtimeDisplaySurface.Surface surface = logic$resetAwareSurface;
             DisplayResetEdgeTracker tracker = logic$resetTracker;
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BULK DEVICE NETWORK RESET] circuit={} active=true reset=dynamic-edge resetSignalId={} deviceIndex={} triggerGroups={} randomLanes={} mode=compiled-random-trigger-dag maxEdgeChunk={} logical={}x{} batchPublication=true",
+                    "[CLOCK BULK DEVICE NETWORK RESET] circuit={} active=true reset=dynamic-edge resetSignalId={} deviceIndex={} triggerGroups={} externalTriggerGroups={} randomLanes={} mode=compiled-random-trigger-dag-hotloop-v2 maxEdgeChunk={} logical={}x{} coordinatePrefilter={} coordinateRejectLanes={} boundaryIdentity={} batchPublication=true",
                     self.getBlockPos(),
                     tracker == null ? -1 : tracker.signalId(),
                     logic$resetAwareDeviceIndex,
                     plan == null ? 0 : plan.triggerGroupCount(),
+                    plan == null ? 0 : plan.externalTriggerGroupCount(),
                     plan == null ? 0 : plan.randomLaneCount(),
                     LOGIC_NETWORK_EDGE_CHUNK,
                     surface == null ? 0 : surface.logicalWidth(),
-                    surface == null ? 0 : surface.logicalHeight()
+                    surface == null ? 0 : surface.logicalHeight(),
+                    plan != null && plan.coordinatePrefilterEnabled(),
+                    plan == null ? 0 : plan.coordinatePrefilterLaneCount(),
+                    plan != null && plan.boundaryIdentity()
             );
         } else {
             String reason = signature.startsWith("inactive:") ? signature.substring("inactive:".length()) : signature;
