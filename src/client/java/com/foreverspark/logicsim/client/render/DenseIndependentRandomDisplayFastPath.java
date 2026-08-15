@@ -260,14 +260,14 @@ public final class DenseIndependentRandomDisplayFastPath {
             if (fixedCoordinateReject) {
                 // Still advance every RANDOM sample exactly; only DISPLAY packing/publication is impossible this batch.
                 for (int cycle = 0; cycle < cycles; cycle++) {
-                    long bits = nextBits(rng);
                     rng = nextState(rng);
+                    long bits = rng * XORSHIFT64_STAR;
                     finalState = preserved | sampleClock(bits);
                 }
             } else if (exactCoordinatePrefilter && clockCoordinateRejectMask != 0L) {
                 for (int cycle = 0; cycle < cycles; cycle++) {
-                    long bits = nextBits(rng);
                     rng = nextState(rng);
+                    long bits = rng * XORSHIFT64_STAR;
                     long sampled = sampleClock(bits);
                     finalState = preserved | sampled;
                     if ((sampled & clockCoordinateRejectMask) != 0L) continue;
@@ -275,15 +275,15 @@ public final class DenseIndependentRandomDisplayFastPath {
                 }
             } else if (exactCoordinatePrefilter) {
                 for (int cycle = 0; cycle < cycles; cycle++) {
-                    long bits = nextBits(rng);
                     rng = nextState(rng);
+                    long bits = rng * XORSHIFT64_STAR;
                     finalState = preserved | sampleClock(bits);
                     scratch[outputCount++] = PIXEL_OPCODE | packBoundary(finalState);
                 }
             } else {
                 for (int cycle = 0; cycle < cycles; cycle++) {
-                    long bits = nextBits(rng);
                     rng = nextState(rng);
+                    long bits = rng * XORSHIFT64_STAR;
                     finalState = preserved | sampleClock(bits);
                     long raw = PIXEL_OPCODE | packBoundary(finalState);
                     int x = (int) ((raw >>> 16) & FIELD_MASK);
@@ -363,10 +363,6 @@ public final class DenseIndependentRandomDisplayFastPath {
         x ^= x << 25;
         x ^= x >>> 27;
         return x;
-    }
-
-    private static long nextBits(long state) {
-        return nextState(state) * XORSHIFT64_STAR;
     }
 
     private static long scatter(long[][] tables, long laneMask) {
