@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.client.screen.BoardNameScreen;
 import com.foreverspark.logicsim.client.screen.BoardTemplateScreen;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
+import com.foreverspark.logicsim.client.screen.WorldBoardContextAccess;
 import com.foreverspark.logicsim.client.screen.v2.BoardTemplateCanvasAccess;
 import com.foreverspark.logicsim.client.screen.v2.EditorWorkspaceAccess;
 import com.foreverspark.logicsim.editor.model.BoardTemplateDefinition;
@@ -112,11 +113,26 @@ public abstract class CircuitEditorPhase4Mixin {
                 phase4::logic$previewTemplateReplacement,
                 template -> {
                     if (!phase4.logic$insertBoardTemplate(template)) throw new IllegalStateException("Template insert was rejected");
+                    logic$syncPhysicalBoardRoot();
                 },
                 template -> {
                     if (!phase4.logic$replaceSelectedTemplate(template)) throw new IllegalStateException("Template replacement was rejected");
+                    logic$syncPhysicalBoardRoot();
                 }
         ));
+    }
+
+    /**
+     * Insert/replace is atomic by swapping CircuitCanvasWidget to a validated candidate document.
+     * A physical Circuit Block also keeps its own root reference for save/upload-on-close, so point
+     * that context at the same new object before the template picker returns to the editor.
+     */
+    @Unique
+    private void logic$syncPhysicalBoardRoot() {
+        Object self = this;
+        if (self instanceof WorldBoardContextAccess worldBoard) {
+            worldBoard.logic$replaceWorldBoardRoot(logic$boardRoot());
+        }
     }
 
     @Unique
