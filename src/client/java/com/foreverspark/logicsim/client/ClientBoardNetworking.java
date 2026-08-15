@@ -4,7 +4,9 @@ import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceDescriptor;
 import com.foreverspark.logicsim.network.CircuitBoardPayload;
+import com.foreverspark.logicsim.network.ExternalDevicesPayload;
 import com.foreverspark.logicsim.network.RequestCircuitBoardPayload;
+import com.foreverspark.logicsim.network.RequestExternalDevicesPayload;
 import com.foreverspark.logicsim.network.SaveCircuitBoardPayload;
 import com.foreverspark.logicsim.platform.ClientEditorBridge;
 import com.google.gson.Gson;
@@ -21,7 +23,10 @@ public final class ClientBoardNetworking {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private static BlockPos pendingPos;
     private static String pendingBoardJson;
-    private static List<ExternalDeviceDescriptor> pendingDevices = List.of();
+
+    private static BlockPos deviceSnapshotPos;
+    private static List<ExternalDeviceDescriptor> deviceSnapshot = List.of();
+    private static long deviceSnapshotRevision;
 
     private ClientBoardNetworking() {}
 
@@ -30,17 +35,30 @@ public final class ClientBoardNetworking {
                 Minecraft.getInstance().execute(() -> {
                     pendingPos = payload.pos().immutable();
                     pendingBoardJson = payload.boardJson() == null ? "" : payload.boardJson();
-                    pendingDevices = parseDevices(payload.devicesJson());
+                    publishDeviceSnapshot(payload.pos(), parseDevices(payload.devicesJson()));
                     ClientEditorBridge.openEditor(payload.pos());
                 }));
+
+        ClientPlayNetworking.registerGlobalReceiver(ExternalDevicesPayload.TYPE, (payload, context) ->
+                Minecraft.getInstance().execute(() ->
+                        publishDeviceSnapshot(payload.pos(), parseDevices(payload.devicesJson()))));
     }
 
-    public static void requestOpen(BlockPos pos) { if (pos != null) ClientPlayNetworking.send(new RequestCircuitBoardPayload(pos)); }
+    /** Requests the board document and opens the editor when the response arrives. */
+    public static void requestOpen(BlockPos pos) {
+        if (pos != null) ClientPlayNetworking.send(new RequestCircuitBoardPayload(pos));
+    }
+
+    /** Requests only connected peripheral discovery. The response never opens or refocuses a screen. */
+    public static void requestDevices(BlockPos pos) {
+        if (pos != null) ClientPlayNetworking.send(new RequestExternalDevicesPayload(pos));
+    }
 
     public static CircuitDocument consumePendingBoard(BlockPos pos) {
         if (pos == null || pendingPos == null || !pendingPos.equals(pos)) return null;
         String json = pendingBoardJson;
         pendingBoardJson = null;
+        pendingPos = null;
         try {
             CircuitDocument board = json == null || json.isBlank() ? new CircuitDocument() : GSON.fromJson(json, CircuitDocument.class);
             if (board == null) board = new CircuitDocument();
@@ -51,16 +69,24 @@ public final class ClientBoardNetworking {
         }
     }
 
-    public static boolean hasPendingDeviceSnapshot(BlockPos pos) {
-        return pos != null && pendingPos != null && pendingPos.equals(pos) && pendingBoardJson == null;
+    public static long deviceSnapshotRevision(BlockPos pos) {
+        return pos != null && deviceSnapshotPos != null && deviceSnapshotPos.equals(pos) ? deviceSnapshotRevision : -1L;
     }
 
+    public static List<ExternalDeviceDescriptor> latestDevices(BlockPos pos) {
+        return pos != null && deviceSnapshotPos != null && deviceSnapshotPos.equals(pos)
+                ? deviceSnapshot
+                : List.of();
+    }
+
+    /** Compatibility for older editor hooks. Snapshots are no longer consumed/destructive. */
+    public static boolean hasPendingDeviceSnapshot(BlockPos pos) {
+        return deviceSnapshotRevision(pos) >= 0L;
+    }
+
+    /** Compatibility for older editor hooks. Returns the latest immutable snapshot without consuming it. */
     public static List<ExternalDeviceDescriptor> consumePendingDevices(BlockPos pos) {
-        if (!hasPendingDeviceSnapshot(pos)) return List.of();
-        List<ExternalDeviceDescriptor> result = pendingDevices;
-        pendingDevices = List.of();
-        pendingPos = null;
-        return result;
+        return latestDevices(pos);
     }
 
     public static void save(BlockPos pos, CircuitDocument board) {
@@ -71,11 +97,18 @@ public final class ClientBoardNetworking {
         ClientPlayNetworking.send(new SaveCircuitBoardPayload(pos, json));
     }
 
+    private static void publishDeviceSnapshot(BlockPos pos, List<ExternalDeviceDescriptor> devices) {
+        deviceSnapshotPos = pos == null ? null : pos.immutable();
+        deviceSnapshot = devices == null ? List.of() : List.copyOf(devices);
+        deviceSnapshotRevision++;
+    }
+
     private static List<ExternalDeviceDescriptor> parseDevices(String json) {
         if (json == null || json.isBlank()) return List.of();
         try {
             ExternalDeviceDescriptor[] devices = GSON.fromJson(json, ExternalDeviceDescriptor[].class);
-            return devices == null ? List.of() : List.copyOf(Arrays.asList(devices));
+            if (devices == null) return List.of();
+            return Arrays.stream(devices).filter(java.util.Objects::nonNull).toList();
         } catch (RuntimeException ignored) {
             return List.of();
         }

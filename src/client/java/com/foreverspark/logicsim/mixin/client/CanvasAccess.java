@@ -6,6 +6,7 @@ import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
+import org.spongepowered.asm.mixin.gen.Invoker;
 
 import java.util.Map;
 
@@ -16,4 +17,5 @@ public interface CanvasAccess {
     @Accessor("runtimeRootDocument") CircuitDocument logic$getRuntimeRootDocument();
     @Accessor("chips") ClientChipLibrary logic$getChipLibrary();
     @Accessor("inputStates") Map<Integer, Long> logic$getInputStates();
+    @Invoker("recompile") void logic$recompile();
 }

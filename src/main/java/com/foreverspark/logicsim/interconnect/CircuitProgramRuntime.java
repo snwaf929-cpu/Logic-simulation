@@ -2,11 +2,13 @@ package com.foreverspark.logicsim.interconnect;
 
 import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.runtime.CircuitTimingController;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -19,6 +21,9 @@ public final class CircuitProgramRuntime {
     private static final int LOSSLESS_STREAM_WIDTH = 64;
     /** DATA64 bits 0..55 carry opcode/Y/X/RGB. Bits 56..63 are sequence metadata and may be coalesced. */
     private static final int LOSSLESS_STREAM_SEMANTIC_BITS = 56;
+    /** All physical-device sink pins share one callback-watch bit. Output #63 may share the same bit safely. */
+    private static final int DEVICE_DIRTY_WATCH_BIT = 63;
+    private static final long DEVICE_DIRTY_WATCH_MASK = 1L << DEVICE_DIRTY_WATCH_BIT;
 
     private final CircuitProgram program;
     private final CompiledCircuit compiled;
@@ -31,6 +36,7 @@ public final class CircuitProgramRuntime {
     private final List<PortSpec> outputPortSpecs;
     private final BoundaryPort[] inputRuntimePorts;
     private final BoundaryPort[] outputRuntimePorts;
+    private final DeviceBinding[] externalDevices;
     private final CircuitTimingController.DirectRandomBoundaryPlan[] directRandomBoundaryPlans;
     private final boolean dirtyOutputTracking;
     private long forcedDirtyOutputMask;
@@ -46,16 +52,29 @@ public final class CircuitProgramRuntime {
         this.outputRuntimePorts = outputs.values().toArray(BoundaryPort[]::new);
         this.inputPortSpecs = java.util.Arrays.stream(inputRuntimePorts).map(BoundaryPort::spec).toList();
         this.outputPortSpecs = java.util.Arrays.stream(outputRuntimePorts).map(BoundaryPort::spec).toList();
+        this.externalDevices = indexExternalDevices();
 
         if (outputRuntimePorts.length <= 64) {
             dirtyOutputTracking = true;
             for (int index = 0; index < outputRuntimePorts.length; index++) {
                 compiled.simulator().watchDirtyBit(index, outputRuntimePorts[index].valueSignalIds());
             }
-            forcedDirtyOutputMask = outputRuntimePorts.length == 64
+            if (externalDevices.length > 0) {
+                for (DeviceBinding device : externalDevices) {
+                    for (DeviceInputPort port : device.inputs()) {
+                        compiled.simulator().watchDirtyBit(DEVICE_DIRTY_WATCH_BIT, port.valueSignalIds());
+                    }
+                }
+            }
+            long outputMask = outputRuntimePorts.length == 64
                     ? -1L
                     : (outputRuntimePorts.length == 0 ? 0L : (1L << outputRuntimePorts.length) - 1L);
+            forcedDirtyOutputMask = externalDevices.length > 0
+                    ? outputMask | DEVICE_DIRTY_WATCH_MASK
+                    : outputMask;
         } else {
+            // >64 root outputs already require an unfiltered callback. Do not enable a device-only dirty watch here,
+            // otherwise ordinary output changes could be suppressed by CircuitTimingController's callback guard.
             dirtyOutputTracking = false;
             forcedDirtyOutputMask = -1L;
         }
@@ -153,6 +172,25 @@ public final class CircuitProgramRuntime {
     public int outputPortCount() { return outputRuntimePorts.length; }
     public PortSpec outputPort(int index) { return outputRuntimePorts[index].spec(); }
 
+    public int externalDeviceCount() { return externalDevices.length; }
+    public String externalDeviceId(int index) { return externalDevices[index].deviceId(); }
+    public ExternalDeviceType externalDeviceType(int index) { return externalDevices[index].type(); }
+    public int externalDeviceInputCount(int index) { return externalDevices[index].inputs().length; }
+    public PortSpec externalDeviceInputPort(int deviceIndex, int portIndex) {
+        return externalDevices[deviceIndex].inputs()[portIndex].spec();
+    }
+
+    /** Fast physical-device sink read; stable signal-id arrays are compiled once with the BOARD. */
+    public long externalDeviceInputValue(int deviceIndex, int portIndex) {
+        return compiled.simulator().readUnsignedFast(externalDevices[deviceIndex].inputs()[portIndex].valueSignalIds());
+    }
+
+    /** Dirty mask returned by consumeDirtyOutputMask() also carries the shared physical-device sink bit. */
+    public boolean externalDeviceInputsDirty(long dirtyMask) {
+        if (externalDevices.length == 0) return false;
+        return !dirtyOutputTracking || (dirtyMask & DEVICE_DIRTY_WATCH_MASK) != 0L;
+    }
+
     public long consumeDirtyOutputMask() {
         if (!dirtyOutputTracking) return -1L;
         long result = forcedDirtyOutputMask | compiled.simulator().consumeDirtyWatchBits();
@@ -202,6 +240,31 @@ public final class CircuitProgramRuntime {
             Signal[] valueSignals = compiled.inputSignals(CompiledCircuit.ROOT_SCOPE, node.id, 0);
             putUnique(outputs, exactOutputs, outputSpecs.get(i), node.id, valueSignals);
         }
+    }
+
+    private DeviceBinding[] indexExternalDevices() {
+        ArrayList<DeviceBinding> bindings = new ArrayList<>();
+        for (EditorNode node : program.root.circuit.externalDeviceNodes()) {
+            if (node == null || node.externalDeviceType == null) continue;
+            String id = node.externalDeviceId == null ? "" : node.externalDeviceId.trim();
+            if (id.isEmpty()) continue;
+
+            List<PortSpec> specs = node.externalDeviceType.inputs();
+            DeviceInputPort[] ports = new DeviceInputPort[specs.size()];
+            for (int portIndex = 0; portIndex < specs.size(); portIndex++) {
+                Signal[] signals = compiled.inputSignals(CompiledCircuit.ROOT_SCOPE, node.id, portIndex);
+                if (signals == null) {
+                    throw new IllegalStateException("Compiled physical DEVICE input is unavailable: "
+                            + node.externalDeviceType.name() + "/" + specs.get(portIndex).name());
+                }
+                ports[portIndex] = new DeviceInputPort(
+                        specs.get(portIndex),
+                        compiled.simulator().signalIds(signals)
+                );
+            }
+            bindings.add(new DeviceBinding(id, node.externalDeviceType, ports));
+        }
+        return bindings.toArray(DeviceBinding[]::new);
     }
 
     private void initializeBoundaryInputDefaults() {
@@ -256,4 +319,6 @@ public final class CircuitProgramRuntime {
     private static String key(String name) { return name == null ? "" : name.trim().toLowerCase(Locale.ROOT); }
     private static long mask(long value, int width) { return width >= 64 ? value : value & ((1L << width) - 1L); }
     private record BoundaryPort(PortSpec spec, int nodeId, int[] valueSignalIds) {}
+    private record DeviceInputPort(PortSpec spec, int[] valueSignalIds) {}
+    private record DeviceBinding(String deviceId, ExternalDeviceType type, DeviceInputPort[] inputs) {}
 }

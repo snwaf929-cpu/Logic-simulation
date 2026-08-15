@@ -1,16 +1,18 @@
 package com.foreverspark.logicsim.editor.model;
 
 import java.util.List;
-import java.util.Locale;
 
-/**
- * Physical peripherals that may appear on a BOARD schematic after world discovery.
- * These are endpoints, not logic primitives: CPU/GPU/RAM/ROM deliberately do not exist here.
- */
+/** Physical devices that may be discovered from a circuit board's connected cable graph. */
 public enum ExternalDeviceType {
     DISPLAY(
             "DISPLAY",
-            List.of(new PortSpec("DATA64", PortDirection.INPUT, 64)),
+            List.of(
+                    new PortSpec("X", PortDirection.INPUT, 16),
+                    new PortSpec("Y", PortDirection.INPUT, 16),
+                    new PortSpec("COLOR", PortDirection.INPUT, 16),
+                    new PortSpec("WRITE", PortDirection.INPUT, 1),
+                    new PortSpec("RESET", PortDirection.INPUT, 1)
+            ),
             List.of()
     ),
     UIB(
@@ -57,12 +59,13 @@ public enum ExternalDeviceType {
     public List<PortSpec> inputs() { return inputs; }
     public List<PortSpec> outputs() { return outputs; }
 
-    public static ExternalDeviceType parse(String value) {
-        if (value == null || value.isBlank()) return DISPLAY;
-        String normalized = value.trim().toUpperCase(Locale.ROOT);
+    public static ExternalDeviceType fromId(String id) {
+        if (id == null || id.isBlank()) return DISPLAY;
+        String normalized = id.trim().toUpperCase(java.util.Locale.ROOT);
+        if (normalized.equals("USER_INPUT") || normalized.equals("USER_INPUT_BRIDGE")) return UIB;
         for (ExternalDeviceType type : values()) {
-            if (type.name().equals(normalized) || type.label.equalsIgnoreCase(value.trim())) return type;
+            if (type.name().equals(normalized)) return type;
         }
-        throw new IllegalArgumentException("Unknown external device type: " + value);
+        return DISPLAY;
     }
 }

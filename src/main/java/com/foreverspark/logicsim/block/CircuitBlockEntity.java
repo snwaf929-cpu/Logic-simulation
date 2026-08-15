@@ -3,6 +3,8 @@ package com.foreverspark.logicsim.block;
 import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceDescriptor;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.interconnect.CableKind;
@@ -13,6 +15,7 @@ import com.foreverspark.logicsim.interconnect.CircuitPortLinks;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 import com.foreverspark.logicsim.interconnect.DirectPortResolver;
+import com.foreverspark.logicsim.interconnect.ExternalDeviceDiscovery;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.core.BlockPos;
@@ -49,7 +52,7 @@ public final class CircuitBlockEntity extends BlockEntity {
     /** Dense framebuffer intent comfortably covers 1080p/1440p without HashMap allocation on every simulated edge. */
     private static final int MAX_DENSE_DISPLAY_PIXELS = 4_194_304;
     private static final long BENCHMARK_WINDOW_NANOS = 1_000_000_000L;
-    /** Physical cable/display topology does not need a full network scan 20 times per second. */
+    /** Physical cable/device topology does not need a full network scan 20 times per second. */
     private static final int DISPLAY_DISCOVERY_INTERVAL_TICKS = 20;
 
     /** Editable CAD board stored independently from the compiled/running program. */
@@ -79,6 +82,17 @@ public final class CircuitBlockEntity extends BlockEntity {
     private long[] lastCapturedOutputValues = new long[0];
     private boolean[] lastCapturedOutputInitialized = new boolean[0];
     private volatile DisplayStreamTarget[] displayStreamTargets = new DisplayStreamTarget[0];
+
+    /**
+     * V2.1A physical DEVICE bindings are a second boundary: the schematic owns user-friendly typed pins while the
+     * world endpoint is resolved by stable id. Worker-thread input capture remains primitive; world I/O happens only
+     * on the server thread. DISPLAY writes are framebuffer-coalesced exactly like the legacy DATA64 output path.
+     */
+    private DeviceInputBuffer[] pendingDeviceInputs = new DeviceInputBuffer[0];
+    private DisplayCommandBuffer[] pendingDeviceDisplayCommands = new DisplayCommandBuffer[0];
+    private boolean[] lastDeviceWriteHigh = new boolean[0];
+    private boolean[] lastDeviceResetHigh = new boolean[0];
+    private volatile ExternalDeviceTarget[] externalDeviceTargets = new ExternalDeviceTarget[0];
     private int displayDiscoveryCountdown;
 
     /** Independent-worker throughput accounting. */
@@ -99,10 +113,11 @@ public final class CircuitBlockEntity extends BlockEntity {
         if (level.isClientSide()) return;
         if (!circuit.isProgrammed()) return;
 
-        // Display/cable geometry changes slowly relative to MHz logic. A 1-second fallback discovery avoids doing a
-        // full cable-network + display-wall scan on every Minecraft tick.
+        // Cable/device geometry changes slowly relative to MHz logic. A 1-second fallback discovery avoids doing a
+        // full network + display-wall scan on every Minecraft tick.
         if (circuit.displayDiscoveryCountdown <= 0) {
             circuit.refreshDisplayStreamPorts();
+            circuit.refreshExternalDeviceTargets();
             circuit.displayDiscoveryCountdown = DISPLAY_DISCOVERY_INTERVAL_TICKS;
         } else {
             circuit.displayDiscoveryCountdown--;
@@ -174,9 +189,10 @@ public final class CircuitBlockEntity extends BlockEntity {
             resetOutputBuffersLocked(compiled);
             captureOutputChangesLocked();
         }
-        // Discover the physical display before starting a freshly programmed high-rate stream.
+        // Resolve physical endpoints before starting a freshly programmed high-rate stream.
         if (level != null && !level.isClientSide()) {
             refreshDisplayStreamPorts();
+            refreshExternalDeviceTargets();
             displayDiscoveryCountdown = DISPLAY_DISCOVERY_INTERVAL_TICKS;
             CircuitSimulationWorker.register(this);
         }
@@ -303,6 +319,14 @@ public final class CircuitBlockEntity extends BlockEntity {
             total += buffer.size();
             if (total >= Integer.MAX_VALUE) return Integer.MAX_VALUE;
         }
+        for (DisplayCommandBuffer buffer : pendingDeviceDisplayCommands) {
+            total += buffer.size();
+            if (total >= Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        }
+        for (DeviceInputBuffer buffer : pendingDeviceInputs) {
+            total += buffer.pendingCount();
+            if (total >= Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        }
         return (int) total;
     }
 
@@ -330,9 +354,20 @@ public final class CircuitBlockEntity extends BlockEntity {
             pendingDisplayCommands[index] = new DisplayCommandBuffer();
         }
         displayStreamTargets = new DisplayStreamTarget[count];
+
+        int deviceCount = current == null ? 0 : current.externalDeviceCount();
+        pendingDeviceInputs = new DeviceInputBuffer[deviceCount];
+        pendingDeviceDisplayCommands = new DisplayCommandBuffer[deviceCount];
+        lastDeviceWriteHigh = new boolean[deviceCount];
+        lastDeviceResetHigh = new boolean[deviceCount];
+        for (int deviceIndex = 0; deviceIndex < deviceCount; deviceIndex++) {
+            pendingDeviceInputs[deviceIndex] = new DeviceInputBuffer(current.externalDeviceInputCount(deviceIndex));
+            pendingDeviceDisplayCommands[deviceIndex] = new DisplayCommandBuffer();
+        }
+        externalDeviceTargets = new ExternalDeviceTarget[deviceCount];
     }
 
-    /** Capture changed external outputs without allocating maps/records in the per-edge hot path. */
+    /** Capture changed external outputs and explicitly bound DEVICE inputs without world access in the MHz hot path. */
     private void captureOutputChangesLocked() {
         CircuitProgramRuntime current = runtime;
         if (current == null) return;
@@ -381,6 +416,77 @@ public final class CircuitBlockEntity extends BlockEntity {
             }
 
             pendingLatestOutputs[index].set(value);
+        }
+
+        if (current.externalDeviceInputsDirty(dirtyMask)) captureExternalDeviceInputsLocked(current);
+    }
+
+    /**
+     * DEVICE pins are compiled sink signals. DISPLAY strobes retain every simulated write edge; other peripheral
+     * inputs are level-like today and coalesce to the newest value before server-thread host delivery.
+     */
+    private void captureExternalDeviceInputsLocked(CircuitProgramRuntime current) {
+        ExternalDeviceTarget[] targets = externalDeviceTargets;
+        int count = Math.min(current.externalDeviceCount(), pendingDeviceInputs.length);
+        for (int deviceIndex = 0; deviceIndex < count; deviceIndex++) {
+            ExternalDeviceType type = current.externalDeviceType(deviceIndex);
+            ExternalDeviceTarget target = deviceIndex < targets.length ? targets[deviceIndex] : null;
+
+            if (type == ExternalDeviceType.DISPLAY) {
+                boolean resetHigh = readDeviceBit(current, deviceIndex, 4, lastDeviceResetHigh[deviceIndex]);
+                boolean resetRising = resetHigh && !lastDeviceResetHigh[deviceIndex];
+                lastDeviceResetHigh[deviceIndex] = resetHigh;
+
+                boolean writeHigh = readDeviceBit(current, deviceIndex, 3, lastDeviceWriteHigh[deviceIndex]);
+                boolean writeRising = writeHigh && !lastDeviceWriteHigh[deviceIndex];
+                lastDeviceWriteHigh[deviceIndex] = writeHigh;
+
+                DisplayStreamTarget displayTarget = target == null ? null : target.displayTarget();
+                if (displayTarget == null) continue;
+                if (resetRising) {
+                    pendingDeviceDisplayCommands[deviceIndex].recordClear(DisplayCommandCodec.clear(), displayTarget);
+                    continue;
+                }
+                if (!writeRising) continue;
+
+                try {
+                    int x = (int) (current.externalDeviceInputValue(deviceIndex, 0) & 0xFFFFL);
+                    int y = (int) (current.externalDeviceInputValue(deviceIndex, 1) & 0xFFFFL);
+                    int color = (int) (current.externalDeviceInputValue(deviceIndex, 2) & 0xFFFFL);
+                    if (displayTarget.contains(x, y)) {
+                        long raw = DisplayCommandCodec.pixel(x, y, color);
+                        pendingDeviceDisplayCommands[deviceIndex].recordPixel(raw, x, y, displayTarget);
+                    } else {
+                        benchmarkFilteredDisplayCommands = saturatingAdd(benchmarkFilteredDisplayCommands, 1L);
+                    }
+                } catch (RuntimeException ignored) {
+                    // A partially unwired DEVICE may contain UNKNOWN; no host write is emitted until its data is valid.
+                }
+                continue;
+            }
+
+            DeviceInputBuffer buffer = pendingDeviceInputs[deviceIndex];
+            int ports = Math.min(current.externalDeviceInputCount(deviceIndex), buffer.portCount());
+            for (int portIndex = 0; portIndex < ports; portIndex++) {
+                try {
+                    buffer.capture(portIndex, current.externalDeviceInputValue(deviceIndex, portIndex));
+                } catch (RuntimeException ignored) {
+                    // Host input is not updated from UNKNOWN/floating schematic data.
+                }
+            }
+        }
+    }
+
+    private static boolean readDeviceBit(
+            CircuitProgramRuntime current,
+            int deviceIndex,
+            int portIndex,
+            boolean fallback
+    ) {
+        try {
+            return (current.externalDeviceInputValue(deviceIndex, portIndex) & 1L) != 0L;
+        } catch (RuntimeException ignored) {
+            return fallback;
         }
     }
 
@@ -475,7 +581,7 @@ public final class CircuitBlockEntity extends BlockEntity {
         }
     }
 
-    /** Determine the physical Pixel Display target and bounds for each connected 64-bit output. Server thread only. */
+    /** Determine the physical Pixel Display target and bounds for each connected legacy 64-bit root output. */
     private void refreshDisplayStreamPorts() {
         Level currentLevel = level;
         if (currentLevel == null || currentLevel.isClientSide()) return;
@@ -535,6 +641,83 @@ public final class CircuitBlockEntity extends BlockEntity {
         }
     }
 
+    /** Resolve stable-id DEVICE references to endpoints actually reachable from this Circuit Block. Server thread only. */
+    private void refreshExternalDeviceTargets() {
+        Level currentLevel = level;
+        if (currentLevel == null || currentLevel.isClientSide()) return;
+
+        CircuitProgramRuntime snapshot;
+        String[] ids;
+        ExternalDeviceType[] types;
+        synchronized (runtimeLock) {
+            snapshot = runtime;
+            if (snapshot == null) {
+                externalDeviceTargets = new ExternalDeviceTarget[0];
+                return;
+            }
+            int count = snapshot.externalDeviceCount();
+            ids = new String[count];
+            types = new ExternalDeviceType[count];
+            for (int index = 0; index < count; index++) {
+                ids[index] = snapshot.externalDeviceId(index);
+                types[index] = snapshot.externalDeviceType(index);
+            }
+        }
+
+        Map<String, ExternalDeviceDescriptor> discovered = new HashMap<>();
+        for (ExternalDeviceDescriptor descriptor : ExternalDeviceDiscovery.discover(currentLevel, worldPosition)) {
+            if (descriptor == null || descriptor.deviceId() == null) continue;
+            discovered.putIfAbsent(descriptor.deviceId(), descriptor);
+        }
+
+        ExternalDeviceTarget[] resolved = new ExternalDeviceTarget[ids.length];
+        for (int index = 0; index < ids.length; index++) {
+            ExternalDeviceDescriptor descriptor = discovered.get(ids[index]);
+            if (descriptor == null || descriptor.type() != types[index]) continue;
+            BlockPos devicePos = new BlockPos(descriptor.x(), descriptor.y(), descriptor.z());
+
+            if (types[index] == ExternalDeviceType.DISPLAY) {
+                BlockState displayState = currentLevel.getBlockState(devicePos);
+                if (!(displayState.getBlock() instanceof DisplayBlock)
+                        || !(currentLevel.getBlockEntity(devicePos) instanceof DisplayBlockEntity)) continue;
+                DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(currentLevel, devicePos, displayState);
+                if (info == null || info.pixelWidth() <= 0 || info.pixelHeight() <= 0) continue;
+                resolved[index] = new ExternalDeviceTarget(
+                        ids[index], types[index], devicePos.immutable(),
+                        new DisplayStreamTarget(devicePos.immutable(), info.pixelWidth(), info.pixelHeight())
+                );
+                continue;
+            }
+
+            if (!(currentLevel.getBlockEntity(devicePos) instanceof ExternalDeviceBlockEntity physical)) continue;
+            if (!ids[index].equals(physical.stableId()) || physical.deviceType() != types[index]) continue;
+            resolved[index] = new ExternalDeviceTarget(ids[index], types[index], devicePos.immutable(), null);
+        }
+
+        synchronized (runtimeLock) {
+            if (runtime != snapshot || pendingDeviceInputs.length != resolved.length) return;
+            ExternalDeviceTarget[] previous = externalDeviceTargets;
+            for (int index = 0; index < resolved.length; index++) {
+                ExternalDeviceTarget old = index < previous.length ? previous[index] : null;
+                ExternalDeviceTarget next = resolved[index];
+                if (next == null) {
+                    pendingDeviceDisplayCommands[index].discard();
+                } else if (!next.equals(old)) {
+                    if (next.type() == ExternalDeviceType.DISPLAY) {
+                        // Treat an asserted strobe as one fresh command when a display is first/re-connected.
+                        lastDeviceWriteHigh[index] = false;
+                        lastDeviceResetHigh[index] = false;
+                    } else {
+                        pendingDeviceInputs[index].forcePendingSnapshot();
+                    }
+                }
+            }
+            externalDeviceTargets = resolved;
+            // Prime current pin levels immediately; do not wait for another clock transition after plugging a device.
+            captureExternalDeviceInputsLocked(snapshot);
+        }
+    }
+
     private static DisplayStreamTarget displayTarget(Level level, BlockPos cablePos) {
         CableNetworkCache.Network network = CableNetworkCache.network(level, cablePos);
         if (network == null) return null;
@@ -560,6 +743,7 @@ public final class CircuitBlockEntity extends BlockEntity {
 
         List<DisplayBatch> displayBatches = new ArrayList<>();
         List<OutputEvent> latestOutputs = new ArrayList<>();
+        List<DeviceInputEvent> deviceInputs = new ArrayList<>();
 
         synchronized (runtimeLock) {
             CircuitProgramRuntime current = runtime;
@@ -588,12 +772,43 @@ public final class CircuitBlockEntity extends BlockEntity {
                     pending.clear();
                 }
             }
+
+            ExternalDeviceTarget[] deviceTargets = externalDeviceTargets;
+            int devices = Math.min(current.externalDeviceCount(), pendingDeviceInputs.length);
+            for (int deviceIndex = 0; deviceIndex < devices; deviceIndex++) {
+                ExternalDeviceTarget target = deviceIndex < deviceTargets.length ? deviceTargets[deviceIndex] : null;
+                if (target == null) continue;
+
+                if (target.type() == ExternalDeviceType.DISPLAY && target.displayTarget() != null) {
+                    long[] commands = pendingDeviceDisplayCommands[deviceIndex].drain();
+                    if (commands.length > 0) displayBatches.add(new DisplayBatch(target.displayTarget(), commands));
+                    continue;
+                }
+
+                DeviceInputBuffer pending = pendingDeviceInputs[deviceIndex];
+                int ports = Math.min(current.externalDeviceInputCount(deviceIndex), pending.portCount());
+                for (int portIndex = 0; portIndex < ports; portIndex++) {
+                    if (!pending.pending(portIndex)) continue;
+                    deviceInputs.add(new DeviceInputEvent(
+                            target.devicePos(),
+                            target.deviceId(),
+                            target.type(),
+                            current.externalDeviceInputPort(deviceIndex, portIndex).name(),
+                            pending.take(portIndex)
+                    ));
+                }
+            }
         }
 
         for (DisplayBatch batch : displayBatches) {
             DisplayBatchRuntime.apply(currentLevel, batch.target().displayPos(), batch.commands());
         }
         for (OutputEvent event : latestOutputs) publishOutputValue(event);
+        for (DeviceInputEvent event : deviceInputs) {
+            if (!(currentLevel.getBlockEntity(event.devicePos()) instanceof ExternalDeviceBlockEntity physical)) continue;
+            if (!event.deviceId().equals(physical.stableId()) || event.type() != physical.deviceType()) continue;
+            physical.acceptSchematicInput(event.portName(), event.value());
+        }
     }
 
     @Override
@@ -682,12 +897,26 @@ public final class CircuitBlockEntity extends BlockEntity {
 
     private record OutputEvent(String portName, long value) {}
     private record DisplayBatch(DisplayStreamTarget target, long[] commands) {}
+    private record DeviceInputEvent(
+            BlockPos devicePos,
+            String deviceId,
+            ExternalDeviceType type,
+            String portName,
+            long value
+    ) {}
 
     private record DisplayStreamTarget(BlockPos displayPos, int width, int height) {
         private boolean contains(int x, int y) {
             return x >= 0 && y >= 0 && x < width && y < height;
         }
     }
+
+    private record ExternalDeviceTarget(
+            String deviceId,
+            ExternalDeviceType type,
+            BlockPos devicePos,
+            DisplayStreamTarget displayTarget
+    ) {}
 
     /** Mutable holder avoids allocating a new OutputEvent/Long object on every high-rate output transition. */
     private static final class MutableOutput {
@@ -701,6 +930,57 @@ public final class CircuitBlockEntity extends BlockEntity {
 
         private void clear() {
             initialized = false;
+        }
+    }
+
+    /** Latest level-like inputs for UIB/INTERNET/STORAGE, delivered once per server tick. */
+    private static final class DeviceInputBuffer {
+        private final long[] lastValues;
+        private final boolean[] lastInitialized;
+        private final long[] pendingValues;
+        private final boolean[] pending;
+
+        private DeviceInputBuffer(int ports) {
+            int size = Math.max(0, ports);
+            lastValues = new long[size];
+            lastInitialized = new boolean[size];
+            pendingValues = new long[size];
+            pending = new boolean[size];
+        }
+
+        private int portCount() { return pending.length; }
+
+        private void capture(int port, long value) {
+            if (port < 0 || port >= pending.length) return;
+            if (lastInitialized[port] && lastValues[port] == value) return;
+            lastInitialized[port] = true;
+            lastValues[port] = value;
+            pendingValues[port] = value;
+            pending[port] = true;
+        }
+
+        private void forcePendingSnapshot() {
+            for (int port = 0; port < pending.length; port++) {
+                if (!lastInitialized[port]) continue;
+                pendingValues[port] = lastValues[port];
+                pending[port] = true;
+            }
+        }
+
+        private boolean pending(int port) {
+            return port >= 0 && port < pending.length && pending[port];
+        }
+
+        private long take(int port) {
+            long value = pendingValues[port];
+            pending[port] = false;
+            return value;
+        }
+
+        private int pendingCount() {
+            int count = 0;
+            for (boolean value : pending) if (value) count++;
+            return count;
         }
     }
 
