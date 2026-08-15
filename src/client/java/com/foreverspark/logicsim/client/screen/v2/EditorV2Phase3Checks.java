@@ -16,6 +16,13 @@ import java.util.List;
 
 /** Dependency-light PCB routing regression checks for Logic Editor V2 Phase 3. */
 public final class EditorV2Phase3Checks {
+    private static final List<String> HISTORY_BRIDGE_MIXINS = List.of(
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasPcbLayerMixin",
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasPhase2ConfigMixin",
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasWiringV2Mixin",
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasDuplicateMixin"
+    );
+
     private EditorV2Phase3Checks() {}
 
     public static void run() {
@@ -99,26 +106,27 @@ public final class EditorV2Phase3Checks {
 
     /**
      * Multiple mixins target CircuitCanvasWidget. A private @Unique helper must not reuse the
-     * signature of a public interface method supplied by another mixin: Mixin can otherwise try
-     * to upgrade the private helper and fail while transforming the target class at runtime.
+     * signature of a public EditorHistoryAccess method supplied by CircuitCanvasEditorV2Mixin.
+     * Mixin can otherwise see the private method first and fail while conforming/upgrading the
+     * later public interface implementation during real Minecraft class transformation.
      */
     private static void mixinHistorySignatureChecks() {
-        try {
-            Class<?> pcbMixin = Class.forName(
-                    "com.foreverspark.logicsim.mixin.client.CircuitCanvasPcbLayerMixin",
-                    false,
-                    EditorV2Phase3Checks.class.getClassLoader());
-            for (Method helper : pcbMixin.getDeclaredMethods()) {
-                if (!Modifier.isPrivate(helper.getModifiers())) continue;
-                for (Method api : EditorHistoryAccess.class.getDeclaredMethods()) {
-                    boolean collision = helper.getName().equals(api.getName())
-                            && Arrays.equals(helper.getParameterTypes(), api.getParameterTypes());
-                    check(!collision, "PCB mixin private helper collides with EditorHistoryAccess method: "
-                            + helper.getName());
+        ClassLoader loader = EditorV2Phase3Checks.class.getClassLoader();
+        for (String mixinName : HISTORY_BRIDGE_MIXINS) {
+            try {
+                Class<?> mixin = Class.forName(mixinName, false, loader);
+                for (Method helper : mixin.getDeclaredMethods()) {
+                    if (!Modifier.isPrivate(helper.getModifiers())) continue;
+                    for (Method api : EditorHistoryAccess.class.getDeclaredMethods()) {
+                        boolean collision = helper.getName().equals(api.getName())
+                                && Arrays.equals(helper.getParameterTypes(), api.getParameterTypes());
+                        check(!collision, mixin.getSimpleName()
+                                + " private helper collides with EditorHistoryAccess method: " + helper.getName());
+                    }
                 }
+            } catch (ClassNotFoundException exception) {
+                throw new AssertionError("History bridge mixin missing from client self-test classpath: " + mixinName, exception);
             }
-        } catch (ClassNotFoundException exception) {
-            throw new AssertionError("PCB layer mixin class missing from client self-test classpath", exception);
         }
     }
 

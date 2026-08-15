@@ -88,7 +88,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
                     node.width,
                     value,
                     (width, nextValue) -> {
-                        logic$checkpoint(node.kind == NodeKind.INPUT ? "Configure input" : "Configure constant");
+                        logic$configHistoryCheckpoint(node.kind == NodeKind.INPUT ? "Configure input" : "Configure constant");
                         boolean widthChanged = node.width != width;
                         node.width = width;
                         long masked = nextValue & NumericValueCodec.mask(width);
@@ -100,7 +100,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
                         }
                         int removed = widthChanged ? logic$removeAttachedWires(node.id) : 0;
                         recompile();
-                        logic$commit();
+                        logic$configHistoryCommit();
                         status.accept(node.displayName() + " = " + NumericValueCodec.hex(masked, width)
                                 + (removed > 0 ? "; removed " + removed + " width-dependent connection" + (removed == 1 ? "" : "s") : ""));
                     }
@@ -112,14 +112,14 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
             List<BusSliceOutput> slices = new ArrayList<>();
             for (BusSliceOutput slice : node.normalizedSlices()) slices.add(slice.copy());
             Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.slice(parent, node.width, slices, (width, nextSlices) -> {
-                logic$checkpoint("Configure bus slice");
+                logic$configHistoryCheckpoint("Configure bus slice");
                 node.width = width;
                 node.slices = new ArrayList<>();
                 for (BusSliceOutput slice : nextSlices) node.slices.add(slice.copy());
                 node.normalizedSlices();
                 int removed = logic$removeAttachedWires(node.id);
                 recompile();
-                logic$commit();
+                logic$configHistoryCommit();
                 status.accept("BUS SLICE = " + width + " bit -> " + node.slices.size() + " range" + (node.slices.size() == 1 ? "" : "s")
                         + (removed > 0 ? "; reconnect changed ports" : ""));
             }));
@@ -128,13 +128,13 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
 
         if (node.kind == NodeKind.NET_LABEL) {
             Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.net(parent, node.label, node.width, (name, width) -> {
-                logic$checkpoint("Configure net label");
+                logic$configHistoryCheckpoint("Configure net label");
                 boolean electricalChange = node.width != width || !name.equals(node.label);
                 node.label = name;
                 node.width = width;
                 int removed = electricalChange ? logic$removeAttachedWires(node.id) : 0;
                 recompile();
-                logic$commit();
+                logic$configHistoryCommit();
                 status.accept("NET " + name + " [" + width + "]" + (removed > 0 ? " — reconnect changed local port" : ""));
             }));
             return;
@@ -142,13 +142,13 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
 
         int lane = (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) ? node.normalizedLaneWidth() : 1;
         Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.width(parent, node.displayName(), node.width, lane, (width, laneWidth) -> {
-            logic$checkpoint("Configure width");
+            logic$configHistoryCheckpoint("Configure width");
             boolean changed = node.width != width || ((node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) && node.laneWidth != laneWidth);
             node.width = width;
             if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) node.laneWidth = laneWidth;
             int removed = changed ? logic$removeAttachedWires(node.id) : 0;
             recompile();
-            logic$commit();
+            logic$configHistoryCommit();
             status.accept(node.displayName() + " configured" + (removed > 0 ? "; reconnect " + removed + " changed connection" + (removed == 1 ? "" : "s") : ""));
         }));
     }
@@ -160,12 +160,14 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
         return before - document.wires.size();
     }
 
-    @Unique private void logic$checkpoint(String label) {
+    // Private bridge helpers must not reuse EditorHistoryAccess method signatures: all of these
+    // mixins merge into CircuitCanvasWidget, where duplicate signatures can break Mixin transform.
+    @Unique private void logic$configHistoryCheckpoint(String label) {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$checkpoint(label);
     }
 
-    @Unique private void logic$commit() {
+    @Unique private void logic$configHistoryCommit() {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$commitHistory();
     }
