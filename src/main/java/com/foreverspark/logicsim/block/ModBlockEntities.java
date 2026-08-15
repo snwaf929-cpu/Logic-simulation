@@ -13,10 +13,16 @@ public final class ModBlockEntities {
     public static final BlockEntityType<DisplayBlockEntity> DISPLAY = register("display", DisplayBlockEntity::new, DisplayBlocks.DISPLAY_BLOCK);
     public static final BlockEntityType<CircuitPortBlockEntity> CIRCUIT_PORT = register("circuit_port", CircuitPortBlockEntity::new, ConnectorBlocks.IO_CONNECTOR);
     public static final BlockEntityType<CircuitBlockEntity> CIRCUIT = register("circuit", CircuitBlockEntity::new, ModBlocks.CIRCUIT_BLOCK);
+    public static final BlockEntityType<ExternalDeviceBlockEntity> EXTERNAL_DEVICE = register(
+            "external_device", ExternalDeviceBlockEntity::new,
+            ModBlocks.USER_INPUT_BRIDGE, ModBlocks.INTERNET_DEVICE, ModBlocks.STORAGE_DEVICE);
+
     private ModBlockEntities() {}
+
     private static <T extends BlockEntity> BlockEntityType<T> register(String name, FabricBlockEntityTypeBuilder.Factory<? extends T> factory, Block... blocks) {
         Identifier id = Identifier.fromNamespaceAndPath(LogicSimulationMod.MOD_ID, name);
         return Registry.register(BuiltInRegistries.BLOCK_ENTITY_TYPE, id, FabricBlockEntityTypeBuilder.<T>create(factory, blocks).build());
     }
+
     public static void initialize() {}
 }
