@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.editor.model.WireConnection;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.WeakHashMap;
 
 /**
  * Canonical, grid-snapped route manipulation used by Editor V2.1B.
@@ -14,6 +15,8 @@ import java.util.List;
  */
 public final class EditorWireRouting {
     private static final double EPSILON = 0.001;
+    /** UI-thread residuals let one-pixel mouse events accumulate instead of disappearing into grid rounding. */
+    private static final WeakHashMap<WireConnection, SegmentDragResidual> SEGMENT_DRAG_RESIDUALS = new WeakHashMap<>();
 
     private EditorWireRouting() {}
 
@@ -166,7 +169,10 @@ public final class EditorWireRouting {
         if (wire == null) return -1;
         materialize(wire, start, end);
         int routeCount = wire.routePoints().size();
-        if (segmentIndex >= 1 && segmentIndex < routeCount) return segmentIndex;
+        if (segmentIndex >= 1 && segmentIndex < routeCount) {
+            beginSegmentDrag(wire, segmentIndex);
+            return segmentIndex;
+        }
 
         List<Point> full = fullPoints(wire, start, end, false);
         if (segmentIndex < 0 || segmentIndex + 1 >= full.size()) return -1;
@@ -182,10 +188,15 @@ public final class EditorWireRouting {
                 new RoutePoint(anchors[1].x, anchors[1].y)
         ));
         snapAndAlign(wire, start, end);
-        return insertion + 1;
+        int movable = insertion + 1;
+        beginSegmentDrag(wire, movable);
+        return movable;
     }
 
-    /** Relative move retained for deterministic tests and keyboard-style nudges. */
+    /**
+     * Relative mouse movement is accumulated below one grid cell. This prevents slow drags from being rounded to zero
+     * on every individual mouse event while preserving exact grid-snapped segment positions.
+     */
     public static boolean moveSegment(WireConnection wire, int directSegmentIndex, double dx, double dy) {
         if (wire == null) return false;
         List<RoutePoint> route = wire.routePoints();
@@ -194,14 +205,25 @@ public final class EditorWireRouting {
         int second = directSegmentIndex;
         RoutePoint a = route.get(first);
         RoutePoint b = route.get(second);
+
+        SegmentDragResidual residual = SEGMENT_DRAG_RESIDUALS.get(wire);
+        if (residual == null || residual.segmentIndex != directSegmentIndex) {
+            residual = new SegmentDragResidual(directSegmentIndex);
+            SEGMENT_DRAG_RESIDUALS.put(wire, residual);
+        }
+
         if (aligned(a.y(), b.y())) {
-            double delta = EditorGrid.snap(a.y() + dy) - a.y();
+            residual.y += dy;
+            double delta = consumeGridDeltaY(residual);
+            if (delta == 0.0) return true;
             route.set(first, new RoutePoint(a.x(), a.y() + delta));
             route.set(second, new RoutePoint(b.x(), b.y() + delta));
             return true;
         }
         if (aligned(a.x(), b.x())) {
-            double delta = EditorGrid.snap(a.x() + dx) - a.x();
+            residual.x += dx;
+            double delta = consumeGridDeltaX(residual);
+            if (delta == 0.0) return true;
             route.set(first, new RoutePoint(a.x() + delta, a.y()));
             route.set(second, new RoutePoint(b.x() + delta, b.y()));
             return true;
@@ -209,7 +231,7 @@ public final class EditorWireRouting {
         return false;
     }
 
-    /** Mouse drag uses absolute cursor position so slow one-pixel events do not get lost by grid snapping. */
+    /** Absolute move used by deterministic tests and future pointer APIs. */
     public static boolean moveSegmentTo(WireConnection wire, int directSegmentIndex, double worldX, double worldY) {
         if (wire == null) return false;
         List<RoutePoint> route = wire.routePoints();
@@ -306,9 +328,7 @@ public final class EditorWireRouting {
             Point b = oldFull.get(oldFullIndex);
             if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) appendUnique(expanded, new Point(b.x, a.y));
             appendUnique(expanded, b);
-            if (oldFullIndex <= oldRoute.size()) {
-                oldRouteToNewRoute[oldFullIndex - 1] = Math.max(0, expanded.size() - 2);
-            }
+            if (oldFullIndex <= oldRoute.size()) oldRouteToNewRoute[oldFullIndex - 1] = Math.max(0, expanded.size() - 2);
         }
 
         ArrayList<RoutePoint> canonical = new ArrayList<>();
@@ -322,6 +342,26 @@ public final class EditorWireRouting {
         }
         wire.setRoutePoints(canonical);
         wire.setViaRouteIndices(remappedVias);
+    }
+
+    private static void beginSegmentDrag(WireConnection wire, int segmentIndex) {
+        SEGMENT_DRAG_RESIDUALS.put(wire, new SegmentDragResidual(segmentIndex));
+    }
+
+    private static double consumeGridDeltaX(SegmentDragResidual residual) {
+        long cells = (long) (residual.x / EditorGrid.STEP);
+        if (cells == 0L) return 0.0;
+        double delta = cells * EditorGrid.STEP;
+        residual.x -= delta;
+        return delta;
+    }
+
+    private static double consumeGridDeltaY(SegmentDragResidual residual) {
+        long cells = (long) (residual.y / EditorGrid.STEP);
+        if (cells == 0L) return 0.0;
+        double delta = cells * EditorGrid.STEP;
+        residual.y -= delta;
+        return delta;
     }
 
     private static Point[] anchorsAround(Point a, Point b, double worldX, double worldY) {
@@ -378,5 +418,15 @@ public final class EditorWireRouting {
 
     private static double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static final class SegmentDragResidual {
+        private final int segmentIndex;
+        private double x;
+        private double y;
+
+        private SegmentDragResidual(int segmentIndex) {
+            this.segmentIndex = segmentIndex;
+        }
     }
 }
