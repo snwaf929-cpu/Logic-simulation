@@ -5,10 +5,7 @@ import java.util.Comparator;
 import java.util.List;
 
 public final class CircuitDocument {
-    /**
-     * Keep the existing document version: Phase 4 adds optional Gson fields only, so old BOARD/CHIP
-     * documents remain loadable without a format migration or version-gated decoder.
-     */
+    /** Optional Gson fields keep older BOARD/CHIP documents readable without a gated decoder. */
     public int formatVersion = 2;
     public int nextNodeId = 1;
     /** Stable monotonically increasing id for cloned BOARD template groups. */
@@ -16,8 +13,7 @@ public final class CircuitDocument {
     public List<EditorNode> nodes = new ArrayList<>();
     public List<WireConnection> wires = new ArrayList<>();
 
-    public CircuitDocument() {
-    }
+    public CircuitDocument() {}
 
     public EditorNode addNode(NodeKind kind, double x, double y) {
         EditorNode node = new EditorNode(nextNodeId++, kind, x, y);
@@ -32,9 +28,7 @@ public final class CircuitDocument {
     }
 
     public EditorNode node(int id) {
-        return nodes.stream()
-                .filter(node -> node.id == id)
-                .findFirst()
+        return nodes.stream().filter(node -> node.id == id).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Unknown node " + id));
     }
 
@@ -48,34 +42,25 @@ public final class CircuitDocument {
         wires.removeIf(wire -> wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId);
     }
 
-    public void removeWire(WireConnection wire) {
-        wires.remove(wire);
-    }
-
-    public void removeWiresForNode(int nodeId) {
-        wires.removeIf(wire -> wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId);
-    }
+    public void removeWire(WireConnection wire) { wires.remove(wire); }
+    public void removeWiresForNode(int nodeId) { wires.removeIf(wire -> wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId); }
 
     public int connectionCount(int nodeId) {
         int count = 0;
-        for (WireConnection wire : wires) {
-            if (wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId) count++;
-        }
+        for (WireConnection wire : wires) if (wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId) count++;
         return count;
     }
 
     public List<EditorNode> inputNodes() {
-        return nodes.stream()
-                .filter(node -> node.kind == NodeKind.INPUT)
-                .sorted(Comparator.comparingInt(node -> node.id))
-                .toList();
+        return nodes.stream().filter(node -> node.kind == NodeKind.INPUT).sorted(Comparator.comparingInt(node -> node.id)).toList();
     }
 
     public List<EditorNode> outputNodes() {
-        return nodes.stream()
-                .filter(node -> node.kind == NodeKind.OUTPUT)
-                .sorted(Comparator.comparingInt(node -> node.id))
-                .toList();
+        return nodes.stream().filter(node -> node.kind == NodeKind.OUTPUT).sorted(Comparator.comparingInt(node -> node.id)).toList();
+    }
+
+    public List<EditorNode> externalDeviceNodes() {
+        return nodes.stream().filter(EditorNode::isExternalDevice).sorted(Comparator.comparingInt(node -> node.id)).toList();
     }
 
     public void normalize() {
@@ -103,9 +88,12 @@ public final class CircuitDocument {
             node.templateName = node.templateName.trim();
             if (node.templateInstanceId == 0) node.templateName = "";
 
+            // Migrate the old pseudo-chip SCREEN node into a real persistent physical endpoint placeholder.
+            if (node.kind == NodeKind.CUSTOM_CHIP && "DISPLAY".equalsIgnoreCase(node.chipName.trim())) {
+                node.configureExternalDevice(ExternalDeviceType.DISPLAY, "", ExternalDeviceState.UNKNOWN, "", 0, 0, 0);
+            }
+
             if (node.boardSocket) {
-                // A socket is deliberately implemented as BUS routing infrastructure. This preserves
-                // the NAND-only primitive invariant while giving BOARD templates a named boundary.
                 node.kind = NodeKind.BUS;
                 node.label = node.label.isBlank() ? "SOCKET" + node.id : node.label.trim();
                 node.interfaceId = node.interfaceId.isBlank() ? "socket-" + node.id : node.interfaceId.trim();
@@ -113,6 +101,18 @@ public final class CircuitDocument {
                 node.interfaceId = "";
                 node.interfaceOrder = 0;
                 node.socketDirection = PortDirection.INPUT;
+            }
+
+            if (node.kind == NodeKind.EXTERNAL_DEVICE) {
+                node.boardSocket = false;
+                if (node.externalDeviceType == null) node.externalDeviceType = ExternalDeviceType.DISPLAY;
+                if (node.externalDeviceState == null) node.externalDeviceState = ExternalDeviceState.UNKNOWN;
+                if (node.externalDeviceId == null) node.externalDeviceId = "";
+                if (node.externalDeviceWorld == null) node.externalDeviceWorld = "";
+                node.externalDeviceId = node.externalDeviceId.trim();
+                node.externalDeviceWorld = node.externalDeviceWorld.trim();
+                node.label = node.externalDeviceType.label();
+                node.chipName = "";
             }
 
             if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) {
@@ -125,18 +125,10 @@ public final class CircuitDocument {
             if (node.kind == NodeKind.BUS_SLICE) node.normalizedSlices();
             else if (node.slices == null) node.slices = new ArrayList<>();
 
-            if (node.kind == NodeKind.NET_LABEL) {
-                // Preserve every explicit saved name, including legacy "NET", but never normalize
-                // a blank label into the same shared net as every other blank label.
-                node.label = node.label == null || node.label.isBlank() ? "NET" + node.id : node.label.trim();
-            }
+            if (node.kind == NodeKind.NET_LABEL) node.label = node.label == null || node.label.isBlank() ? "NET" + node.id : node.label.trim();
 
-            if (node.kind == NodeKind.INPUT && node.width < 64) {
-                node.inputDefaultValue &= (1L << node.width) - 1L;
-            }
-            if (node.kind == NodeKind.CONSTANT && node.width < 64) {
-                node.constantValue &= (1L << node.width) - 1L;
-            }
+            if (node.kind == NodeKind.INPUT && node.width < 64) node.inputDefaultValue &= (1L << node.width) - 1L;
+            if (node.kind == NodeKind.CONSTANT && node.width < 64) node.constantValue &= (1L << node.width) - 1L;
             if (node.kind == NodeKind.CONSTANT && node.randomSource) {
                 node.clockSource = false;
                 node.width = 1;

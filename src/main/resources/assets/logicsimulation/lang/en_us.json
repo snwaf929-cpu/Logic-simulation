@@ -9,5 +9,8 @@
   "block.logicsimulation.bus_cable_64": "Bus Cable [64]",
   "block.logicsimulation.display_block": "Pixel Display [uses Bus 64]",
   "block.logicsimulation.io_connector": "Circuit I/O Connector",
+  "block.logicsimulation.user_input_bridge": "User Input Bridge",
+  "block.logicsimulation.internet_device": "Internet Device",
+  "block.logicsimulation.storage_device": "Storage Device",
   "screen.logicsimulation.circuit_editor": "Circuit Editor"
 }

@@ -42,18 +42,14 @@ public final class CableBlock extends Block {
 
     public CableKind cableKind() { return cableKind; }
     public int bitWidth() { return bitWidth; }
-    public boolean compatibleWith(CableBlock other) {
-        return other != null && cableKind == other.cableKind && bitWidth == other.bitWidth;
-    }
+    public boolean compatibleWith(CableBlock other) { return other != null && cableKind == other.cableKind && bitWidth == other.bitWidth; }
 
     @Nullable
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
         BlockState state = defaultBlockState();
         BlockPos pos = context.getClickedPos();
-        for (Direction direction : Direction.values()) {
-            state = state.setValue(property(direction), connectsTo(context.getLevel(), pos, direction));
-        }
+        for (Direction direction : Direction.values()) state = state.setValue(property(direction), connectsTo(context.getLevel(), pos, direction));
         return state;
     }
 
@@ -73,9 +69,7 @@ public final class CableBlock extends Block {
     }
 
     @Override
-    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        builder.add(NORTH, SOUTH, WEST, EAST, UP, DOWN);
-    }
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) { builder.add(NORTH, SOUTH, WEST, EAST, UP, DOWN); }
 
     @Override
     protected VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
@@ -102,14 +96,12 @@ public final class CableBlock extends Block {
         BlockPos neighborPos = pos.relative(direction);
         if (neighborState.getBlock() instanceof CableBlock other) return compatibleWith(other);
         if (level.getBlockEntity(neighborPos) instanceof CircuitPortBlockEntity socket) return socket.accepts(this);
-
-        // The Circuit Block is a physical device socket. Always draw the cable arm into it.
-        // Electrical direct-binding is still strict: CableNetworkCache only creates a direct endpoint
-        // when the programmed circuit has exactly one compatible port for this cable width.
         if (level.getBlockEntity(neighborPos) instanceof CircuitBlockEntity) return true;
-
         if (neighborState.getBlock() instanceof DisplayBlock) {
             return DisplayPorts.accepts(neighborState, direction.getOpposite(), cableKind, bitWidth);
+        }
+        if (neighborState.getBlock() instanceof ExternalDeviceBlock device) {
+            return device.accepts(direction.getOpposite(), this);
         }
         return false;
     }

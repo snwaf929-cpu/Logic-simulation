@@ -15,9 +15,11 @@ public final class ModBlockItemIds {
     public static final BlockItemId BUS_CABLE_64 = create("bus_cable_64");
     public static final BlockItemId DISPLAY_BLOCK = create("display_block");
     public static final BlockItemId IO_CONNECTOR = create("io_connector");
+    public static final BlockItemId USER_INPUT_BRIDGE = create("user_input_bridge");
+    public static final BlockItemId INTERNET_DEVICE = create("internet_device");
+    public static final BlockItemId STORAGE_DEVICE = create("storage_device");
 
-    private ModBlockItemIds() {
-    }
+    private ModBlockItemIds() {}
 
     private static BlockItemId create(String name) {
         Identifier id = Identifier.fromNamespaceAndPath(LogicSimulationMod.MOD_ID, name);

@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.block.CircuitPortBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayPorts;
+import com.foreverspark.logicsim.block.ExternalDeviceBlock;
 import com.foreverspark.logicsim.block.IoConnectorBlock;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -19,11 +20,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 
-/**
- * Cached physical cable topology. Ordinary circuit networks persist across normal world ticks and are invalidated
- * by topology changes. Display-connected networks intentionally keep the old per-tick refresh semantics because a
- * display consumes a stream of DATA64 commands and must never retain stale endpoint discovery/freshness state.
- */
+/** Cached physical cable topology shared by circuit sockets, displays, and Phase 5 physical devices. */
 public final class CableNetworkCache {
     private static final int MAX_SEGMENTS = 8192;
     private static final long TOPOLOGY_SAFETY_TTL_TICKS = 20L;
@@ -54,9 +51,7 @@ public final class CableNetworkCache {
         for (Network network : affected) invalidateNetwork(state, network);
     }
 
-    public static synchronized void clear(Level level) {
-        if (level != null) STATES.remove(level);
-    }
+    public static synchronized void clear(Level level) { if (level != null) STATES.remove(level); }
 
     private static Network build(Level level, State state, BlockPos start) {
         BlockState startState = level.getBlockState(start);
@@ -81,16 +76,8 @@ public final class CableNetworkCache {
         }
 
         List<Endpoint> endpoints = discoverEndpoints(level, segments, startCable);
-        Network network = new Network(
-                startCable.cableKind(),
-                startCable.bitWidth(),
-                segments,
-                endpoints,
-                conflict || seed == null ? 0L : seed,
-                !conflict && seed != null,
-                true,
-                level.getGameTime()
-        );
+        Network network = new Network(startCable.cableKind(), startCable.bitWidth(), segments, endpoints,
+                conflict || seed == null ? 0L : seed, !conflict && seed != null, true, level.getGameTime());
         for (BlockPos segment : segments) state.bySegment.put(segment, network);
         return network;
     }
@@ -113,6 +100,8 @@ public final class CableNetworkCache {
                 } else if (state.getBlock() instanceof DisplayBlock
                         && DisplayPorts.accepts(state, deviceFace, cable.cableKind(), cable.bitWidth())) {
                     endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.DISPLAY));
+                } else if (state.getBlock() instanceof ExternalDeviceBlock device && device.accepts(deviceFace, cable)) {
+                    endpoints.add(new Endpoint(devicePos.immutable(), deviceFace, EndpointKind.EXTERNAL_DEVICE));
                 }
             }
         }
@@ -131,7 +120,7 @@ public final class CableNetworkCache {
         private final Map<BlockPos, Long> seeds = new LinkedHashMap<>();
     }
 
-    public enum EndpointKind { CIRCUIT_SOCKET, CIRCUIT_DIRECT, DISPLAY }
+    public enum EndpointKind { CIRCUIT_SOCKET, CIRCUIT_DIRECT, DISPLAY, EXTERNAL_DEVICE }
     public record Endpoint(BlockPos devicePos, Direction deviceFace, EndpointKind kind) {}
 
     public static final class Network {
@@ -140,7 +129,7 @@ public final class CableNetworkCache {
         private final Set<BlockPos> segments;
         private final List<Endpoint> endpoints;
         private final long builtAtGameTime;
-        private final boolean hasDisplayEndpoint;
+        private final boolean hasRealtimeEndpoint;
         private long value;
         private boolean initialized;
         private boolean fresh;
@@ -155,7 +144,7 @@ public final class CableNetworkCache {
             this.initialized = initialized;
             this.fresh = fresh;
             this.builtAtGameTime = builtAtGameTime;
-            this.hasDisplayEndpoint = endpoints.stream().anyMatch(endpoint -> endpoint.kind() == EndpointKind.DISPLAY);
+            this.hasRealtimeEndpoint = endpoints.stream().anyMatch(endpoint -> endpoint.kind() == EndpointKind.DISPLAY);
         }
 
         public CableKind kind() { return kind; }
@@ -165,22 +154,15 @@ public final class CableNetworkCache {
         public long value() { return initialized ? value : 0L; }
         public boolean initialized() { return initialized; }
         public boolean fresh() { return fresh; }
-
-        public void store(long value) {
-            this.value = value;
-            this.initialized = true;
-        }
-
+        public void store(long value) { this.value = value; this.initialized = true; }
         public void markObserved() { fresh = false; }
 
         private boolean matches(Level level, BlockPos start) {
             long age = level.getGameTime() - builtAtGameTime;
             if (age < 0L) return false;
-            if (hasDisplayEndpoint) {
+            if (hasRealtimeEndpoint) {
                 if (age != 0L) return false;
-            } else if (age >= TOPOLOGY_SAFETY_TTL_TICKS) {
-                return false;
-            }
+            } else if (age >= TOPOLOGY_SAFETY_TTL_TICKS) return false;
             BlockState state = level.getBlockState(start);
             return state.getBlock() instanceof CableBlock cable && cable.cableKind() == kind && cable.bitWidth() == width;
         }
