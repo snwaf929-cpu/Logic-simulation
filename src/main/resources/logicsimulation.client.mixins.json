@@ -4,8 +4,10 @@
   "package": "com.foreverspark.logicsim.mixin.client",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "CircuitCanvasPhase4TemplateMixin",
     "CircuitCanvasWireSelectionMixin",
     "CircuitCanvasPcbLayerMixin",
+    "CircuitCanvasPhase4RenderMixin",
     "CircuitCanvasPhase2ConfigMixin",
     "CircuitCanvasWiringV2Mixin",
     "CircuitCanvasEditorV2Mixin",
@@ -27,6 +29,7 @@
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
     "CircuitCanvasWorkspaceBackMixin",
+    "CircuitEditorPhase4Mixin",
     "CircuitEditorPhase3ShortcutsMixin",
     "CircuitEditorPhase2ShortcutsMixin",
     "CircuitEditorUndoRedoMixin",
