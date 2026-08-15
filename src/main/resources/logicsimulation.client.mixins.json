@@ -50,6 +50,7 @@
     "ComponentLibraryDevicesMixin",
     "ComponentLibraryChipDeleteMixin",
     "ClientChipLibraryDeletionMixin",
+    "CircuitBlockStaticResetRandomDisplayMixin",
     "CircuitBlockRandomDisplayNetworkMixin",
     "CircuitBlockRealtimeDisplayMixin",
     "DisplayRealtimePersistenceMixin",
