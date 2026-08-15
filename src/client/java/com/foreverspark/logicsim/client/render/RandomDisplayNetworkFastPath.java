@@ -1,0 +1,573 @@
+package com.foreverspark.logicsim.client.render;
+
+import com.foreverspark.logicsim.core.CircuitSimulator;
+import com.foreverspark.logicsim.core.Signal;
+import com.foreverspark.logicsim.core.TimingSignalDriver;
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
+import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.model.WireConnection;
+import com.foreverspark.logicsim.editor.runtime.CircuitTimingController;
+import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
+import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
+
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Compiled fast path for the physical DISPLAY stress shape when RANDOM sources form more than one trigger group.
+ *
+ * <p>The original packed display engine is intentionally limited to one CLOCK -> RANDOM trigger group. Real editor
+ * boards can instead form a zero-NAND RANDOM trigger DAG: one CLOCK-triggered group updates RANDOM lanes, whose rising
+ * outputs trigger additional RANDOM groups. The ordinary simulator scans every trigger group after every HIGH and LOW
+ * clock edge, which becomes the dominant cost at MHz rates even though no NAND needs settling.</p>
+ *
+ * <p>This compiler proves a much narrower closed world before optimizing it: one root CLOCK, one physical DISPLAY,
+ * no root outputs, WRITE driven by that CLOCK, RESET unwired, exactly 48 RANDOM lanes covering X/Y/COLOR, no NAND
+ * consumers of those RANDOM outputs, and every RANDOM trigger driven by either the CLOCK or another RANDOM lane. The
+ * RANDOM trigger graph must be acyclic. Once proven, every CLOCK rising edge is evaluated entirely in packed primitive
+ * state and only groups whose trigger actually rises are sampled. The final RANDOM state is committed to the ordinary
+ * simulator once per worker chunk, while every DISPLAY WRITE remains visible to the realtime framebuffer.</p>
+ */
+public final class RandomDisplayNetworkFastPath {
+    private static final long RNG_NONZERO_FALLBACK = 0x9E3779B97F4A7C15L;
+    private static final long RNG_SEED_GAMMA = 0x9E3779B97F4A7C15L;
+    private static final long PIXEL_OPCODE = (long) DisplayCommandCodec.OP_PIXEL << 48;
+    private static final int DISPLAY_RANDOM_LANES = 48;
+    private static final Field CLOCKS_FIELD = findClocksField();
+
+    private RandomDisplayNetworkFastPath() {}
+
+    public record CompileResult(Plan plan, String reason) {
+        public boolean active() { return plan != null; }
+    }
+
+    public static CompileResult compile(CircuitProgramRuntime runtime, int deviceIndex, int displayWidth, int displayHeight) {
+        if (runtime == null) return fail("runtime-null");
+        if (displayWidth <= 0 || displayHeight <= 0) return fail("display-size-invalid");
+        if (deviceIndex < 0 || deviceIndex >= runtime.externalDeviceCount()) return fail("device-index-invalid");
+        if (runtime.externalDeviceType(deviceIndex) != ExternalDeviceType.DISPLAY) return fail("device-not-display");
+        if (runtime.outputPortCount() != 0) return fail("root-output-observer");
+        if (runtime.externalDeviceCount() != 1) return fail("multiple-device-observers");
+
+        CircuitDocument board = runtime.program().root.circuit;
+        if (board == null) return fail("board-null");
+
+        List<EditorNode> clocks = new ArrayList<>();
+        List<EditorNode> randomNodes = new ArrayList<>();
+        for (EditorNode node : board.nodes) {
+            if (node == null || node.kind != NodeKind.CONSTANT) continue;
+            if (node.randomSource) randomNodes.add(node);
+            else if (node.clockSource) clocks.add(node);
+        }
+        if (clocks.size() != 1) return fail("clock-count-" + clocks.size());
+        if (randomNodes.size() != DISPLAY_RANDOM_LANES) return fail("random-lanes-" + randomNodes.size());
+
+        EditorNode clockNode = clocks.getFirst();
+        if (hasInputWire(board, clockNode.id, 0)) return fail("clock-enable-wired");
+
+        EditorNode displayNode = findDisplayNode(runtime, board, deviceIndex);
+        if (displayNode == null) return fail("display-node-unresolved");
+        if (hasInputWire(board, displayNode.id, 4)) return fail("display-reset-wired");
+
+        TimingSignalDriver clock = clockDriver(runtime.timing(), clockNode.id);
+        if (clock == null) return fail("clock-driver-unresolved");
+        if (clock.compiledConeGateCount() != 0) return fail("clock-nand-cone");
+
+        CompiledCircuit compiled = runtime.compiled();
+        CircuitSimulator simulator = compiled.simulator();
+        Signal write = compiled.inputSignal(CompiledCircuit.ROOT_SCOPE, displayNode.id, 3, 0);
+        if (write == null || write.id() != clock.signalId()) return fail("display-write-not-clock");
+
+        int[] outputSignalIds = new int[DISPLAY_RANDOM_LANES];
+        int[] chances = new int[DISPLAY_RANDOM_LANES];
+        Map<Integer, Integer> laneBySignal = new HashMap<>(DISPLAY_RANDOM_LANES * 2);
+        for (int lane = 0; lane < randomNodes.size(); lane++) {
+            EditorNode random = randomNodes.get(lane);
+            Signal output = compiled.outputSignal(CompiledCircuit.ROOT_SCOPE, random.id, 0, 0);
+            if (output == null) return fail("random-output-unresolved-" + random.id);
+            if (laneBySignal.putIfAbsent(output.id(), lane) != null) return fail("random-output-alias");
+            int[] cone = simulator.compileAcyclicCone(output.id());
+            if (cone == null || cone.length != 0) return fail("random-nand-consumer-" + random.id);
+            outputSignalIds[lane] = output.id();
+            chances[lane] = Math.max(0, Math.min(100, random.randomChancePercent));
+        }
+
+        int[] boundarySignalIds = physicalDisplayBoundary(compiled, displayNode);
+        if (boundarySignalIds == null) return fail("display-data-unresolved");
+        int[] boundaryLane = new int[DISPLAY_RANDOM_LANES];
+        boolean[] represented = new boolean[DISPLAY_RANDOM_LANES];
+        for (int bit = 0; bit < boundarySignalIds.length; bit++) {
+            Integer lane = laneBySignal.get(boundarySignalIds[bit]);
+            if (lane == null) return fail("display-data-not-random-bit-" + bit);
+            boundaryLane[bit] = lane;
+            represented[lane] = true;
+        }
+        for (int lane = 0; lane < represented.length; lane++) {
+            if (!represented[lane]) return fail("random-not-on-display-" + lane);
+        }
+
+        LinkedHashMap<Integer, List<LaneSpec>> grouped = new LinkedHashMap<>();
+        for (int lane = 0; lane < randomNodes.size(); lane++) {
+            EditorNode random = randomNodes.get(lane);
+            Signal trigger = compiled.inputSignal(CompiledCircuit.ROOT_SCOPE, random.id, 0, 0);
+            if (trigger == null) return fail("random-trigger-unresolved-" + random.id);
+            grouped.computeIfAbsent(trigger.id(), ignored -> new ArrayList<>())
+                    .add(new LaneSpec(lane, chances[lane]));
+        }
+
+        GroupPlan[] groups = new GroupPlan[grouped.size()];
+        int[] ownerGroupByLane = new int[DISPLAY_RANDOM_LANES];
+        Arrays.fill(ownerGroupByLane, -1);
+        int groupOut = 0;
+        int clockGroup = -1;
+        for (Map.Entry<Integer, List<LaneSpec>> entry : grouped.entrySet()) {
+            int triggerSignalId = entry.getKey();
+            int triggerLane;
+            if (triggerSignalId == clock.signalId()) {
+                triggerLane = -1;
+                if (clockGroup >= 0) return fail("multiple-clock-trigger-groups");
+                clockGroup = groupOut;
+            } else {
+                Integer sourceLane = laneBySignal.get(triggerSignalId);
+                if (sourceLane == null) return fail("trigger-outside-clock-random-network-" + triggerSignalId);
+                triggerLane = sourceLane;
+            }
+
+            GroupPlan group = new GroupPlan(
+                    triggerLane,
+                    entry.getValue(),
+                    mix64(System.nanoTime() ^ ((long) triggerSignalId << 32) ^ groupOut)
+            );
+            groups[groupOut] = group;
+            for (int lane : group.globalLanes) {
+                if (ownerGroupByLane[lane] >= 0) return fail("random-owned-by-two-groups");
+                ownerGroupByLane[lane] = groupOut;
+            }
+            groupOut++;
+        }
+        if (clockGroup < 0) return fail("no-clock-triggered-random-group");
+
+        int[] dependentGroupByLane = new int[DISPLAY_RANDOM_LANES];
+        Arrays.fill(dependentGroupByLane, -1);
+        int[] parentGroup = new int[groups.length];
+        Arrays.fill(parentGroup, -1);
+        long triggerConsumerMask = 0L;
+        for (int groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+            int triggerLane = groups[groupIndex].triggerLane;
+            if (triggerLane < 0) continue;
+            if (dependentGroupByLane[triggerLane] >= 0) return fail("duplicate-random-trigger-lane-" + triggerLane);
+            dependentGroupByLane[triggerLane] = groupIndex;
+            triggerConsumerMask |= 1L << triggerLane;
+            int owner = ownerGroupByLane[triggerLane];
+            if (owner < 0) return fail("trigger-owner-missing-" + triggerLane);
+            parentGroup[groupIndex] = owner;
+        }
+        if (hasTriggerCycle(parentGroup)) return fail("random-trigger-cycle");
+
+        long[] laneBoundaryMasks = new long[DISPLAY_RANDOM_LANES];
+        for (int bit = 0; bit < boundaryLane.length; bit++) laneBoundaryMasks[boundaryLane[bit]] |= 1L << bit;
+        long[][] boundaryScatter = scatterTables(laneBoundaryMasks);
+
+        long initialState = 0L;
+        for (int lane = 0; lane < outputSignalIds.length; lane++) {
+            if (simulator.isHighFast(outputSignalIds[lane])) initialState |= 1L << lane;
+        }
+
+        return new CompileResult(new Plan(
+                runtime,
+                deviceIndex,
+                displayWidth,
+                displayHeight,
+                simulator,
+                clock,
+                outputSignalIds,
+                groups,
+                clockGroup,
+                dependentGroupByLane,
+                triggerConsumerMask,
+                boundaryScatter,
+                initialState
+        ), "active");
+    }
+
+    private static CompileResult fail(String reason) {
+        return new CompileResult(null, reason);
+    }
+
+    /** One immutable compiled network plus mutable clock/RNG/state owned by the single simulation worker. */
+    public static final class Plan {
+        private final CircuitProgramRuntime runtime;
+        private final int deviceIndex;
+        private final int displayWidth;
+        private final int displayHeight;
+        private final CircuitSimulator simulator;
+        private final TimingSignalDriver clock;
+        private final int[] outputSignalIds;
+        private final GroupPlan[] groups;
+        private final int clockGroup;
+        private final int[] dependentGroupByLane;
+        private final long triggerConsumerMask;
+        private final long[][] boundaryScatter;
+        private final int[] eventQueue;
+        private long[] scratch = new long[32_768];
+        private long stateMask;
+
+        private Plan(
+                CircuitProgramRuntime runtime,
+                int deviceIndex,
+                int displayWidth,
+                int displayHeight,
+                CircuitSimulator simulator,
+                TimingSignalDriver clock,
+                int[] outputSignalIds,
+                GroupPlan[] groups,
+                int clockGroup,
+                int[] dependentGroupByLane,
+                long triggerConsumerMask,
+                long[][] boundaryScatter,
+                long initialState
+        ) {
+            this.runtime = runtime;
+            this.deviceIndex = deviceIndex;
+            this.displayWidth = displayWidth;
+            this.displayHeight = displayHeight;
+            this.simulator = simulator;
+            this.clock = clock;
+            this.outputSignalIds = outputSignalIds;
+            this.groups = groups;
+            this.clockGroup = clockGroup;
+            this.dependentGroupByLane = dependentGroupByLane;
+            this.triggerConsumerMask = triggerConsumerMask;
+            this.boundaryScatter = boundaryScatter;
+            this.eventQueue = new int[Math.max(1, groups.length)];
+            this.stateMask = initialState;
+        }
+
+        public int randomLaneCount() { return outputSignalIds.length; }
+        public int triggerGroupCount() { return groups.length; }
+        public int deviceIndex() { return deviceIndex; }
+        public int displayWidth() { return displayWidth; }
+        public int displayHeight() { return displayHeight; }
+
+        public boolean matches(CircuitProgramRuntime candidate, int candidateDevice, int width, int height) {
+            return candidate == runtime
+                    && candidateDevice == deviceIndex
+                    && width == displayWidth
+                    && height == displayHeight;
+        }
+
+        /**
+         * Queue elapsed virtual time or consume a bulk edge chunk. Returns -1 only when the owning runtime changed.
+         */
+        public long advance(long elapsedNanos, long edgeBudget, CircuitTimingController.LongBatchConsumer sink) {
+            if (elapsedNanos < 0L || edgeBudget < 0L) throw new IllegalArgumentException("clock arguments must be >= 0");
+            if (!clock.timing().running()) return 0L;
+
+            long emitted = clock.advanceNanosPulseBatch(elapsedNanos, edgeBudget);
+            long risingEdges = clock.lastPulseRisingEdges();
+            if (risingEdges <= 0L) return emitted;
+            if (risingEdges > Integer.MAX_VALUE) throw new IllegalStateException("RANDOM display batch is too large");
+
+            int cycles = (int) risingEdges;
+            ensureScratch(cycles);
+            long state = stateMask;
+            int outputCount = 0;
+
+            for (int cycle = 0; cycle < cycles; cycle++) {
+                int head = 0;
+                int tail = 0;
+                eventQueue[tail++] = clockGroup;
+
+                while (head < tail) {
+                    int groupIndex = eventQueue[head++];
+                    GroupPlan group = groups[groupIndex];
+                    long sampledLocal = group.sample();
+                    long sampledGlobal = group.scatter(sampledLocal);
+                    long nextState = (state & ~group.globalOutputMask) | sampledGlobal;
+                    long changed = state ^ nextState;
+                    state = nextState;
+                    long rising = changed & state & triggerConsumerMask;
+                    while (rising != 0L) {
+                        int lane = Long.numberOfTrailingZeros(rising);
+                        int dependent = dependentGroupByLane[lane];
+                        if (dependent >= 0) {
+                            if (tail >= eventQueue.length) {
+                                throw new IllegalStateException("Acyclic RANDOM trigger graph fired a group twice in one cycle");
+                            }
+                            eventQueue[tail++] = dependent;
+                        }
+                        rising &= rising - 1L;
+                    }
+                }
+
+                long raw = PIXEL_OPCODE | scatter(boundaryScatter, state);
+                int x = (int) ((raw >>> 16) & 0xFFFFL);
+                int y = (int) ((raw >>> 32) & 0xFFFFL);
+                if (x < displayWidth && y < displayHeight) scratch[outputCount++] = raw;
+            }
+
+            stateMask = state;
+            simulator.driveBitVectorFast(outputSignalIds, 0, outputSignalIds.length, state);
+            if (sink != null && outputCount > 0) sink.accept(scratch, outputCount);
+            return emitted;
+        }
+
+        /** Re-arm the ordinary RANDOM edge detector before a fallback from this compiled network. */
+        public void synchronizeFallback() {
+            runtime.timing().synchronizeRandomInputs();
+        }
+
+        private void ensureScratch(int count) {
+            if (count <= scratch.length) return;
+            int next = scratch.length;
+            while (next < count) next = Math.max(next + 1, next << 1);
+            scratch = new long[next];
+        }
+    }
+
+    private static final class GroupPlan {
+        private final int triggerLane;
+        private final int[] globalLanes;
+        private final long globalOutputMask;
+        private final long[][] globalScatter;
+        private final long validLaneMask;
+        private final long chance25Mask;
+        private final long chance50Mask;
+        private final long chance75Mask;
+        private final long chance100Mask;
+        private final long probabilisticMask;
+        private final long[] thresholdBitMasks;
+        private final boolean commonChanceFastPath;
+        private long rng0;
+        private long rng1;
+
+        private GroupPlan(int triggerLane, List<LaneSpec> lanes, long seed) {
+            this.triggerLane = triggerLane;
+            this.globalLanes = new int[lanes.size()];
+            long outputMask = 0L;
+            long chance25 = 0L;
+            long chance50 = 0L;
+            long chance75 = 0L;
+            long chance100 = 0L;
+            long probabilistic = 0L;
+            long[] thresholdBits = new long[8];
+            boolean common = true;
+            long[] localToGlobal = new long[lanes.size()];
+
+            for (int local = 0; local < lanes.size(); local++) {
+                LaneSpec lane = lanes.get(local);
+                globalLanes[local] = lane.globalLane;
+                long globalBit = 1L << lane.globalLane;
+                localToGlobal[local] = globalBit;
+                outputMask |= globalBit;
+
+                long localBit = 1L << local;
+                int chance = lane.chancePercent;
+                switch (chance) {
+                    case 0 -> {
+                    }
+                    case 25 -> {
+                        chance25 |= localBit;
+                        probabilistic |= localBit;
+                    }
+                    case 50 -> {
+                        chance50 |= localBit;
+                        probabilistic |= localBit;
+                    }
+                    case 75 -> {
+                        chance75 |= localBit;
+                        probabilistic |= localBit;
+                    }
+                    case 100 -> chance100 |= localBit;
+                    default -> {
+                        common = false;
+                        probabilistic |= localBit;
+                    }
+                }
+
+                if (chance > 0 && chance < 100) {
+                    int threshold = (chance * 256 + 50) / 100;
+                    for (int bit = 0; bit < 8; bit++) {
+                        if (((threshold >>> bit) & 1) != 0) thresholdBits[bit] |= localBit;
+                    }
+                }
+            }
+
+            this.globalOutputMask = outputMask;
+            this.globalScatter = scatterTables(localToGlobal);
+            this.validLaneMask = lanes.size() >= 64 ? -1L : ((1L << lanes.size()) - 1L);
+            this.chance25Mask = chance25;
+            this.chance50Mask = chance50;
+            this.chance75Mask = chance75;
+            this.chance100Mask = chance100;
+            this.probabilisticMask = probabilistic;
+            this.thresholdBitMasks = thresholdBits;
+            this.commonChanceFastPath = common;
+            this.rng0 = mix64(seed);
+            this.rng1 = mix64(seed + RNG_SEED_GAMMA);
+            if ((rng0 | rng1) == 0L) rng1 = RNG_NONZERO_FALLBACK;
+        }
+
+        private long sample() {
+            if (validLaneMask == 0L) return 0L;
+            if (commonChanceFastPath) {
+                long result = chance100Mask;
+                long active = chance25Mask | chance50Mask | chance75Mask;
+                if (active == 0L) return result & validLaneMask;
+                long r0 = nextLong();
+                result |= r0 & chance50Mask;
+                if ((chance25Mask | chance75Mask) != 0L) {
+                    long r1 = nextLong();
+                    result |= (r0 & r1) & chance25Mask;
+                    result |= (r0 | r1) & chance75Mask;
+                }
+                return result & validLaneMask;
+            }
+
+            long less = 0L;
+            long equal = probabilisticMask;
+            for (int bit = 7; bit >= 0; bit--) {
+                long randomPlane = nextLong();
+                long thresholdPlane = thresholdBitMasks[bit];
+                less |= equal & thresholdPlane & ~randomPlane;
+                equal &= ~(randomPlane ^ thresholdPlane);
+            }
+            return (chance100Mask | less) & validLaneMask;
+        }
+
+        private long scatter(long localMask) {
+            return RandomDisplayNetworkFastPath.scatter(globalScatter, localMask);
+        }
+
+        private long nextLong() {
+            long s0 = rng0;
+            long s1 = rng1;
+            long result = Long.rotateLeft(s0 + s1, 17) + s0;
+            s1 ^= s0;
+            rng0 = Long.rotateLeft(s0, 49) ^ s1 ^ (s1 << 21);
+            rng1 = Long.rotateLeft(s1, 28);
+            return result;
+        }
+    }
+
+    private record LaneSpec(int globalLane, int chancePercent) {}
+
+    private static EditorNode findDisplayNode(CircuitProgramRuntime runtime, CircuitDocument board, int deviceIndex) {
+        String id = runtime.externalDeviceId(deviceIndex);
+        EditorNode found = null;
+        for (EditorNode node : board.externalDeviceNodes()) {
+            if (node.externalDeviceType != ExternalDeviceType.DISPLAY) continue;
+            if (!id.equals(node.externalDeviceId)) continue;
+            if (found != null) return null;
+            found = node;
+        }
+        return found;
+    }
+
+    /** Internal physical command layout: COLOR[15:0], X[31:16], Y[47:32]. */
+    private static int[] physicalDisplayBoundary(CompiledCircuit compiled, EditorNode display) {
+        Signal[] x = compiled.inputSignals(CompiledCircuit.ROOT_SCOPE, display.id, 0);
+        Signal[] y = compiled.inputSignals(CompiledCircuit.ROOT_SCOPE, display.id, 1);
+        Signal[] color = compiled.inputSignals(CompiledCircuit.ROOT_SCOPE, display.id, 2);
+        if (x == null || x.length != 16 || y == null || y.length != 16 || color == null || color.length != 16) return null;
+        int[] result = new int[48];
+        for (int bit = 0; bit < 16; bit++) {
+            result[bit] = color[bit].id();
+            result[16 + bit] = x[bit].id();
+            result[32 + bit] = y[bit].id();
+        }
+        return result;
+    }
+
+    private static boolean hasInputWire(CircuitDocument board, int nodeId, int port) {
+        for (WireConnection wire : board.wires) {
+            if (wire.targetNodeId() == nodeId && wire.targetPort() == port) return true;
+        }
+        return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static TimingSignalDriver clockDriver(CircuitTimingController timing, int rootClockNodeId) {
+        if (CLOCKS_FIELD == null || timing == null) return null;
+        try {
+            Object value = CLOCKS_FIELD.get(timing);
+            if (!(value instanceof Map<?, ?> map) || map.size() != 1) return null;
+            Map.Entry<?, ?> entry = map.entrySet().iterator().next();
+            if (!(entry.getKey() instanceof CircuitTimingController.ClockAddress address)) return null;
+            if (!CompiledCircuit.ROOT_SCOPE.equals(address.scopePath()) || address.nodeId() != rootClockNodeId) return null;
+            return entry.getValue() instanceof TimingSignalDriver driver ? driver : null;
+        } catch (IllegalAccessException ignored) {
+            return null;
+        }
+    }
+
+    private static Field findClocksField() {
+        try {
+            Field field = CircuitTimingController.class.getDeclaredField("clocks");
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    /** A group has at most one parent because it has one trigger signal. Following parent links is enough for cycles. */
+    private static boolean hasTriggerCycle(int[] parentGroup) {
+        int[] marks = new int[parentGroup.length];
+        int generation = 1;
+        for (int start = 0; start < parentGroup.length; start++, generation++) {
+            int current = start;
+            while (current >= 0) {
+                if (marks[current] == generation) return true;
+                if (marks[current] < 0) break;
+                marks[current] = generation;
+                current = parentGroup[current];
+            }
+            current = start;
+            while (current >= 0 && marks[current] == generation) {
+                int next = parentGroup[current];
+                marks[current] = -1;
+                current = next;
+            }
+        }
+        return false;
+    }
+
+    private static long[][] scatterTables(long[] laneMasks) {
+        int chunks = (laneMasks.length + 7) >>> 3;
+        long[][] tables = new long[chunks][256];
+        for (int chunk = 0; chunk < chunks; chunk++) {
+            int laneBase = chunk << 3;
+            long[] table = tables[chunk];
+            for (int value = 1; value < 256; value++) {
+                int lowest = Integer.numberOfTrailingZeros(value);
+                int without = value & (value - 1);
+                int lane = laneBase + lowest;
+                table[value] = table[without] | (lane < laneMasks.length ? laneMasks[lane] : 0L);
+            }
+        }
+        return tables;
+    }
+
+    private static long scatter(long[][] tables, long laneMask) {
+        long result = 0L;
+        for (int chunk = 0; chunk < tables.length; chunk++) {
+            result |= tables[chunk][(int) ((laneMask >>> (chunk * 8)) & 0xFFL)];
+        }
+        return result;
+    }
+
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+}
