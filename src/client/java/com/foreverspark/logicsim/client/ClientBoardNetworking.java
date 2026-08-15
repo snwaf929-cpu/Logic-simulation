@@ -19,7 +19,6 @@ import java.util.List;
 /** Client/server sync for the editable board and its currently connected physical peripherals. */
 public final class ClientBoardNetworking {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
-
     private static BlockPos pendingPos;
     private static String pendingBoardJson;
     private static List<ExternalDeviceDescriptor> pendingDevices = List.of();
@@ -33,22 +32,17 @@ public final class ClientBoardNetworking {
                     pendingBoardJson = payload.boardJson() == null ? "" : payload.boardJson();
                     pendingDevices = parseDevices(payload.devicesJson());
                     ClientEditorBridge.openEditor(payload.pos());
-                })
-        );
+                }));
     }
 
-    public static void requestOpen(BlockPos pos) {
-        if (pos != null) ClientPlayNetworking.send(new RequestCircuitBoardPayload(pos));
-    }
+    public static void requestOpen(BlockPos pos) { if (pos != null) ClientPlayNetworking.send(new RequestCircuitBoardPayload(pos)); }
 
-    /** Returns a board only for the Circuit Block that triggered this editor open. */
     public static CircuitDocument consumePendingBoard(BlockPos pos) {
         if (pos == null || pendingPos == null || !pendingPos.equals(pos)) return null;
         String json = pendingBoardJson;
         pendingBoardJson = null;
-        CircuitDocument board;
         try {
-            board = json == null || json.isBlank() ? new CircuitDocument() : GSON.fromJson(json, CircuitDocument.class);
+            CircuitDocument board = json == null || json.isBlank() ? new CircuitDocument() : GSON.fromJson(json, CircuitDocument.class);
             if (board == null) board = new CircuitDocument();
             board.normalize();
             return board;
@@ -57,8 +51,12 @@ public final class ClientBoardNetworking {
         }
     }
 
+    public static boolean hasPendingDeviceSnapshot(BlockPos pos) {
+        return pos != null && pendingPos != null && pendingPos.equals(pos) && pendingBoardJson == null;
+    }
+
     public static List<ExternalDeviceDescriptor> consumePendingDevices(BlockPos pos) {
-        if (pos == null || pendingPos == null || !pendingPos.equals(pos)) return List.of();
+        if (!hasPendingDeviceSnapshot(pos)) return List.of();
         List<ExternalDeviceDescriptor> result = pendingDevices;
         pendingDevices = List.of();
         pendingPos = null;
