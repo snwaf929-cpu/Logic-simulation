@@ -26,16 +26,16 @@ public abstract class ClientChipLibraryBuiltinMixin {
 
     @Inject(method = "exists", at = @At("HEAD"), cancellable = true)
     private void logic$builtinExists(String name, CallbackInfoReturnable<Boolean> cir) {
-        if (BuiltinDevices.isDisplay(name)) cir.setReturnValue(true);
+        if (BuiltinDevices.isBuiltin(name)) cir.setReturnValue(true);
     }
 
     @Inject(method = "chipColor", at = @At("HEAD"), cancellable = true)
     private void logic$builtinColor(String name, CallbackInfoReturnable<Integer> cir) {
-        if (BuiltinDevices.isDisplay(name)) cir.setReturnValue(BuiltinDevices.DISPLAY_COLOR);
+        if (BuiltinDevices.isBuiltin(name)) cir.setReturnValue(BuiltinDevices.color(name));
     }
 
     @Inject(method = "chipVisual", at = @At("HEAD"), cancellable = true)
     private void logic$builtinVisual(String name, CallbackInfoReturnable<ChipVisualSettings> cir) {
-        if (BuiltinDevices.isDisplay(name)) cir.setReturnValue(BuiltinDevices.displayVisual());
+        if (BuiltinDevices.isBuiltin(name)) cir.setReturnValue(BuiltinDevices.visual(name));
     }
 }
