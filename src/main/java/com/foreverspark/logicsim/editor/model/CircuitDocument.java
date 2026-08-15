@@ -97,7 +97,9 @@ public final class CircuitDocument {
             else if (node.slices == null) node.slices = new ArrayList<>();
 
             if (node.kind == NodeKind.NET_LABEL) {
-                node.label = node.label == null || node.label.isBlank() ? "NET" : node.label.trim();
+                // Preserve every explicit saved name, including legacy "NET", but never normalize
+                // a blank label into the same shared net as every other blank label.
+                node.label = node.label == null || node.label.isBlank() ? "NET" + node.id : node.label.trim();
             }
 
             if (node.kind == NodeKind.INPUT && node.width < 64) {
