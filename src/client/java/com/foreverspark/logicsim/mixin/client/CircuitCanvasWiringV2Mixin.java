@@ -105,7 +105,7 @@ public abstract class CircuitCanvasWiringV2Mixin {
 
     @Unique
     private void logic$beginRoute(LogicPinHit pin) {
-        logic$checkpoint("Create routed wire");
+        logic$wiringHistoryCheckpoint("Create routed wire");
         logic$wireAnchor = null;
         logic$route = new LogicRoute(pin, new ArrayList<>());
         selectedWire = null;
@@ -118,8 +118,8 @@ public abstract class CircuitCanvasWiringV2Mixin {
     private void logic$advanceOrFinish(LogicPinHit pin) {
         LogicPinHit start = logic$route.start();
         if (start.input() == pin.input()) {
-            logic$commitHistory();
-            logic$checkpoint("Create routed wire");
+            logic$wiringHistoryCommit();
+            logic$wiringHistoryCheckpoint("Create routed wire");
             logic$route = new LogicRoute(pin, new ArrayList<>());
             status.accept("WIRE source changed to " + logic$pinLabel(pin));
             return;
@@ -142,7 +142,7 @@ public abstract class CircuitCanvasWiringV2Mixin {
         wireEditMode = false;
         logic$route = null;
         recompile();
-        logic$commitHistory();
+        logic$wiringHistoryCommit();
         status.accept("Connected " + output.spec().width() + "-bit " + (output.spec().width() == 1 ? "wire" : "bus")
                 + (corners.isEmpty() ? "" : " with " + corners.size() + " permanent route corner" + (corners.size() == 1 ? "" : "s")));
     }
@@ -178,14 +178,14 @@ public abstract class CircuitCanvasWiringV2Mixin {
             logic$wireAnchor = null;
             return;
         }
-        logic$checkpoint("Reroute wire");
+        logic$wiringHistoryCheckpoint("Reroute wire");
         double x = EditorGrid.snap(worldX(mouseX));
         double y = EditorGrid.snap(worldY(mouseY));
         int insertion = Math.max(0, Math.min(state.wire().routePoints().size(), state.segmentIndex()));
         state.wire().routePoints().add(insertion, new RoutePoint(state.anchor().x(), state.anchor().y()));
         state.wire().routePoints().add(insertion + 1, new RoutePoint(x, y));
         logic$wireAnchor = null;
-        logic$commitHistory();
+        logic$wiringHistoryCommit();
         status.accept("Wire detour inserted — click the trace again anywhere to add another anchor");
     }
 
@@ -194,7 +194,7 @@ public abstract class CircuitCanvasWiringV2Mixin {
         if (logic$route == null && logic$wireAnchor == null) return;
         logic$route = null;
         logic$wireAnchor = null;
-        logic$commitHistory();
+        logic$wiringHistoryCommit();
         status.accept("Cancelled wire routing");
         cir.setReturnValue(true);
     }
@@ -345,12 +345,13 @@ public abstract class CircuitCanvasWiringV2Mixin {
         return hit.node().displayName() + "." + port;
     }
 
-    @Unique private void logic$checkpoint(String label) {
+    // Avoid reusing the public EditorHistoryAccess method signatures on CircuitCanvasWidget.
+    @Unique private void logic$wiringHistoryCheckpoint(String label) {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$checkpoint(label);
     }
 
-    @Unique private void logic$commitHistory() {
+    @Unique private void logic$wiringHistoryCommit() {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$commitHistory();
     }
