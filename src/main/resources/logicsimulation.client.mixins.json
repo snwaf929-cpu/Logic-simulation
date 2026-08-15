@@ -48,6 +48,8 @@
     "CircuitEditorWorkspaceMixin",
     "ComponentLibraryExchangeMixin",
     "ComponentLibraryDevicesMixin",
+    "ComponentLibraryChipDeleteMixin",
+    "ClientChipLibraryDeletionMixin",
     "CircuitBlockRealtimeDisplayMixin",
     "DisplayRealtimePersistenceMixin",
     "CanvasAccess"
