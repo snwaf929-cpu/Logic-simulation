@@ -1,8 +1,9 @@
 package com.foreverspark.logicsim.client.render;
 
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import net.minecraft.core.Direction;
 
-/** Regression checks for display face orientation, full-face geometry, and emissive textured rendering. */
+/** Regression checks for display face orientation, full-face geometry, emissive rendering, and native-64 batching. */
 public final class DisplayRendererSelfTest {
     private DisplayRendererSelfTest() {}
 
@@ -23,7 +24,60 @@ public final class DisplayRendererSelfTest {
 
         double z = DisplayBlockEntityRenderer.screenFaceZ();
         check(z > 0.0 && z < 0.75 / 16.0, "texture plane sits just outside the local NORTH model screen face");
-        System.out.println("Display renderer face/full-surface/GPU-texture self-test: PASS");
+        checkNative64Batch();
+        System.out.println("Display renderer face/full-surface/GPU-texture/native64-batch self-test: PASS");
+    }
+
+    private static void checkNative64Batch() {
+        int logicalWidth = 128;
+        int logicalHeight = 128;
+        int backingWidth = 128;
+        int columns = 2;
+        char[] pixels = new char[backingWidth * logicalHeight];
+        long[] tileRevisions = new long[4];
+        long[] dirtyWords = new long[1];
+        RealtimeDisplayNative64FastPath.State state = new RealtimeDisplayNative64FastPath.State();
+
+        long[] dense = new long[64];
+        for (int index = 0; index < dense.length; index++) {
+            int x = (index * 37) & 127;
+            int y = (index * 53) & 127;
+            dense[index] = DisplayCommandCodec.pixel(x, y, index + 1);
+        }
+
+        state.reset(0, 0L);
+        RealtimeDisplayNative64FastPath.apply(
+                dense, dense.length, logicalWidth, logicalHeight, backingWidth, columns,
+                pixels, tileRevisions, dirtyWords, state
+        );
+        check(state.changed(), "dense native-64 batch must change framebuffer");
+        check(state.revision() == 1L, "dense native-64 batch must publish one revision");
+        check(state.nonZeroPixels() == 64, "dense native-64 non-zero accounting");
+        check(state.wholeWallInvalidated(), "dense native-64 batch should use one whole-wall metadata invalidation");
+        for (long tileRevision : tileRevisions) {
+            check(tileRevision == 1L, "dense native-64 batch must publish every tile at the same revision");
+        }
+
+        state.reset(state.nonZeroPixels(), state.revision());
+        RealtimeDisplayNative64FastPath.apply(
+                dense, dense.length, logicalWidth, logicalHeight, backingWidth, columns,
+                pixels, tileRevisions, dirtyWords, state
+        );
+        check(!state.changed(), "identical native-64 writes must not republish");
+        check(state.revision() == 1L, "unchanged native-64 batch must preserve revision");
+
+        long[] one = {DisplayCommandCodec.pixel(1, 1, 0xFFFF)};
+        state.reset(state.nonZeroPixels(), state.revision());
+        RealtimeDisplayNative64FastPath.apply(
+                one, one.length, logicalWidth, logicalHeight, backingWidth, columns,
+                pixels, tileRevisions, dirtyWords, state
+        );
+        check(state.changed(), "small native-64 batch must change framebuffer");
+        check(state.revision() == 2L, "small native-64 batch must publish once");
+        check(!state.wholeWallInvalidated(), "small native-64 batch should keep precise dirty metadata");
+        check(tileRevisions[0] == 2L, "small native-64 batch must dirty touched tile");
+        check(tileRevisions[1] == 1L && tileRevisions[2] == 1L && tileRevisions[3] == 1L,
+                "small native-64 batch must not dirty unrelated tiles");
     }
 
     private static void checkFaces(Direction expectedFacing, float expectedYnYaw, float expectedSignedDegrees) {
