@@ -70,7 +70,8 @@ public final class EditorV2Phase4Checks {
     }
 
     private static void interfaceValidationChecks() {
-        BoardTemplateDefinition duplicateId = passThroughTemplate("BAD_ID", "same", "same", 1);
+        BoardTemplateDefinition duplicateId = passThroughTemplate("BAD_ID", "identity-a", "identity-b", 1);
+        socketByDirection(duplicateId, PortDirection.OUTPUT).interfaceId = "identity-a";
         boolean identityRejected = false;
         try {
             duplicateId.normalize();
@@ -150,7 +151,7 @@ public final class EditorV2Phase4Checks {
         check(!widthPreview.compatible() && widthPreview.errors().stream().anyMatch(text -> text.contains("changed contract")),
                 "same stable interface id with changed width is rejected rather than silently remapped");
 
-        BoardTemplateDefinition missingOutput = singleSocketTemplate("MISSING", PortDirection.INPUT, "IN", "same-in", 8);
+        BoardTemplateDefinition missingOutput = singleSocketTemplate("MISSING", PortDirection.INPUT, "DATA_IN", "same-in", 8);
         EditorNode externalInput = board.addNode(NodeKind.INPUT, -100, 0);
         externalInput.width = 8;
         EditorNode externalOutput = board.addNode(NodeKind.OUTPUT, 250, 0);
@@ -210,20 +211,9 @@ public final class EditorV2Phase4Checks {
         CircuitDocument board = new CircuitDocument();
         EditorNode external = board.addNode(NodeKind.INPUT, 0, 0);
         var inserted = BoardTemplateEngine.insert(board, template, 100, 0);
-        EditorNode internalTarget = null;
-        for (int nodeId : inserted.nodeIds()) {
-            EditorNode candidate = board.node(nodeId);
-            if (!candidate.isBoardSocket()) {
-                internalTarget = candidate;
-                break;
-            }
-        }
-        if (internalTarget == null) {
-            // Pass-through template has only sockets. Add a normal BUS member to construct an invalid bypass.
-            internalTarget = board.addNode(NodeKind.BUS, 150, 60);
-            internalTarget.templateInstanceId = inserted.instanceId();
-            internalTarget.templateName = template.name;
-        }
+        EditorNode internalTarget = board.addNode(NodeKind.BUS, 150, 60);
+        internalTarget.templateInstanceId = inserted.instanceId();
+        internalTarget.templateName = template.name;
         board.connect(external.id, 0, internalTarget.id, 0);
         BoardTemplateReplacementPreview preview = BoardTemplateEngine.previewReplacement(board, inserted.instanceId(), template);
         check(!preview.compatible() && preview.errors().stream().anyMatch(text -> text.contains("bypasses sockets")),
