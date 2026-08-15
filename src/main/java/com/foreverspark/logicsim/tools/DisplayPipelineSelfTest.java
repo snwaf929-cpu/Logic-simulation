@@ -21,13 +21,13 @@ public final class DisplayPipelineSelfTest {
     private DisplayPipelineSelfTest() {}
 
     public static void main(String[] args) {
-        testSplitDisplayPinsCompile();
+        testSplitDisplayPinsCompileAndBind();
         testPhysicalData64CodecStillWorks();
         testPhysicalInputDefaultsPersist();
         System.out.println("Display V2.1A split-pin + DATA64 physical pipeline self-test: PASS");
     }
 
-    private static void testSplitDisplayPinsCompile() {
+    private static void testSplitDisplayPinsCompileAndBind() {
         List<PortSpec> ports = ExternalDeviceType.DISPLAY.inputs();
         check(ports.size() == 5, "DISPLAY must expose exactly five schematic inputs");
         checkPort(ports.get(0), "X", 16);
@@ -65,6 +65,20 @@ public final class DisplayPipelineSelfTest {
         check(compiled.inputUnsigned(display.id, 2) == 0xFFFFL, "DISPLAY COLOR[16] receives RGB565");
         check(compiled.inputUnsigned(display.id, 3) == 1L, "DISPLAY WRITE[1] receives the write strobe");
         check(compiled.inputUnsigned(display.id, 4) == 0L, "DISPLAY RESET[1] receives the reset strobe");
+
+        CircuitProgramRuntime runtime = new CircuitProgramRuntime(new CircuitProgram(new ChipDefinition("BOARD", board), Map.of()));
+        check(runtime.externalDeviceCount() == 1, "runtime indexes one placed physical DISPLAY binding");
+        check(runtime.externalDeviceType(0) == ExternalDeviceType.DISPLAY, "runtime retains DISPLAY type");
+        check(runtime.externalDeviceId(0).equals("display-pipeline-test"), "runtime retains stable physical DISPLAY id");
+        check(runtime.externalDeviceInputCount(0) == 5, "runtime exposes the five DISPLAY sink pins");
+        check(runtime.externalDeviceInputValue(0, 0) == 1L, "runtime boundary reads X[16]");
+        check(runtime.externalDeviceInputValue(0, 1) == 1L, "runtime boundary reads Y[16]");
+        check(runtime.externalDeviceInputValue(0, 2) == 0xFFFFL, "runtime boundary reads COLOR[16]");
+        check(runtime.externalDeviceInputValue(0, 3) == 1L, "runtime boundary reads WRITE[1]");
+        check(runtime.externalDeviceInputValue(0, 4) == 0L, "runtime boundary reads RESET[1]");
+        long initialDirty = runtime.consumeDirtyOutputMask();
+        check(runtime.externalDeviceInputsDirty(initialDirty), "initial DEVICE snapshot requests host-boundary capture");
+        check(!runtime.externalDeviceInputsDirty(runtime.consumeDirtyOutputMask()), "unchanged DEVICE pins do not force repeated MHz callbacks");
     }
 
     private static void testPhysicalData64CodecStillWorks() {
