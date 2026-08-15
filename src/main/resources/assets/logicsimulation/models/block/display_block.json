@@ -6,7 +6,24 @@
     "screen": "minecraft:block/black_concrete"
   },
   "elements": [
-    {"from":[0,0,1],"to":[16,16,16],"faces":{"down":{"texture":"#case"},"up":{"texture":"#case"},"north":{"texture":"#case"},"south":{"texture":"#case"},"west":{"texture":"#case"},"east":{"texture":"#case"}}},
-    {"from":[0,0,0.75],"to":[16,16,1],"faces":{"north":{"texture":"#screen"},"south":{"texture":"#screen"},"down":{"texture":"#screen"},"up":{"texture":"#screen"},"west":{"texture":"#screen"},"east":{"texture":"#screen"}}}
+    {
+      "from": [0, 0, 1],
+      "to": [16, 16, 16],
+      "faces": {
+        "down": {"texture": "#case"},
+        "up": {"texture": "#case"},
+        "north": {"texture": "#case"},
+        "south": {"texture": "#case"},
+        "west": {"texture": "#case"},
+        "east": {"texture": "#case"}
+      }
+    },
+    {
+      "from": [0, 0, 0.75],
+      "to": [16, 16, 1],
+      "faces": {
+        "north": {"texture": "#screen"}
+      }
+    }
   ]
 }
