@@ -30,14 +30,16 @@ import java.util.Map;
  *
  * <p>The hot loop deliberately stays in one packed 48-bit RANDOM state. Group probability masks are compiled directly
  * into those global lane coordinates, so firing a group no longer needs a local-to-global scatter. For power-of-two
- * displays, X/Y high bits are also compiled back into RANDOM-lane space. Most random coordinates can therefore be
- * rejected with one AND before the comparatively expensive 48-bit DISPLAY packing step.</p>
+ * displays, X/Y high bits are compiled back into RANDOM-lane space so out-of-range coordinates can be rejected before
+ * DISPLAY packing. If COLOR/X/Y each occupy one contiguous 16-lane bank, command packing becomes three shifts/masks;
+ * arbitrary editor wiring keeps the compact lookup-table fallback.</p>
  */
 public final class RandomDisplayNetworkFastPath {
     private static final long RNG_NONZERO_FALLBACK = 0x9E3779B97F4A7C15L;
     private static final long RNG_SEED_GAMMA = 0x9E3779B97F4A7C15L;
     private static final long PIXEL_OPCODE = (long) DisplayCommandCodec.OP_PIXEL << 48;
     private static final long DISPLAY_DATA_MASK = (1L << 48) - 1L;
+    private static final long FIELD_MASK = 0xFFFFL;
     private static final int DISPLAY_RANDOM_LANES = 48;
     private static final int TRIGGER_CLOCK = -1;
     private static final int TRIGGER_EXTERNAL = -2;
@@ -115,6 +117,14 @@ public final class RandomDisplayNetworkFastPath {
         for (int lane = 0; lane < represented.length; lane++) {
             if (!represented[lane]) return fail("random-not-on-display-" + lane);
         }
+
+        int colorSourceShift = contiguousFieldShift(boundaryLane, 0);
+        int xSourceShift = contiguousFieldShift(boundaryLane, 16);
+        int ySourceShift = contiguousFieldShift(boundaryLane, 32);
+        boolean boundaryFieldShift = !boundaryIdentity
+                && colorSourceShift >= 0
+                && xSourceShift >= 0
+                && ySourceShift >= 0;
 
         LinkedHashMap<Integer, List<LaneSpec>> grouped = new LinkedHashMap<>();
         Map<Integer, Signal> triggerSignals = new HashMap<>();
@@ -207,7 +217,7 @@ public final class RandomDisplayNetworkFastPath {
         for (int bit = 0; bit < boundaryLane.length; bit++) {
             laneBoundaryMasks[boundaryLane[bit]] |= 1L << bit;
         }
-        long[][] boundaryScatter = boundaryIdentity ? null : scatterTables(laneBoundaryMasks);
+        long[][] boundaryScatter = boundaryIdentity || boundaryFieldShift ? null : scatterTables(laneBoundaryMasks);
 
         boolean exactCoordinatePrefilter = exactCoordinateLimit(displayWidth) && exactCoordinateLimit(displayHeight);
         long coordinateRejectLaneMask = exactCoordinatePrefilter
@@ -233,6 +243,10 @@ public final class RandomDisplayNetworkFastPath {
                 dependentGroupByLane,
                 boundaryScatter,
                 boundaryIdentity,
+                boundaryFieldShift,
+                colorSourceShift,
+                xSourceShift,
+                ySourceShift,
                 exactCoordinatePrefilter,
                 coordinateRejectLaneMask,
                 externalGroupIndices,
@@ -259,6 +273,10 @@ public final class RandomDisplayNetworkFastPath {
         private final int[] dependentGroupByLane;
         private final long[][] boundaryScatter;
         private final boolean boundaryIdentity;
+        private final boolean boundaryFieldShift;
+        private final int colorSourceShift;
+        private final int xSourceShift;
+        private final int ySourceShift;
         private final boolean exactCoordinatePrefilter;
         private final long coordinateRejectLaneMask;
         private final int[] eventQueue;
@@ -282,6 +300,10 @@ public final class RandomDisplayNetworkFastPath {
                 int[] dependentGroupByLane,
                 long[][] boundaryScatter,
                 boolean boundaryIdentity,
+                boolean boundaryFieldShift,
+                int colorSourceShift,
+                int xSourceShift,
+                int ySourceShift,
                 boolean exactCoordinatePrefilter,
                 long coordinateRejectLaneMask,
                 int[] externalGroupIndices,
@@ -300,6 +322,10 @@ public final class RandomDisplayNetworkFastPath {
             this.dependentGroupByLane = dependentGroupByLane;
             this.boundaryScatter = boundaryScatter;
             this.boundaryIdentity = boundaryIdentity;
+            this.boundaryFieldShift = boundaryFieldShift;
+            this.colorSourceShift = colorSourceShift;
+            this.xSourceShift = xSourceShift;
+            this.ySourceShift = ySourceShift;
             this.exactCoordinatePrefilter = exactCoordinatePrefilter;
             this.coordinateRejectLaneMask = coordinateRejectLaneMask;
             this.eventQueue = new int[Math.max(1, groups.length)];
@@ -322,6 +348,11 @@ public final class RandomDisplayNetworkFastPath {
         public boolean coordinatePrefilterEnabled() { return exactCoordinatePrefilter && coordinateRejectLaneMask != 0L; }
         public int coordinatePrefilterLaneCount() { return Long.bitCount(coordinateRejectLaneMask); }
         public boolean boundaryIdentity() { return boundaryIdentity; }
+        public String boundaryPackMode() {
+            if (boundaryIdentity) return "identity";
+            if (boundaryFieldShift) return "field-shift";
+            return "table";
+        }
 
         public boolean matches(CircuitProgramRuntime candidate, int candidateDevice, int width, int height) {
             return candidate == runtime
@@ -367,17 +398,24 @@ public final class RandomDisplayNetworkFastPath {
             int outputCount = 0;
 
             if (exactCoordinatePrefilter) {
-                for (int cycle = 0; cycle < cycles; cycle++) {
-                    state = runCascade(state, clockGroup);
-                    if ((state & coordinateRejectLaneMask) != 0L) continue;
-                    scratch[outputCount++] = PIXEL_OPCODE | packBoundary(state);
+                if (coordinateRejectLaneMask == 0L) {
+                    for (int cycle = 0; cycle < cycles; cycle++) {
+                        state = runCascade(state, clockGroup);
+                        scratch[outputCount++] = PIXEL_OPCODE | packBoundary(state);
+                    }
+                } else {
+                    for (int cycle = 0; cycle < cycles; cycle++) {
+                        state = runCascade(state, clockGroup);
+                        if ((state & coordinateRejectLaneMask) != 0L) continue;
+                        scratch[outputCount++] = PIXEL_OPCODE | packBoundary(state);
+                    }
                 }
             } else {
                 for (int cycle = 0; cycle < cycles; cycle++) {
                     state = runCascade(state, clockGroup);
                     long raw = PIXEL_OPCODE | packBoundary(state);
-                    int x = (int) ((raw >>> 16) & 0xFFFFL);
-                    int y = (int) ((raw >>> 32) & 0xFFFFL);
+                    int x = (int) ((raw >>> 16) & FIELD_MASK);
+                    int y = (int) ((raw >>> 32) & FIELD_MASK);
                     if (x < displayWidth && y < displayHeight) scratch[outputCount++] = raw;
                 }
             }
@@ -417,7 +455,14 @@ public final class RandomDisplayNetworkFastPath {
         }
 
         private long packBoundary(long state) {
-            return boundaryIdentity ? (state & DISPLAY_DATA_MASK) : scatter(boundaryScatter, state);
+            if (boundaryIdentity) return state & DISPLAY_DATA_MASK;
+            if (boundaryFieldShift) {
+                long color = (state >>> colorSourceShift) & FIELD_MASK;
+                long x = (state >>> xSourceShift) & FIELD_MASK;
+                long y = (state >>> ySourceShift) & FIELD_MASK;
+                return color | (x << 16) | (y << 32);
+            }
+            return scatter(boundaryScatter, state);
         }
 
         private void commitState(long state) {
@@ -628,6 +673,16 @@ public final class RandomDisplayNetworkFastPath {
             result[32 + bit] = y[bit].id();
         }
         return result;
+    }
+
+    /** Returns the first global RANDOM lane when one boundary field is an ascending contiguous 16-lane bank. */
+    private static int contiguousFieldShift(int[] boundaryLane, int boundaryOffset) {
+        int shift = boundaryLane[boundaryOffset];
+        if (shift < 0 || shift > DISPLAY_RANDOM_LANES - 16) return -1;
+        for (int bit = 1; bit < 16; bit++) {
+            if (boundaryLane[boundaryOffset + bit] != shift + bit) return -1;
+        }
+        return shift;
     }
 
     /** True when a 16-bit unsigned coordinate can be rejected exactly by testing only its high bits. */
