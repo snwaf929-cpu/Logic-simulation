@@ -155,7 +155,7 @@ public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibr
             return;
         }
 
-        boolean armed = ((ExternalDevicePlacementAccess) canvas).logic$beginExternalDevicePlacement(hit.device);
+        boolean armed = ((ExternalDevicePlacementAccess) (Object) canvas).logic$beginExternalDevicePlacement(hit.device);
         if (armed) {
             status.accept("Place " + hit.device.type().label() + " — click the BOARD canvas; right-click cancels");
         } else {
