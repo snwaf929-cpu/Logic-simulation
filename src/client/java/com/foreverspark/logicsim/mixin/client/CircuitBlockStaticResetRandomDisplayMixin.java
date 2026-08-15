@@ -97,6 +97,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                                 + ":lanes=" + existing.randomLaneCount()
                                 + ":external=" + existing.externalTriggerGroupCount()
                                 + ":prefilter=" + existing.coordinatePrefilterLaneCount()
+                                + ":pack=" + existing.boundaryPackMode()
                                 + ":resetSignal=" + existingTracker.signalId());
                 return;
             }
@@ -126,6 +127,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                             + ":lanes=" + result.plan().randomLaneCount()
                             + ":external=" + result.plan().externalTriggerGroupCount()
                             + ":prefilter=" + result.plan().coordinatePrefilterLaneCount()
+                            + ":pack=" + result.plan().boundaryPackMode()
                             + ":resetSignal=" + resetSignalId);
             return;
         }
@@ -198,7 +200,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
             RealtimeDisplaySurface.Surface surface = logic$resetAwareSurface;
             DisplayResetEdgeTracker tracker = logic$resetTracker;
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BULK DEVICE NETWORK RESET] circuit={} active=true reset=dynamic-edge resetSignalId={} deviceIndex={} triggerGroups={} externalTriggerGroups={} randomLanes={} mode=compiled-random-trigger-dag-hotloop-v2 maxEdgeChunk={} logical={}x{} coordinatePrefilter={} coordinateRejectLanes={} boundaryIdentity={} batchPublication=true",
+                    "[CLOCK BULK DEVICE NETWORK RESET] circuit={} active=true reset=dynamic-edge resetSignalId={} deviceIndex={} triggerGroups={} externalTriggerGroups={} randomLanes={} mode=compiled-random-trigger-dag-hotloop-v2 maxEdgeChunk={} logical={}x{} coordinatePrefilter={} coordinateRejectLanes={} boundaryPack={} batchPublication=true",
                     self.getBlockPos(),
                     tracker == null ? -1 : tracker.signalId(),
                     logic$resetAwareDeviceIndex,
@@ -210,7 +212,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                     surface == null ? 0 : surface.logicalHeight(),
                     plan != null && plan.coordinatePrefilterEnabled(),
                     plan == null ? 0 : plan.coordinatePrefilterLaneCount(),
-                    plan != null && plan.boundaryIdentity()
+                    plan == null ? "none" : plan.boundaryPackMode()
             );
         } else {
             String reason = signature.startsWith("inactive:") ? signature.substring("inactive:".length()) : signature;
