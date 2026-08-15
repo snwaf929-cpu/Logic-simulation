@@ -1,15 +1,19 @@
 package com.foreverspark.logicsim.mixin.client;
 
+import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.v2.EditorDocumentSnapshot;
 import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
 import com.foreverspark.logicsim.client.screen.v2.EditorHistory;
 import com.foreverspark.logicsim.client.screen.v2.EditorHistoryAccess;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinGeometry;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinSelectionAccess;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.model.WireConnection;
+import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.input.MouseButtonEvent;
@@ -25,24 +29,21 @@ import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
-/**
- * Interaction foundation for Logic Editor V2.
- *
- * <p>This is deliberately one canvas-level interaction mixin rather than separate click, marquee,
- * pin-selection, z-order and history mixins. Pure geometry/history state lives in helper classes.
- * NAND semantics and compilation are untouched.</p>
- */
+/** Central selection, pin geometry, batch wiring, floating-warning, and history foundation for Editor V2. */
 @Mixin(value = CircuitCanvasWidget.class, priority = 2000)
-public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess {
+public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess, EditorPinSelectionAccess {
     @Shadow private CircuitDocument document;
     @Shadow private CircuitDocument runtimeRootDocument;
     @Shadow private String runtimeScopePath;
+    @Shadow @Final private ClientChipLibrary chips;
     @Shadow @Final private LinkedHashSet<Integer> selectedNodeIds;
     @Shadow private Integer selectedNodeId;
     @Shadow private WireConnection selectedWire;
@@ -81,6 +82,7 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
 
     @Unique private final EditorHistory logic$history = new EditorHistory();
     @Unique private final LinkedHashSet<LogicPinKey> logic$selectedPins = new LinkedHashSet<>();
+    @Unique private final LinkedHashSet<LogicPinKey> logic$errorPins = new LinkedHashSet<>();
     @Unique private LogicSelectionMode logic$selectionMode = LogicSelectionMode.COMPONENT;
     @Unique private LogicSelectionMode logic$marqueeMode = LogicSelectionMode.COMPONENT;
     @Unique private boolean logic$marqueeAdditive;
@@ -92,12 +94,11 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
         if (event.button() != 0) return;
 
         logic$history.checkpoint("Canvas edit", document);
+        logic$errorPins.clear();
         boolean alt = (event.modifiers() & GLFW.GLFW_MOD_ALT) != 0;
         boolean shift = (event.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0;
         LogicPinHit exactPin = logic$pinAt(event.x(), event.y(), true);
 
-        // The old canvas used an invisible 8/9 px circular halo. V2 blocks that halo so the
-        // rendered connector and the interactive connector are the same target.
         if (!alt && exactPin == null && logic$pinAt(event.x(), event.y(), false) != null) {
             ci.cancel();
             return;
@@ -112,8 +113,7 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
                 logic$selectedPins.add(exactPin.key());
                 selectedWire = null;
                 wireEditMode = false;
-                status.accept(logic$selectedPins.size() + " pin" + (logic$selectedPins.size() == 1 ? "" : "s")
-                        + " selected — Alt+Shift adds more pins");
+                status.accept(logic$pinSelectionStatus());
             } else {
                 beginMarquee(event.x(), event.y());
             }
@@ -124,9 +124,6 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
         logic$enterComponentMode();
         logic$marqueeMode = LogicSelectionMode.COMPONENT;
         logic$marqueeAdditive = shift;
-
-        // A real connector keeps its normal wiring behavior. Shift only changes component
-        // selection when the pointer is on a component body rather than on a terminal.
         if (exactPin != null) return;
 
         if (shift) {
@@ -141,8 +138,7 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
                 nodeActuallyMoved = false;
                 marqueePending = false;
                 marqueeActive = false;
-                status.accept(selectedNodeIds.size() + " component" + (selectedNodeIds.size() == 1 ? "" : "s")
-                        + " selected");
+                status.accept(selectedNodeIds.size() + " component" + (selectedNodeIds.size() == 1 ? "" : "s") + " selected");
                 ci.cancel();
                 return;
             }
@@ -155,10 +151,7 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
 
     @Inject(method = "onRelease", at = @At("HEAD"))
     private void logic$finishZeroAreaMarquee(MouseButtonEvent event, CallbackInfo ci) {
-        if (event.button() == 0 && marqueePending && !marqueeActive) {
-            // Route an empty click through the same exclusive/additive selection code as a drag.
-            marqueeActive = true;
-        }
+        if (event.button() == 0 && marqueePending && !marqueeActive) marqueeActive = true;
     }
 
     @Inject(method = "onRelease", at = @At("RETURN"))
@@ -185,15 +178,12 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
             selectedNodeId = null;
             selectedWire = null;
             logic$selectionMode = LogicSelectionMode.PIN;
-            status.accept(logic$selectedPins.isEmpty() ? "No pins selected"
-                    : logic$selectedPins.size() + " pin" + (logic$selectedPins.size() == 1 ? "" : "s") + " selected");
+            status.accept(logic$selectedPins.isEmpty() ? "No pins selected" : logic$pinSelectionStatus());
             ci.cancel();
             return;
         }
 
-        LinkedHashSet<Integer> hits = logic$marqueeAdditive
-                ? new LinkedHashSet<>(selectedNodeIds)
-                : new LinkedHashSet<>();
+        LinkedHashSet<Integer> hits = logic$marqueeAdditive ? new LinkedHashSet<>(selectedNodeIds) : new LinkedHashSet<>();
         int newlyContained = 0;
         for (EditorNode node : document.nodes) {
             double nx = screenX(node.x);
@@ -216,91 +206,172 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
     private void logic$selectAllUsesComponentMode(CallbackInfo ci) {
         logic$enterComponentMode();
         logic$selectedPins.clear();
+        logic$errorPins.clear();
+    }
+
+    /* ----------------------------- batch pin connection ----------------------------- */
+
+    @Override
+    public boolean logic$hasPinSelection() {
+        return logic$selectionMode == LogicSelectionMode.PIN && !logic$selectedPins.isEmpty();
+    }
+
+    @Override
+    public boolean logic$batchConnectSelectedPins() {
+        if (!logic$hasPinSelection()) {
+            status.accept("Alt-select output and input pins first");
+            return false;
+        }
+        logic$errorPins.clear();
+        List<LogicPinHit> outputs = new ArrayList<>();
+        List<LogicPinHit> inputs = new ArrayList<>();
+        for (LogicPinKey key : logic$selectedPins) {
+            LogicPinHit hit = logic$resolvePin(key);
+            if (hit == null) continue;
+            (key.input() ? inputs : outputs).add(hit);
+        }
+        Comparator<LogicPinHit> topToBottom = Comparator
+                .comparingDouble((LogicPinHit hit) -> hit.point().y())
+                .thenComparingDouble(hit -> hit.point().x())
+                .thenComparingInt(hit -> hit.key().nodeId())
+                .thenComparingInt(hit -> hit.key().port());
+        outputs.sort(topToBottom);
+        inputs.sort(topToBottom);
+
+        if (outputs.isEmpty() || inputs.isEmpty()) {
+            logic$errorPins.addAll(logic$selectedPins);
+            status.accept("BATCH CONNECT: select at least one OUTPUT pin and one INPUT pin");
+            return false;
+        }
+        if (outputs.size() != inputs.size()) {
+            logic$errorPins.addAll(logic$selectedPins);
+            status.accept("BATCH CONNECT: pin count mismatch — " + outputs.size() + " outputs vs " + inputs.size() + " inputs");
+            return false;
+        }
+
+        CircuitDocument candidate = EditorDocumentSnapshot.copy(document);
+        for (int i = 0; i < outputs.size(); i++) {
+            LogicPinHit out = outputs.get(i);
+            LogicPinHit in = inputs.get(i);
+            if (out.spec().width() != in.spec().width()) {
+                logic$errorPins.add(out.key());
+                logic$errorPins.add(in.key());
+                status.accept(logic$pairLabel(out, in) + " — WIDTH MISMATCH");
+                return false;
+            }
+            if (logic$hasIncoming(in.key().nodeId(), in.key().port())) {
+                logic$errorPins.add(in.key());
+                status.accept(logic$pairLabel(out, in) + " — DESTINATION ALREADY CONNECTED");
+                return false;
+            }
+            candidate.connect(out.key().nodeId(), out.key().port(), in.key().nodeId(), in.key().port());
+        }
+
+        try {
+            CircuitCompiler.compile(candidate, chips);
+        } catch (RuntimeException exception) {
+            logic$errorPins.addAll(logic$selectedPins);
+            status.accept("BATCH CONNECT REJECTED: " + (exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage()));
+            return false;
+        }
+
+        logic$history.checkpoint("Batch connect", document);
+        for (int i = 0; i < outputs.size(); i++) {
+            LogicPinHit out = outputs.get(i);
+            LogicPinHit in = inputs.get(i);
+            document.connect(out.key().nodeId(), out.key().port(), in.key().nodeId(), in.key().port());
+        }
+        recompile();
+        logic$history.commit(document);
+        status.accept("BATCH CONNECT: created " + outputs.size() + " top-to-bottom connection" + (outputs.size() == 1 ? "" : "s") + " atomically");
+        return true;
+    }
+
+    @Unique private boolean logic$hasIncoming(int nodeId, int port) {
+        for (WireConnection wire : document.wires) if (wire.targetNodeId() == nodeId && wire.targetPort() == port) return true;
+        return false;
+    }
+
+    @Unique private String logic$pairLabel(LogicPinHit out, LogicPinHit in) {
+        return logic$pinName(out) + " [" + out.spec().width() + "] -> " + logic$pinName(in) + " [" + in.spec().width() + "]";
+    }
+
+    @Unique private String logic$pinName(LogicPinHit hit) {
+        String name = hit.spec().name() == null || hit.spec().name().isBlank() ? (hit.key().input() ? "IN" : "OUT") : hit.spec().name();
+        try {
+            return document.node(hit.key().nodeId()).displayName() + "." + name;
+        } catch (RuntimeException ignored) {
+            return name;
+        }
+    }
+
+    @Unique private String logic$pinSelectionStatus() {
+        int inputs = 0, outputs = 0;
+        for (LogicPinKey key : logic$selectedPins) if (key.input()) inputs++; else outputs++;
+        String base = logic$selectedPins.size() + " pin" + (logic$selectedPins.size() == 1 ? "" : "s") + " selected";
+        if (inputs > 0 && outputs > 0) return base + " — Enter batch-connects top-to-bottom (" + outputs + " -> " + inputs + ")";
+        return base + " — Alt+Shift adds more pins";
     }
 
     /* ----------------------------- pin geometry / z order ----------------------------- */
 
     @ModifyConstant(method = "outputPortAt", constant = @Constant(doubleValue = 8.0))
-    private double logic$equalizeLegacyPortRadius(double original) {
-        return 9.0;
-    }
+    private double logic$equalizeLegacyPortRadius(double original) { return 9.0; }
 
-    @Inject(
-            method = "extractWidgetRenderState",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lcom/foreverspark/logicsim/client/screen/CircuitCanvasWidget;drawMarquee(Lnet/minecraft/client/gui/GuiGraphicsExtractor;)V",
-                    shift = At.Shift.BEFORE
-            )
-    )
+    @Inject(method = "extractWidgetRenderState", at = @At(value = "INVOKE", target = "Lcom/foreverspark/logicsim/client/screen/CircuitCanvasWidget;drawMarquee(Lnet/minecraft/client/gui/GuiGraphicsExtractor;)V", shift = At.Shift.BEFORE))
     private void logic$editorV2Overlay(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        // Selected bodies are above normal bodies.
-        for (EditorNode node : document.nodes) {
-            if (selectedNodeIds.contains(node.id)) drawNode(graphics, node);
-        }
+        for (EditorNode node : document.nodes) if (selectedNodeIds.contains(node.id)) drawNode(graphics, node);
 
-        // Every terminal is redrawn after every body, so overlapping chips can never bury pins.
         for (EditorNode node : document.nodes) {
             List<PortSpec> inputs = safeInputs(node);
             for (int port = 0; port < inputs.size(); port++) {
                 LogicPinPoint point = logic$inputPoint(node, port);
                 PortSpec spec = inputs.get(port);
-                logic$drawPin(graphics, point, spec.width(),
-                        portDisplayColor(node, port, spec, true),
-                        logic$selectedPins.contains(new LogicPinKey(node.id, port, true)));
+                LogicPinKey key = new LogicPinKey(node.id, port, true);
+                logic$drawPin(graphics, point, spec.width(), portDisplayColor(node, port, spec, true), logic$selectedPins.contains(key), logic$errorPins.contains(key), logic$isFloating(node, port));
             }
             List<PortSpec> outputs = safeOutputs(node);
             for (int port = 0; port < outputs.size(); port++) {
                 LogicPinPoint point = logic$outputPoint(node, port);
                 PortSpec spec = outputs.get(port);
-                logic$drawPin(graphics, point, spec.width(),
-                        portDisplayColor(node, port, spec, false),
-                        logic$selectedPins.contains(new LogicPinKey(node.id, port, false)));
+                LogicPinKey key = new LogicPinKey(node.id, port, false);
+                logic$drawPin(graphics, point, spec.width(), portDisplayColor(node, port, spec, false), logic$selectedPins.contains(key), logic$errorPins.contains(key), false);
             }
         }
-
-        // Core draws the in-progress wire before bodies. Redraw it here so the active route is on top.
         drawWirePreview(graphics, mouseX, mouseY);
     }
 
     @Unique
-    private void logic$drawPin(GuiGraphicsExtractor graphics, LogicPinPoint point, int width, int color, boolean selected) {
+    private void logic$drawPin(GuiGraphicsExtractor graphics, LogicPinPoint point, int width, int color, boolean selected, boolean error, boolean floating) {
         int x = screenX(point.x());
         int y = screenY(point.y());
-        int half = logic$pinHalf(width);
-
-        if (width <= 1) {
-            graphics.fill(x - half - 1, y - half - 1, x + half + 2, y + half + 2, 0xFF090B0D);
-            graphics.fill(x - half, y - half, x + half + 1, y + half + 1, color);
-        } else {
-            logic$fillChamfered(graphics, x, y, half + 1, logic$pinChamfer(width) + 1, 0xFF090B0D);
-            logic$fillChamfered(graphics, x, y, half, logic$pinChamfer(width), color);
-        }
-
-        if (selected) {
-            graphics.outline(x - half - 2, y - half - 2, half * 2 + 5, half * 2 + 5, 0xFFFFFFFF);
-        }
+        EditorPinGeometry.draw(graphics, x, y, width, color);
+        int half = EditorPinGeometry.halfSize(width);
+        if (floating) graphics.outline(x - half - 3, y - half - 3, half * 2 + 7, half * 2 + 7, 0xFFFFB347);
+        if (selected) graphics.outline(x - half - 2, y - half - 2, half * 2 + 5, half * 2 + 5, 0xFFFFFFFF);
+        if (error) graphics.outline(x - half - 4, y - half - 4, half * 2 + 9, half * 2 + 9, 0xFFFF4D4D);
     }
 
-    @Unique
-    private void logic$fillChamfered(GuiGraphicsExtractor graphics, int cx, int cy, int half, int chamfer, int color) {
-        for (int dy = -half; dy <= half; dy++) {
-            int inset = Math.max(0, Math.abs(dy) - (half - chamfer));
-            graphics.fill(cx - half + inset, cy + dy, cx + half - inset + 1, cy + dy + 1, color);
+    @Unique private boolean logic$isFloating(EditorNode node, int port) {
+        if (node.kind == NodeKind.NET_LABEL) {
+            String name = node.label == null ? "" : node.label.trim();
+            for (EditorNode candidate : document.nodes) {
+                if (candidate.kind != NodeKind.NET_LABEL || candidate.label == null || !candidate.label.trim().equalsIgnoreCase(name)) continue;
+                if (logic$hasIncoming(candidate.id, 0)) return false;
+            }
+            return true;
         }
+        return !logic$hasIncoming(node.id, port);
     }
 
     @Unique
     private LogicPinHit logic$pinAt(double mouseX, double mouseY, boolean exact) {
-        // Match the core's output-first priority so allowing an exact hit always reaches the same terminal.
         for (int n = document.nodes.size() - 1; n >= 0; n--) {
             EditorNode node = document.nodes.get(n);
             List<PortSpec> ports = safeOutputs(node);
             for (int port = 0; port < ports.size(); port++) {
                 LogicPinPoint point = logic$outputPoint(node, port);
-                if (logic$pinContains(mouseX, mouseY, point, ports.get(port).width(), exact)) {
-                    return new LogicPinHit(new LogicPinKey(node.id, port, false), ports.get(port), point);
-                }
+                if (logic$pinContains(mouseX, mouseY, point, ports.get(port).width(), exact)) return new LogicPinHit(new LogicPinKey(node.id, port, false), ports.get(port), point);
             }
         }
         for (int n = document.nodes.size() - 1; n >= 0; n--) {
@@ -308,94 +379,64 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
             List<PortSpec> ports = safeInputs(node);
             for (int port = 0; port < ports.size(); port++) {
                 LogicPinPoint point = logic$inputPoint(node, port);
-                if (logic$pinContains(mouseX, mouseY, point, ports.get(port).width(), exact)) {
-                    return new LogicPinHit(new LogicPinKey(node.id, port, true), ports.get(port), point);
-                }
+                if (logic$pinContains(mouseX, mouseY, point, ports.get(port).width(), exact)) return new LogicPinHit(new LogicPinKey(node.id, port, true), ports.get(port), point);
             }
         }
         return null;
     }
 
-    @Unique
-    private boolean logic$pinContains(double mouseX, double mouseY, LogicPinPoint point, int width, boolean exact) {
+    @Unique private LogicPinHit logic$resolvePin(LogicPinKey key) {
+        try {
+            EditorNode node = document.node(key.nodeId());
+            List<PortSpec> ports = key.input() ? safeInputs(node) : safeOutputs(node);
+            if (key.port() < 0 || key.port() >= ports.size()) return null;
+            return new LogicPinHit(key, ports.get(key.port()), key.input() ? logic$inputPoint(node, key.port()) : logic$outputPoint(node, key.port()));
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    @Unique private boolean logic$pinContains(double mouseX, double mouseY, LogicPinPoint point, int width, boolean exact) {
         double dx = mouseX - screenX(point.x());
         double dy = mouseY - screenY(point.y());
         if (!exact) return dx * dx + dy * dy <= 81.0;
-
-        int half = logic$pinHalf(width);
-        double ax = Math.abs(dx);
-        double ay = Math.abs(dy);
-        if (ax > half || ay > half) return false;
-        if (width <= 1) return true;
-        return ax + ay <= half * 2.0 - logic$pinChamfer(width);
-    }
-
-    @Unique
-    private int logic$pinHalf(int width) {
-        if (width <= 1) return 3;
-        if (width <= 4) return 4;
-        if (width <= 16) return 5;
-        return 6;
-    }
-
-    @Unique
-    private int logic$pinChamfer(int width) {
-        return width >= 32 ? 2 : 1;
+        return EditorPinGeometry.contains(dx, dy, width);
     }
 
     @Unique
     private LogicPinPoint logic$inputPoint(EditorNode node, int port) {
         double y;
-        if (node.kind == NodeKind.CUSTOM_CHIP) {
-            y = centeredPortY(node, port, safeInputs(node).size());
-        } else if (node.kind == NodeKind.CONSTANT && node.randomSource) {
-            y = node.y + nodeHeight(node) * 0.5;
-        } else {
-            y = switch (node.kind) {
-                case OUTPUT, PROBE, BUS, SPLITTER -> node.y + nodeHeight(node) * 0.5;
-                default -> node.y + 30.0 + port * portStep(node);
-            };
-        }
+        if (node.kind == NodeKind.CUSTOM_CHIP) y = centeredPortY(node, port, safeInputs(node).size());
+        else if (node.kind == NodeKind.CONSTANT && node.randomSource) y = node.y + nodeHeight(node) * 0.5;
+        else y = switch (node.kind) {
+            case OUTPUT, PROBE, BUS, SPLITTER, BUS_SLICE, NET_LABEL -> node.y + nodeHeight(node) * 0.5;
+            default -> node.y + 30.0 + port * portStep(node);
+        };
         return new LogicPinPoint(EditorGrid.snap(node.x), EditorGrid.snap(y));
     }
 
     @Unique
     private LogicPinPoint logic$outputPoint(EditorNode node, int port) {
         double y;
-        if (node.kind == NodeKind.CUSTOM_CHIP) {
-            y = centeredPortY(node, port, safeOutputs(node).size());
-        } else {
-            y = switch (node.kind) {
-                case INPUT, NAND, CONSTANT, BUS, MERGER -> node.y + nodeHeight(node) * 0.5;
-                default -> node.y + 30.0 + port * portStep(node);
-            };
-        }
+        if (node.kind == NodeKind.CUSTOM_CHIP) y = centeredPortY(node, port, safeOutputs(node).size());
+        else y = switch (node.kind) {
+            case INPUT, NAND, CONSTANT, BUS, MERGER, NET_LABEL -> node.y + nodeHeight(node) * 0.5;
+            default -> node.y + 30.0 + port * portStep(node);
+        };
         return new LogicPinPoint(EditorGrid.snap(node.x + nodeWidth(node)), EditorGrid.snap(y));
     }
 
     @Unique
-    private void logic$collectPinsInMarquee(
-            EditorNode node,
-            List<PortSpec> ports,
-            boolean input,
-            double left,
-            double right,
-            double top,
-            double bottom,
-            Set<LogicPinKey> hits
-    ) {
+    private void logic$collectPinsInMarquee(EditorNode node, List<PortSpec> ports, boolean input, double left, double right, double top, double bottom, Set<LogicPinKey> hits) {
         for (int port = 0; port < ports.size(); port++) {
             LogicPinPoint point = input ? logic$inputPoint(node, port) : logic$outputPoint(node, port);
             int x = screenX(point.x());
             int y = screenY(point.y());
-            if (x >= left && x <= right && y >= top && y <= bottom) {
-                hits.add(new LogicPinKey(node.id, port, input));
-            }
+            if (x >= left && x <= right && y >= top && y <= bottom) hits.add(new LogicPinKey(node.id, port, input));
         }
     }
 
-    @Unique
-    private void logic$enterPinMode(boolean additive) {
+    @Unique private void logic$enterPinMode(boolean additive) {
         if (logic$selectionMode != LogicSelectionMode.PIN) logic$selectedPins.clear();
         if (!additive) logic$selectedPins.clear();
         selectedNodeIds.clear();
@@ -405,31 +446,20 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
         logic$selectionMode = LogicSelectionMode.PIN;
     }
 
-    @Unique
-    private void logic$enterComponentMode() {
+    @Unique private void logic$enterComponentMode() {
         if (logic$selectionMode == LogicSelectionMode.PIN) logic$selectedPins.clear();
         logic$selectionMode = LogicSelectionMode.COMPONENT;
     }
 
     /* ----------------------------- undo / redo ----------------------------- */
 
-    @Override
-    public void logic$checkpoint(String label) {
-        logic$history.checkpoint(label, document);
-    }
-
-    @Override
-    public void logic$commitHistory() {
-        logic$history.commit(document);
-    }
+    @Override public void logic$checkpoint(String label) { logic$history.checkpoint(label, document); }
+    @Override public void logic$commitHistory() { logic$history.commit(document); }
 
     @Override
     public boolean logic$undo() {
         EditorHistory.Result result = logic$history.undo(document);
-        if (result == null) {
-            status.accept("Nothing to undo");
-            return false;
-        }
+        if (result == null) { status.accept("Nothing to undo"); return false; }
         logic$restore(result.document());
         status.accept("Undo: " + result.label());
         return true;
@@ -438,10 +468,7 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
     @Override
     public boolean logic$redo() {
         EditorHistory.Result result = logic$history.redo(document);
-        if (result == null) {
-            status.accept("Nothing to redo");
-            return false;
-        }
+        if (result == null) { status.accept("Nothing to redo"); return false; }
         logic$restore(result.document());
         status.accept("Redo: " + result.label());
         return true;
@@ -454,15 +481,12 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
         if (CompiledCircuit.ROOT_SCOPE.equals(runtimeScopePath)) runtimeRootDocument = restored;
 
         Set<Integer> validInputs = new LinkedHashSet<>();
-        for (EditorNode node : restored.nodes) {
-            if (node.kind == NodeKind.INPUT) validInputs.add(node.id);
-        }
+        for (EditorNode node : restored.nodes) if (node.kind == NodeKind.INPUT) validInputs.add(node.id);
         inputStates.keySet().retainAll(validInputs);
-        for (EditorNode node : restored.nodes) {
-            if (node.kind == NodeKind.INPUT) inputStates.putIfAbsent(node.id, node.inputDefaultValue);
-        }
+        for (EditorNode node : restored.nodes) if (node.kind == NodeKind.INPUT) inputStates.putIfAbsent(node.id, node.inputDefaultValue);
 
         logic$selectedPins.clear();
+        logic$errorPins.clear();
         logic$selectionMode = LogicSelectionMode.COMPONENT;
         clearSelection();
         recompile();
@@ -490,24 +514,18 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
 
     @Inject(method = "setDocument(Lcom/foreverspark/logicsim/editor/model/CircuitDocument;Ljava/lang/String;)V", at = @At("RETURN"))
     private void logic$resetHistoryForDocument(CircuitDocument replacement, String rootChipName, CallbackInfo ci) {
-        logic$history.clear();
-        logic$selectedPins.clear();
-        logic$selectionMode = LogicSelectionMode.COMPONENT;
+        logic$history.clear(); logic$selectedPins.clear(); logic$errorPins.clear(); logic$selectionMode = LogicSelectionMode.COMPONENT;
     }
 
     @Inject(method = "openNestedChip", at = @At("RETURN"))
     private void logic$resetHistoryForNested(EditorNode node, CallbackInfo ci) {
-        logic$history.clear();
-        logic$selectedPins.clear();
-        logic$selectionMode = LogicSelectionMode.COMPONENT;
+        logic$history.clear(); logic$selectedPins.clear(); logic$errorPins.clear(); logic$selectionMode = LogicSelectionMode.COMPONENT;
     }
 
     @Inject(method = "navigateBack", at = @At("RETURN"))
     private void logic$resetHistoryAfterBack(CallbackInfoReturnable<Boolean> cir) {
         if (cir.getReturnValue()) {
-            logic$history.clear();
-            logic$selectedPins.clear();
-            logic$selectionMode = LogicSelectionMode.COMPONENT;
+            logic$history.clear(); logic$selectedPins.clear(); logic$errorPins.clear(); logic$selectionMode = LogicSelectionMode.COMPONENT;
         }
     }
 
