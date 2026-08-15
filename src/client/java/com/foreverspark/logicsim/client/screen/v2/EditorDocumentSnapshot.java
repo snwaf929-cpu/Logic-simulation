@@ -73,6 +73,8 @@ public final class EditorDocumentSnapshot {
         wire.setRoutePoints(route);
         RoutePoint branch = source.branchStart();
         if (branch != null) wire.setBranchStart(new RoutePoint(branch.x(), branch.y()));
+        wire.setLayer(source.layer());
+        wire.setViaRouteIndices(source.viaRouteIndices());
         return wire;
     }
 
