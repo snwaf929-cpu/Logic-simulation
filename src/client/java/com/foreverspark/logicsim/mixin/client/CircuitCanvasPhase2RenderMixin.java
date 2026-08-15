@@ -37,26 +37,6 @@ public abstract class CircuitCanvasPhase2RenderMixin {
     @Shadow private boolean isNodeSelected(int nodeId) { throw new AssertionError(); }
     @Shadow private Font font() { throw new AssertionError(); }
 
-    @Inject(method = "nodeWidth", at = @At("HEAD"), cancellable = true)
-    private void logic$width(EditorNode node, org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Double> cir) {
-        if (node.kind == NodeKind.BUS_SLICE) cir.setReturnValue(84.0);
-        else if (node.kind == NodeKind.NET_LABEL) cir.setReturnValue(66.0);
-    }
-
-    @Inject(method = "nodeHeight", at = @At("HEAD"), cancellable = true)
-    private void logic$height(EditorNode node, org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Double> cir) {
-        if (node.kind == NodeKind.NET_LABEL) cir.setReturnValue(24.0);
-        else if (node.kind == NodeKind.BUS_SLICE) {
-            int outputs = Math.max(1, safeOutputs(node).size());
-            cir.setReturnValue(EditorGrid.snapUp(Math.max(42.0, 34.0 + (outputs - 1) * 12.0)));
-        }
-    }
-
-    @Inject(method = "portStep", at = @At("HEAD"), cancellable = true)
-    private void logic$step(EditorNode node, org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Double> cir) {
-        if (node.kind == NodeKind.BUS_SLICE) cir.setReturnValue(12.0);
-    }
-
     @Inject(method = "drawNode", at = @At("HEAD"), cancellable = true)
     private void logic$drawPhase2Node(GuiGraphicsExtractor graphics, EditorNode node, CallbackInfo ci) {
         if (node.kind != NodeKind.BUS_SLICE && node.kind != NodeKind.NET_LABEL) return;
