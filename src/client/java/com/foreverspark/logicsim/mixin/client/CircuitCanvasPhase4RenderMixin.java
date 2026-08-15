@@ -14,12 +14,16 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.List;
 
-/** Clear schematic identity for Phase 4 BOARD sockets. */
+/** Clear schematic identity and exact hitbox/pin geometry for Phase 4 BOARD sockets. */
 @Mixin(value = CircuitCanvasWidget.class, priority = 2350)
 public abstract class CircuitCanvasPhase4RenderMixin {
+    @Unique private static final double LOGIC_SOCKET_WIDTH = 90.0;
+    @Unique private static final double LOGIC_SOCKET_HEIGHT = 36.0;
+
     @Shadow private double zoom;
     @Shadow private int screenX(double worldX) { throw new AssertionError(); }
     @Shadow private int screenY(double worldY) { throw new AssertionError(); }
@@ -29,6 +33,16 @@ public abstract class CircuitCanvasPhase4RenderMixin {
     @Shadow private List<PortSpec> safeOutputs(EditorNode node) { throw new AssertionError(); }
     @Shadow private int portDisplayColor(EditorNode node, int port, PortSpec spec, boolean input) { throw new AssertionError(); }
     @Shadow private boolean isNodeSelected(int nodeId) { throw new AssertionError(); }
+
+    @Inject(method = "nodeWidth", at = @At("HEAD"), cancellable = true)
+    private void logic$socketWidth(EditorNode node, CallbackInfoReturnable<Double> cir) {
+        if (node != null && node.isBoardSocket()) cir.setReturnValue(LOGIC_SOCKET_WIDTH);
+    }
+
+    @Inject(method = "nodeHeight", at = @At("HEAD"), cancellable = true)
+    private void logic$socketHeight(EditorNode node, CallbackInfoReturnable<Double> cir) {
+        if (node != null && node.isBoardSocket()) cir.setReturnValue(LOGIC_SOCKET_HEIGHT);
+    }
 
     @Inject(method = "drawNode", at = @At("HEAD"), cancellable = true)
     private void logic$drawSocket(GuiGraphicsExtractor graphics, EditorNode node, CallbackInfo ci) {
