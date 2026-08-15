@@ -115,10 +115,11 @@ public final class RandomDisplayNetworkSelfTest {
         check(compiled.plan().triggerGroupCount() == 11, "compiled network must preserve all 11 trigger groups");
         check(compiled.plan().externalTriggerGroupCount() == 1,
                 "compiled network must preserve the one independent trigger group");
+        check("field-shift".equals(compiled.plan().boundaryPackMode()),
+                "three contiguous 16-bit banks must use shift/mask DISPLAY packing");
 
         // The user's current wall is 1024x1024 logical. A 16-bit coordinate is in range iff bits 10..15 are zero.
-        // X and Y therefore compile to one 12-lane reject mask, avoiding 48-bit DISPLAY packing for ~4095/4096
-        // uniformly-random coordinates.
+        // X and Y therefore compile to one 12-lane reject mask, avoiding DISPLAY packing for out-of-range coordinates.
         RandomDisplayNetworkFastPath.CompileResult filtered1024 = RandomDisplayNetworkResetCompat.compile(
                 runtime, 0, 1_024, 1_024
         );
@@ -127,6 +128,8 @@ public final class RandomDisplayNetworkSelfTest {
                 "1024x1024 plan must use the packed coordinate prefilter");
         check(filtered1024.plan().coordinatePrefilterLaneCount() == 12,
                 "1024x1024 X/Y prefilter must test exactly twelve high coordinate lanes");
+        check("field-shift".equals(filtered1024.plan().boundaryPackMode()),
+                "1024x1024 plan must retain shift/mask field packing");
 
         RandomDisplayNetworkFastPath.CompileResult nonPowerOfTwo = RandomDisplayNetworkResetCompat.compile(
                 runtime, 0, 1_000, 1_000
@@ -185,6 +188,7 @@ public final class RandomDisplayNetworkSelfTest {
                 + " | emittedEdges=" + emitted + " commands=" + commandCount[0]
                 + " externalFires=" + compiled.plan().externalTriggerFireCount()
                 + " coordPrefilter1024=" + filtered1024.plan().coordinatePrefilterLaneCount() + " lanes"
+                + " boundaryPack=" + compiled.plan().boundaryPackMode()
                 + " resetSignal=" + resetSignalId + " compile=" + compiled.reason());
     }
 
