@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.tools;
 
+import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
@@ -20,6 +21,7 @@ public final class InfrastructureSelfTest {
         testFloatingInputsDefaultLow();
         testStructuralBusLoopRejectedWithoutStackOverflow();
         testNandFeedbackStillCompiles();
+        testNestedCustomChipNandFeedbackCompiles();
         System.out.println("CPU editor infrastructure + bus packing + floating-low + cycle safety self-test: PASS");
     }
 
@@ -176,6 +178,42 @@ public final class InfrastructureSelfTest {
 
         // Cross-coupled NAND feedback is intentional sequential logic and must remain legal.
         CircuitCompiler.compile(document, name -> null);
+    }
+
+    /**
+     * Regression for a register/latch hidden inside a reusable custom chip. The feedback leaves the chip,
+     * travels through routing, and returns to an input. The compiler must see the NAND state boundary inside
+     * the custom chip instead of incorrectly treating the whole custom chip as combinational.
+     */
+    private static void testNestedCustomChipNandFeedbackCompiles() {
+        CircuitDocument stateCircuit = new CircuitDocument();
+        EditorNode d = stateCircuit.addNode(NodeKind.INPUT, 0, 0);
+        d.label = "D";
+
+        EditorNode one = stateCircuit.addNode(NodeKind.CONSTANT, 0, 80);
+        one.constantValue = 1;
+
+        EditorNode q = stateCircuit.addNode(NodeKind.NAND, 120, 0);
+        EditorNode nq = stateCircuit.addNode(NodeKind.NAND, 120, 80);
+        EditorNode out = stateCircuit.addNode(NodeKind.OUTPUT, 260, 0);
+        out.label = "Q";
+
+        stateCircuit.connect(one.id, 0, q.id, 0);
+        stateCircuit.connect(nq.id, 0, q.id, 1);
+        stateCircuit.connect(d.id, 0, nq.id, 0);
+        stateCircuit.connect(q.id, 0, nq.id, 1);
+        stateCircuit.connect(q.id, 0, out.id, 0);
+
+        ChipDefinition stateful = new ChipDefinition("STATEFUL_NAND", stateCircuit);
+
+        CircuitDocument board = new CircuitDocument();
+        EditorNode state = board.addCustomChip("STATEFUL_NAND", 100, 0);
+        EditorNode route = board.addNode(NodeKind.BUS, 260, 0);
+        route.width = 1;
+        board.connect(state.id, 0, route.id, 0);
+        board.connect(route.id, 0, state.id, 0);
+
+        CircuitCompiler.compile(board, name -> "STATEFUL_NAND".equals(name) ? stateful : null);
     }
 
     private static void check(boolean condition, String message) {
