@@ -22,7 +22,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /** PCB front/back copper view, layer-aware trace rendering/selection, and through-board vias. */
@@ -45,6 +48,8 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
     @Shadow private int wireColor(WireConnection wire) { throw new AssertionError(); }
 
     @Unique private WireLayer logic$pcbViewLayer = WireLayer.FRONT;
+    @Unique private CircuitDocument logic$trackedDocument;
+    @Unique private final Set<WireConnection> logic$knownWires = Collections.newSetFromMap(new IdentityHashMap<>());
 
     @Override
     public WireLayer logic$currentPcbLayer() {
@@ -97,6 +102,25 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
         status.accept((added ? "VIA added" : "VIA removed") + " at " + Math.round(point.x()) + "," + Math.round(point.y())
                 + (added ? " — copper switches side after this point" : ""));
         return true;
+    }
+
+    /**
+     * Phase 2 routing and branch creation select the just-created trace. Detect that new identity
+     * on the same live document and stamp it onto the side currently being edited. Loaded, pasted,
+     * duplicated, and undo-restored traces retain their serialized PCB metadata.
+     */
+    @Inject(method = "extractWidgetRenderState", at = @At("HEAD"))
+    private void logic$adoptNewSelectedTrace(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+        if (logic$trackedDocument != document) {
+            logic$trackedDocument = document;
+            logic$knownWires.clear();
+            if (document != null) logic$knownWires.addAll(document.wires);
+            return;
+        }
+        if (selectedWire != null && document.wires.contains(selectedWire) && !logic$knownWires.contains(selectedWire)) {
+            selectedWire.setLayer(logic$pcbViewLayer);
+        }
+        logic$knownWires.addAll(document.wires);
     }
 
     @Inject(method = "drawWire", at = @At("HEAD"), cancellable = true)
