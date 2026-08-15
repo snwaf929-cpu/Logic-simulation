@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.client.screen;
 
+import com.foreverspark.logicsim.client.board.ClientBoardLibrary;
 import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import net.minecraft.client.Minecraft;
@@ -14,7 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
-/** Compact cubic component + saved-chip library. */
+/** Compact component, editable-board, and saved-chip library. */
 public final class ComponentLibraryWidget extends AbstractWidget {
     private static final int ROW_HEIGHT = 18;
     private static final int INDENT = 12;
@@ -22,12 +23,15 @@ public final class ComponentLibraryWidget extends AbstractWidget {
     private static final int FOOTER_HEIGHT = 30;
 
     private final ClientChipLibrary library;
+    private final ClientBoardLibrary boards = new ClientBoardLibrary();
     private final CircuitCanvasWidget canvas;
     private final Runnable requestAdd;
     private final Consumer<String> openChip;
     private final Consumer<String> status;
     private final List<RowHit> rows = new ArrayList<>();
 
+    private Consumer<String> openBoard = ignored -> {};
+    private String selectedBoard;
     private String selectedFolder;
     private String selectedChip;
     private String draggingChip;
@@ -44,15 +48,40 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         this.status = status;
     }
 
+    public void setBoardOpenHandler(Consumer<String> openBoard) {
+        this.openBoard = openBoard == null ? ignored -> {} : openBoard;
+    }
+
+    public String selectedBoardName() { return selectedBoard; }
     public String selectedChipName() { return selectedChip; }
     public String selectedFolderName() { return selectedFolder; }
-    public void selectChip(String name) { selectedChip = name; selectedFolder = null; }
-    public void selectFolder(String name) { selectedFolder = name; selectedChip = null; }
+
+    public void selectBoard(String name) {
+        selectedBoard = name;
+        selectedChip = null;
+        selectedFolder = null;
+    }
+
+    public void selectChip(String name) {
+        selectedChip = name;
+        selectedFolder = null;
+        selectedBoard = null;
+    }
+
+    public void selectFolder(String name) {
+        selectedFolder = name;
+        selectedChip = null;
+        selectedBoard = null;
+    }
 
     public void renameSelection(String oldName, String newName) {
         if (oldName != null && oldName.equals(selectedChip)) selectedChip = newName;
         if (oldName != null && oldName.equals(selectedFolder)) selectedFolder = newName;
         if (oldName != null && oldName.equals(draggingChip)) draggingChip = newName;
+    }
+
+    public void renameBoardSelection(String oldName, String newName) {
+        if (oldName != null && oldName.equals(selectedBoard)) selectedBoard = newName;
     }
 
     @Override
@@ -67,6 +96,15 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         int y = contentTop - (int) Math.round(scroll);
         rows.clear();
 
+        y = drawSection(graphics, "BOARDS", y, contentTop, footerTop);
+        List<String> boardNames = boards.names();
+        if (boardNames.isEmpty()) {
+            y = drawHint(graphics, "Ctrl+S saves this board", y, contentTop, footerTop);
+        } else {
+            for (String board : boardNames) y = drawBoard(graphics, board, y, contentTop, footerTop);
+        }
+
+        y += 4;
         y = drawSection(graphics, "PRIMITIVES", y, contentTop, footerTop);
         y = drawComponent(graphics, "INPUT", NodeKind.INPUT, 0xFF4C86D9, y, contentTop, footerTop);
         y = drawComponent(graphics, "OUTPUT", NodeKind.OUTPUT, 0xFF7B68D9, y, contentTop, footerTop);
@@ -91,6 +129,7 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         }
         y = drawOtherFolder(graphics, y, contentTop, footerTop);
         for (String chip : library.unfiledChips()) y = drawChip(graphics, chip, y, contentTop, footerTop);
+
         int contentHeight = Math.max(0, y + (int) Math.round(scroll) - contentTop);
         maxScroll = Math.max(0, contentHeight - viewportHeight);
         scroll = clamp(scroll, 0, maxScroll);
@@ -100,6 +139,25 @@ public final class ComponentLibraryWidget extends AbstractWidget {
     private int drawSection(GuiGraphicsExtractor graphics, String text, int y, int clipTop, int clipBottom) {
         if (visibleRow(y, 14, clipTop, clipBottom)) graphics.text(Minecraft.getInstance().font, text, getX() + 7, y + 3, 0xFF737E8B, false);
         return y + 14;
+    }
+
+    private int drawHint(GuiGraphicsExtractor graphics, String text, int y, int clipTop, int clipBottom) {
+        if (visibleRow(y, ROW_HEIGHT, clipTop, clipBottom)) {
+            graphics.text(Minecraft.getInstance().font, truncate(text, 25), getX() + 13, y + 5, 0xFF66727F, false);
+        }
+        return y + ROW_HEIGHT + 1;
+    }
+
+    private int drawBoard(GuiGraphicsExtractor graphics, String boardName, int y, int clipTop, int clipBottom) {
+        if (visibleRow(y, ROW_HEIGHT, clipTop, clipBottom)) {
+            boolean selected = boardName.equals(selectedBoard);
+            graphics.fill(getX() + 5, y, getX() + width - 5, y + ROW_HEIGHT - 1, selected ? 0xFF263441 : 0xFF181F26);
+            graphics.fill(getX() + 5, y, getX() + 9, y + ROW_HEIGHT - 1, 0xFF63A9D8);
+            graphics.text(Minecraft.getInstance().font, "▣", getX() + 14, y + 5, 0xFF9ED2F0, false);
+            graphics.text(Minecraft.getInstance().font, truncate(boardName, 19), getX() + 27, y + 5, selected ? 0xFFFFFFFF : 0xFFD7DEE8, false);
+            rows.add(new RowHit(RowType.BOARD, boardName, null, y, ROW_HEIGHT));
+        }
+        return y + ROW_HEIGHT + 1;
     }
 
     private int drawComponent(GuiGraphicsExtractor graphics, String name, NodeKind kind, int color, int y, int clipTop, int clipBottom) {
@@ -156,8 +214,11 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         graphics.outline(bx, by, 20, 20, 0xFF46515D);
         graphics.fill(bx + 5, by + 9, bx + 15, by + 11, 0xFFE5EBF2);
         graphics.fill(bx + 9, by + 5, bx + 11, by + 15, 0xFFE5EBF2);
-        String hint = selectedChip != null ? "F2  RENAME / COLOR" : selectedFolder != null && !selectedFolder.isBlank() ? "F2  EDIT FOLDER" : "+  ADD FOLDER";
-        graphics.text(font, hint, bx + 28, by + 7, 0xFF7F8A99, false);
+        String hint = selectedBoard != null ? "DOUBLE CLICK BOARD TO OPEN"
+                : selectedChip != null ? "DOUBLE CLICK CHIP TO EDIT"
+                : selectedFolder != null && !selectedFolder.isBlank() ? "F2  EDIT FOLDER"
+                : "+  ADD FOLDER";
+        graphics.text(font, truncate(hint, 25), bx + 28, by + 7, 0xFF7F8A99, false);
         if (selectedFolder != null && !selectedFolder.isBlank()) {
             int tx = getX() + width - 23;
             graphics.outline(tx, by, 17, 20, 0xFF684148);
@@ -180,16 +241,50 @@ public final class ComponentLibraryWidget extends AbstractWidget {
         }
         RowHit row = rowAt(mx, my);
         if (row == null) return;
-        if (row.type == RowType.COMPONENT && event.button() == 0) { selectedChip = null; selectedFolder = null; canvas.setPlacement(row.nodeKind); return; }
+
+        if (row.type == RowType.BOARD) {
+            selectedBoard = row.name;
+            selectedChip = null;
+            selectedFolder = null;
+            canvas.cancelPlacement();
+            if (event.button() == 1 || (event.button() == 0 && doubleClick)) {
+                openBoard.accept(row.name);
+            } else if (event.button() == 0) {
+                status.accept("Selected board " + row.name + " — double-click to open and continue editing it");
+            }
+            return;
+        }
+
+        if (row.type == RowType.COMPONENT && event.button() == 0) {
+            selectedChip = null;
+            selectedFolder = null;
+            selectedBoard = null;
+            canvas.setPlacement(row.nodeKind);
+            return;
+        }
         if ((row.type == RowType.FOLDER || row.type == RowType.OTHER) && event.button() == 0) {
-            selectedChip = null; selectedFolder = row.name;
+            selectedChip = null;
+            selectedBoard = null;
+            selectedFolder = row.name;
             if (row.type == RowType.FOLDER) try { library.setFolderExpanded(row.name, !library.folderExpanded(row.name)); } catch (IOException exception) { status.accept("Folder error: " + exception.getMessage()); }
             return;
         }
         if (row.type == RowType.CHIP) {
-            selectedChip = row.name; selectedFolder = null;
-            if (event.button() == 1 || (event.button() == 0 && doubleClick)) { draggingChip = null; dragMoved = false; canvas.cancelPlacement(); openChip.accept(row.name); return; }
-            if (event.button() == 0) { draggingChip = row.name; dragMoved = false; canvas.setCustomChipPlacement(row.name); }
+            selectedChip = row.name;
+            selectedFolder = null;
+            selectedBoard = null;
+            if (event.button() == 1 || (event.button() == 0 && doubleClick)) {
+                draggingChip = null;
+                dragMoved = false;
+                canvas.cancelPlacement();
+                openChip.accept(row.name);
+                return;
+            }
+            if (event.button() == 0) {
+                draggingChip = row.name;
+                dragMoved = false;
+                canvas.setCustomChipPlacement(row.name);
+            }
         }
     }
 
@@ -206,12 +301,15 @@ public final class ComponentLibraryWidget extends AbstractWidget {
             if (target != null && (target.type == RowType.FOLDER || target.type == RowType.OTHER)) {
                 try {
                     library.moveChipToFolder(draggingChip, target.name);
-                    canvas.cancelPlacement(); selectedChip = draggingChip;
+                    canvas.cancelPlacement();
+                    selectedChip = draggingChip;
+                    selectedBoard = null;
                     status.accept(target.name.isBlank() ? "Moved " + draggingChip + " to OTHER" : "Moved " + draggingChip + " to " + target.name);
                 } catch (IOException | RuntimeException exception) { status.accept("Move failed: " + exception.getMessage()); }
             }
         }
-        draggingChip = null; dragMoved = false;
+        draggingChip = null;
+        dragMoved = false;
     }
 
     @Override
@@ -224,14 +322,21 @@ public final class ComponentLibraryWidget extends AbstractWidget {
 
     private RowHit rowAt(double mx, double my) {
         if (mx < getX() || mx >= getX() + width) return null;
-        for (int i = rows.size() - 1; i >= 0; i--) { RowHit row = rows.get(i); if (my >= row.y && my < row.y + row.height) return row; }
+        for (int i = rows.size() - 1; i >= 0; i--) {
+            RowHit row = rows.get(i);
+            if (my >= row.y && my < row.y + row.height) return row;
+        }
         return null;
     }
+
     private boolean visibleRow(int y, int h, int top, int bottom) { return y + h > top && y < bottom; }
     private boolean contains(double x, double y) { return x >= getX() && x < getX() + width && y >= getY() && y < getY() + height; }
     private static double clamp(double value, double min, double max) { return Math.max(min, Math.min(max, value)); }
     private static String truncate(String text, int max) { if (text == null) return ""; return text.length() <= max ? text : text.substring(0, Math.max(0, max - 1)) + "…"; }
-    @Override protected void updateWidgetNarration(NarrationElementOutput builder) {}
-    private enum RowType { COMPONENT, FOLDER, OTHER, CHIP }
+
+    @Override
+    protected void updateWidgetNarration(NarrationElementOutput builder) {}
+
+    private enum RowType { BOARD, COMPONENT, FOLDER, OTHER, CHIP }
     private record RowHit(RowType type, String name, NodeKind nodeKind, int y, int height) {}
 }
