@@ -33,6 +33,13 @@ public abstract class ComponentLibraryExchangeMixin {
     @Unique private int logic$importRowY = Integer.MIN_VALUE;
     @Unique private int logic$exportRowY = Integer.MIN_VALUE;
 
+    /** Search mode does not render MY CHIPS, so never leave clickable exchange coordinates from a previous frame. */
+    @Inject(method = "extractWidgetRenderState", at = @At("HEAD"))
+    private void logic$resetExchangeRows(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+        logic$importRowY = Integer.MIN_VALUE;
+        logic$exportRowY = Integer.MIN_VALUE;
+    }
+
     @Inject(method = "drawSection", at = @At("HEAD"), cancellable = true)
     private void logic$insertExchangeSection(GuiGraphicsExtractor graphics, String text, int y, int clipTop, int clipBottom,
                                              CallbackInfoReturnable<Integer> cir) {
