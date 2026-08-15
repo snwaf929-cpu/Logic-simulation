@@ -6,6 +6,7 @@ import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
 import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
 import com.foreverspark.logicsim.client.screen.EditorWorkspaceRuntime;
+import com.foreverspark.logicsim.client.screen.WorldBoardContextAccess;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.KeyEvent;
@@ -156,9 +157,11 @@ public abstract class CircuitEditorWorkspaceMixin {
     private void logic$openBoard(String name) {
         if (name == null || name.isBlank()) return;
         try {
-            logic$pushCurrentWorkspace();
+            // Load first so a corrupt/missing board does not add a bogus Back-history entry.
             CircuitDocument board = logic$boards.load(name);
+            logic$pushCurrentWorkspace();
             canvas.setDocument(board, null);
+            ((WorldBoardContextAccess)(Object)this).logic$replaceWorldBoardRoot(board);
             currentChipName = null;
             logic$currentBoardName = name;
             logic$rootChipName = null;
@@ -214,7 +217,12 @@ public abstract class CircuitEditorWorkspaceMixin {
     private boolean logic$restorePreviousWorkspace() {
         if (logic$workspaceHistory.isEmpty() || canvas == null) return false;
         WorkspaceFrame frame = logic$workspaceHistory.removeLast();
-        canvas.setDocument(logic$boards.copyDocument(frame.document()), frame.chipName());
+        CircuitDocument restored = logic$boards.copyDocument(frame.document());
+        canvas.setDocument(restored, frame.chipName());
+        if (frame.chipName() == null) {
+            // Named and unsaved boards are both physical-board roots. Standalone chip workspaces are not.
+            ((WorldBoardContextAccess)(Object)this).logic$replaceWorldBoardRoot(restored);
+        }
         currentChipName = frame.chipName();
         logic$currentBoardName = frame.boardName();
         logic$rootChipName = frame.chipName();
@@ -222,6 +230,7 @@ public abstract class CircuitEditorWorkspaceMixin {
         if (componentLibrary != null) {
             if (frame.boardName() != null) componentLibrary.selectBoard(frame.boardName());
             else if (frame.chipName() != null) componentLibrary.selectChip(frame.chipName());
+            else componentLibrary.selectBoard(null);
         }
         setStatus(frame.boardName() != null
                 ? "Back to editable BOARD " + frame.boardName()
