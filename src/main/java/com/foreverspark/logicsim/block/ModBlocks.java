@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.block;
 
+import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
 import com.foreverspark.logicsim.interconnect.CableKind;
 import com.foreverspark.logicsim.network.ModNetworking;
 import com.foreverspark.logicsim.network.PortSelectionNetworking;
@@ -37,10 +38,19 @@ public final class ModBlocks {
     public static final CableBlock BUS_CABLE_32 = registerBus(ModBlockItemIds.BUS_CABLE_32, 32);
     public static final CableBlock BUS_CABLE_64 = registerBus(ModBlockItemIds.BUS_CABLE_64, 64);
 
+    public static final ExternalDeviceBlock USER_INPUT_BRIDGE = registerDevice(ModBlockItemIds.USER_INPUT_BRIDGE, ExternalDeviceType.UIB);
+    public static final ExternalDeviceBlock INTERNET_DEVICE = registerDevice(ModBlockItemIds.INTERNET_DEVICE, ExternalDeviceType.INTERNET);
+    public static final ExternalDeviceBlock STORAGE_DEVICE = registerDevice(ModBlockItemIds.STORAGE_DEVICE, ExternalDeviceType.STORAGE);
+
     private ModBlocks() {}
 
     private static CableBlock registerBus(BlockItemId id, int width) {
         return (CableBlock) register(id, properties -> new CableBlock(CableKind.BUS, width, properties), BlockBehaviour.Properties.of().sound(SoundType.METAL).noOcclusion());
+    }
+
+    private static ExternalDeviceBlock registerDevice(BlockItemId id, ExternalDeviceType type) {
+        return (ExternalDeviceBlock) register(id, properties -> new ExternalDeviceBlock(type, properties),
+                BlockBehaviour.Properties.of().sound(SoundType.METAL).strength(2.0f).noOcclusion());
     }
 
     private static Block register(ResourceKey<Block> id, Function<BlockBehaviour.Properties, Block> blockFactory, BlockBehaviour.Properties properties) {
@@ -68,6 +78,9 @@ public final class ModBlocks {
             tab.accept(BUS_CABLE_16.asItem());
             tab.accept(BUS_CABLE_32.asItem());
             tab.accept(BUS_CABLE_64.asItem());
+            tab.accept(USER_INPUT_BRIDGE.asItem());
+            tab.accept(INTERNET_DEVICE.asItem());
+            tab.accept(STORAGE_DEVICE.asItem());
         });
     }
 }
