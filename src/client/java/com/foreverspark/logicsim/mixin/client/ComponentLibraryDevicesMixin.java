@@ -2,10 +2,12 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
+import com.foreverspark.logicsim.client.screen.v2.BoardTemplateCanvasAccess;
 import com.foreverspark.logicsim.client.screen.v2.ExternalDeviceLibraryAccess;
 import com.foreverspark.logicsim.client.screen.v2.ExternalDevicePlacementAccess;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceDescriptor;
+import com.foreverspark.logicsim.editor.model.PortDirection;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.input.MouseButtonEvent;
@@ -23,7 +25,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 
-/** V2.1A sidebar extension: connected physical endpoints are discoverable, but never auto-placed. */
+/**
+ * V2.1A BOARD sidebar extension. BOARD sockets and connected physical endpoints are explicit library items;
+ * discovery never injects anything onto the schematic by itself.
+ */
 @Mixin(ComponentLibraryWidget.class)
 public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibraryAccess {
     @Shadow private CircuitCanvasWidget canvas;
@@ -32,6 +37,7 @@ public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibr
 
     @Unique private List<ExternalDeviceDescriptor> logic$availableDevices = List.of();
     @Unique private final List<DeviceRow> logic$deviceRows = new ArrayList<>();
+    @Unique private final List<IoRow> logic$ioRows = new ArrayList<>();
     @Unique private boolean logic$deviceLibraryEnabled;
 
     @Override
@@ -51,21 +57,31 @@ public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibr
     @Override
     public void logic$setDeviceLibraryEnabled(boolean enabled) {
         logic$deviceLibraryEnabled = enabled;
-        if (!enabled) logic$deviceRows.clear();
+        if (!enabled) {
+            logic$deviceRows.clear();
+            logic$ioRows.clear();
+        }
     }
 
     @Inject(method = "extractWidgetRenderState", at = @At("HEAD"))
-    private void logic$clearDeviceRows(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+    private void logic$clearExtraRows(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         logic$deviceRows.clear();
+        logic$ioRows.clear();
     }
 
     @Inject(method = "drawNormalLibrary", at = @At("RETURN"), cancellable = true)
-    private void logic$appendDeviceSection(
+    private void logic$appendBoardSections(
             GuiGraphicsExtractor graphics, int y, int contentTop, int footerTop,
             CallbackInfoReturnable<Integer> cir
     ) {
         if (!logic$deviceLibraryEnabled) return;
         int nextY = cir.getReturnValue() + 5;
+
+        nextY = logic$drawSection(graphics, "BOARD I/O", nextY, contentTop, footerTop);
+        nextY = logic$drawIo(graphics, "INPUT SOCKET", PortDirection.INPUT, nextY, contentTop, footerTop);
+        nextY = logic$drawIo(graphics, "OUTPUT SOCKET", PortDirection.OUTPUT, nextY, contentTop, footerTop);
+
+        nextY += 4;
         nextY = logic$drawSection(graphics, "DEVICES", nextY, contentTop, footerTop);
         if (logic$availableDevices.isEmpty()) {
             nextY = logic$drawHint(graphics, "No connected devices", nextY, contentTop, footerTop);
@@ -78,32 +94,55 @@ public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibr
     }
 
     @Inject(method = "drawSearchResults", at = @At("RETURN"), cancellable = true)
-    private void logic$appendDeviceSearchResults(
+    private void logic$appendBoardSearchResults(
             GuiGraphicsExtractor graphics, int y, int contentTop, int footerTop,
             CallbackInfoReturnable<Integer> cir
     ) {
         if (!logic$deviceLibraryEnabled || searchQuery == null || searchQuery.isBlank()) return;
         String query = searchQuery.toLowerCase(Locale.ROOT);
+        int nextY = cir.getReturnValue();
+
+        boolean inputSocket = "input socket".contains(query) || "board input".contains(query) || "socket".equals(query);
+        boolean outputSocket = "output socket".contains(query) || "board output".contains(query) || "socket".equals(query);
+        if (inputSocket || outputSocket) {
+            nextY += 4;
+            nextY = logic$drawSection(graphics, "BOARD I/O", nextY, contentTop, footerTop);
+            if (inputSocket) nextY = logic$drawIo(graphics, "INPUT SOCKET", PortDirection.INPUT, nextY, contentTop, footerTop);
+            if (outputSocket) nextY = logic$drawIo(graphics, "OUTPUT SOCKET", PortDirection.OUTPUT, nextY, contentTop, footerTop);
+        }
+
         List<ExternalDeviceDescriptor> matches = logic$availableDevices.stream()
                 .filter(device -> device.type().label().toLowerCase(Locale.ROOT).contains(query)
                         || device.deviceId().toLowerCase(Locale.ROOT).contains(query))
                 .toList();
-        if (matches.isEmpty()) return;
-        int nextY = cir.getReturnValue() + 4;
-        nextY = logic$drawSection(graphics, "DEVICES", nextY, contentTop, footerTop);
-        for (ExternalDeviceDescriptor device : matches) {
-            nextY = logic$drawDevice(graphics, device, nextY, contentTop, footerTop);
+        if (!matches.isEmpty()) {
+            nextY += 4;
+            nextY = logic$drawSection(graphics, "DEVICES", nextY, contentTop, footerTop);
+            for (ExternalDeviceDescriptor device : matches) {
+                nextY = logic$drawDevice(graphics, device, nextY, contentTop, footerTop);
+            }
         }
         cir.setReturnValue(nextY);
     }
 
     @Inject(method = "onClick", at = @At("HEAD"), cancellable = true)
-    private void logic$handleDeviceClick(MouseButtonEvent event, boolean doubleClick, CallbackInfo ci) {
+    private void logic$handleBoardExtensionClick(MouseButtonEvent event, boolean doubleClick, CallbackInfo ci) {
         if (!logic$deviceLibraryEnabled || event.button() != 0) return;
+
+        for (int i = logic$ioRows.size() - 1; i >= 0; i--) {
+            IoRow row = logic$ioRows.get(i);
+            if (!row.hit(event.x(), event.y())) continue;
+            canvas.cancelPlacement();
+            ((BoardTemplateCanvasAccess) (Object) canvas).logic$beginSocketPlacement(row.direction);
+            status.accept("Place " + row.label + " — click the BOARD; select it and press W to configure name/width/order");
+            ci.cancel();
+            return;
+        }
+
         DeviceRow hit = null;
         for (int i = logic$deviceRows.size() - 1; i >= 0; i--) {
             DeviceRow row = logic$deviceRows.get(i);
-            if (event.x() >= row.left && event.x() < row.right && event.y() >= row.top && event.y() < row.bottom) {
+            if (row.hit(event.x(), event.y())) {
                 hit = row;
                 break;
             }
@@ -141,6 +180,25 @@ public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibr
             graphics.text(Minecraft.getInstance().font, text, self.getX() + 13, y + 5, 0xFF66727F, false);
         }
         return y + 19;
+    }
+
+    @Unique
+    private int logic$drawIo(
+            GuiGraphicsExtractor graphics, String label, PortDirection direction,
+            int y, int clipTop, int clipBottom
+    ) {
+        ComponentLibraryWidget self = (ComponentLibraryWidget) (Object) this;
+        int left = self.getX() + 5;
+        int right = self.getX() + self.getWidth() - 5;
+        int height = 18;
+        if (logic$visible(y, height, clipTop, clipBottom)) {
+            int accent = direction == PortDirection.INPUT ? 0xFF4C86D9 : 0xFF7B68D9;
+            graphics.fill(left, y, right, y + height - 1, 0xFF181F26);
+            graphics.fill(left, y, left + 4, y + height - 1, accent);
+            graphics.text(Minecraft.getInstance().font, label, left + 9, y + 5, 0xFFD7DEE8, false);
+            logic$ioRows.add(new IoRow(label, direction, left, y, right, y + height));
+        }
+        return y + height + 1;
     }
 
     @Unique
@@ -188,5 +246,12 @@ public abstract class ComponentLibraryDevicesMixin implements ExternalDeviceLibr
     }
 
     @Unique
-    private record DeviceRow(ExternalDeviceDescriptor device, int left, int top, int right, int bottom) {}
+    private record DeviceRow(ExternalDeviceDescriptor device, int left, int top, int right, int bottom) {
+        boolean hit(double x, double y) { return x >= left && x < right && y >= top && y < bottom; }
+    }
+
+    @Unique
+    private record IoRow(String label, PortDirection direction, int left, int top, int right, int bottom) {
+        boolean hit(double x, double y) { return x >= left && x < right && y >= top && y < bottom; }
+    }
 }
