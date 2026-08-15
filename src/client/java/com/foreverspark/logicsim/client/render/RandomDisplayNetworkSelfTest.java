@@ -32,7 +32,7 @@ public final class RandomDisplayNetworkSelfTest {
         resetInput.width = 1;
         resetInput.label = "RESET";
 
-        // Reproduces the new log blocker: one RANDOM trigger group comes from a signal outside CLOCK/RANDOM outputs.
+        // Reproduces the real board: one RANDOM trigger group comes from outside CLOCK/RANDOM outputs.
         EditorNode externalTrigger = board.addNode(NodeKind.INPUT, -180, 140);
         externalTrigger.width = 1;
         externalTrigger.label = "RANDOM_TRIGGER";
@@ -116,6 +116,25 @@ public final class RandomDisplayNetworkSelfTest {
         check(compiled.plan().externalTriggerGroupCount() == 1,
                 "compiled network must preserve the one independent trigger group");
 
+        // The user's current wall is 1024x1024 logical. A 16-bit coordinate is in range iff bits 10..15 are zero.
+        // X and Y therefore compile to one 12-lane reject mask, avoiding 48-bit DISPLAY packing for ~4095/4096
+        // uniformly-random coordinates.
+        RandomDisplayNetworkFastPath.CompileResult filtered1024 = RandomDisplayNetworkResetCompat.compile(
+                runtime, 0, 1_024, 1_024
+        );
+        check(filtered1024.active(), "1024x1024 coordinate-prefilter plan must compile");
+        check(filtered1024.plan().coordinatePrefilterEnabled(),
+                "1024x1024 plan must use the packed coordinate prefilter");
+        check(filtered1024.plan().coordinatePrefilterLaneCount() == 12,
+                "1024x1024 X/Y prefilter must test exactly twelve high coordinate lanes");
+
+        RandomDisplayNetworkFastPath.CompileResult nonPowerOfTwo = RandomDisplayNetworkResetCompat.compile(
+                runtime, 0, 1_000, 1_000
+        );
+        check(nonPowerOfTwo.active(), "non-power-of-two display must still compile through exact fallback bounds checks");
+        check(!nonPowerOfTwo.plan().coordinatePrefilterEnabled(),
+                "non-power-of-two display must not use the high-bit-only coordinate prefilter");
+
         // Independent trigger groups are edge-detected once per worker slice, not scanned on every MHz clock edge.
         check(compiled.plan().externalTriggerFireCount() == 0L, "external trigger must start armed at LOW");
         compiled.plan().advance(0L, 0L, null);
@@ -165,6 +184,7 @@ public final class RandomDisplayNetworkSelfTest {
         System.out.println("48-RANDOM / 11-trigger-group / external INPUT trigger / dynamic RESET DISPLAY bulk self-test: PASS"
                 + " | emittedEdges=" + emitted + " commands=" + commandCount[0]
                 + " externalFires=" + compiled.plan().externalTriggerFireCount()
+                + " coordPrefilter1024=" + filtered1024.plan().coordinatePrefilterLaneCount() + " lanes"
                 + " resetSignal=" + resetSignalId + " compile=" + compiled.reason());
     }
 
