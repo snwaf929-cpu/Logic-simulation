@@ -5,6 +5,7 @@ import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import com.foreverspark.logicsim.client.render.RealtimeDisplaySurface;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
@@ -37,6 +38,9 @@ import java.util.Map;
  * into the same internal display command only at the physical boundary. They must feed the same realtime surface as
  * legacy DATA64 or the integrated renderer can legitimately prefer a black realtime surface over a newer server-side
  * framebuffer. The two maps below therefore keep legacy output-stream targets and explicit DEVICE targets separate.
+ *
+ * The old 2K stress path used a compiled packed CLOCK->RANDOM DATA64 boundary. V2.1A must not lose that engine merely
+ * because the user-facing DISPLAY became five typed pins, so a second bulk target tracks an eligible physical DISPLAY.
  */
 @Mixin(CircuitBlockEntity.class)
 public abstract class CircuitBlockRealtimeDisplayMixin {
@@ -53,9 +57,12 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
     @Unique private volatile Map<Object, RealtimeDisplaySurface.Surface> logic$realtimeDeviceTargets = Map.of();
     @Unique private volatile RealtimeDisplaySurface.Surface logic$bulkSurface;
     @Unique private volatile int logic$bulkOutputIndex = -1;
+    @Unique private volatile RealtimeDisplaySurface.Surface logic$bulkDeviceSurface;
+    @Unique private volatile int logic$bulkDeviceIndex = -1;
     @Unique private int logic$lastLoggedRealtimeTargetCount = -1;
     @Unique private int logic$lastLoggedRealtimeDeviceTargetCount = -1;
     @Unique private int logic$lastLoggedBulkOutputIndex = Integer.MIN_VALUE;
+    @Unique private int logic$lastLoggedBulkDeviceIndex = Integer.MIN_VALUE;
 
     @Inject(method = "refreshDisplayStreamPorts", at = @At("TAIL"))
     private void logic$refreshRealtimeDisplayRoutes(CallbackInfo ci) {
@@ -89,9 +96,9 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
         Map<Object, RealtimeDisplaySurface.Surface> immutable = mapped.isEmpty() ? Map.of() : Map.copyOf(mapped);
         logic$setRealtimeTargets(self, immutable);
 
-        // The aggressive path is deliberately exact and narrow. If the programmed circuit exposes only one output and
-        // that output is the compiled CLOCK -> RANDOM boundary feeding this realtime wall, there is no second external
-        // observer whose intermediate state could be lost by batching.
+        // The aggressive legacy path is deliberately exact and narrow. If the programmed circuit exposes only one
+        // output and that output is the compiled CLOCK -> RANDOM boundary feeding this realtime wall, there is no
+        // second external observer whose intermediate state could be lost by batching.
         int bulkIndex = -1;
         RealtimeDisplaySurface.Surface bulkSurface = null;
         if (current.outputPortCount() == 1 && current.directRandomBoundaryBatchEligible(0)) {
@@ -114,19 +121,21 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
         CircuitProgramRuntime current = runtime;
         if (current == null) {
             logic$setRealtimeDeviceTargets(self, Map.of());
+            logic$setBulkDeviceTarget(self, null, -1, null);
             return;
         }
 
         Object[] targets = logic$fieldArray(logic$externalDeviceTargetsField, self);
         if (targets.length == 0) {
             logic$setRealtimeDeviceTargets(self, Map.of());
+            logic$setBulkDeviceTarget(self, current, -1, null);
             return;
         }
 
         Map<Object, RealtimeDisplaySurface.Surface> mapped = new HashMap<>();
         int count = Math.min(targets.length, current.externalDeviceCount());
         for (int index = 0; index < count; index++) {
-            if (current.externalDeviceType(index) != com.foreverspark.logicsim.editor.model.ExternalDeviceType.DISPLAY) continue;
+            if (current.externalDeviceType(index) != ExternalDeviceType.DISPLAY) continue;
             Object externalTarget = targets[index];
             if (externalTarget == null) continue;
 
@@ -137,7 +146,26 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
             RealtimeDisplaySurface.Surface surface = logic$surfaceForDisplay(self, devicePos);
             if (surface != null) mapped.put(displayTarget, surface);
         }
-        logic$setRealtimeDeviceTargets(self, mapped.isEmpty() ? Map.of() : Map.copyOf(mapped));
+        Map<Object, RealtimeDisplaySurface.Surface> immutable = mapped.isEmpty() ? Map.of() : Map.copyOf(mapped);
+        logic$setRealtimeDeviceTargets(self, immutable);
+
+        int bulkDeviceIndex = -1;
+        RealtimeDisplaySurface.Surface bulkDeviceSurface = null;
+        if (current.outputPortCount() == 0
+                && current.externalDeviceCount() == 1
+                && current.externalDeviceType(0) == ExternalDeviceType.DISPLAY
+                && current.directRandomDeviceDisplayBatchEligible(0)) {
+            Object externalTarget = targets.length > 0 ? targets[0] : null;
+            Object displayTarget = logic$recordAccessor(externalTarget, "displayTarget");
+            if (displayTarget != null) {
+                RealtimeDisplaySurface.Surface candidate = immutable.get(displayTarget);
+                if (candidate != null) {
+                    bulkDeviceIndex = 0;
+                    bulkDeviceSurface = candidate;
+                }
+            }
+        }
+        logic$setBulkDeviceTarget(self, current, bulkDeviceIndex, bulkDeviceSurface);
     }
 
     @Unique
@@ -204,24 +232,50 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
 
         if (outputIndex < 0 || surface == null || current == null) {
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BULK] circuit={} active=false mode=normal-edge-engine",
+                    "[CLOCK BULK] circuit={} active=false boundary=legacy mode=normal-edge-engine",
                     self.getBlockPos()
             );
             return;
         }
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK BULK] circuit={} active=true outputIndex={} randomLanes={} mode=packed-direct-display maxEdgeChunk={} displayPreFilter=true logical={}x{} batchPublication=true",
+                "[CLOCK BULK] circuit={} active=true boundary=legacy outputIndex={} randomLanes={} mode=packed-direct-display maxEdgeChunk={} displayPreFilter=true logical={}x{} batchPublication=true",
                 self.getBlockPos(), outputIndex, current.directRandomBoundaryRandomLanes(outputIndex), LOGIC_BULK_EDGE_CHUNK,
                 surface.logicalWidth(), surface.logicalHeight()
         );
     }
 
+    @Unique
+    private void logic$setBulkDeviceTarget(
+            CircuitBlockEntity self,
+            CircuitProgramRuntime current,
+            int deviceIndex,
+            RealtimeDisplaySurface.Surface surface
+    ) {
+        logic$bulkDeviceIndex = deviceIndex;
+        logic$bulkDeviceSurface = surface;
+        if (deviceIndex == logic$lastLoggedBulkDeviceIndex) return;
+        logic$lastLoggedBulkDeviceIndex = deviceIndex;
+
+        if (deviceIndex < 0 || surface == null || current == null) {
+            LogicSimulationMod.LOGGER.info(
+                    "[CLOCK BULK DEVICE] circuit={} active=false mode=normal-edge-engine",
+                    self.getBlockPos()
+            );
+            return;
+        }
+
+        LogicSimulationMod.LOGGER.info(
+                "[CLOCK BULK DEVICE] circuit={} active=true deviceIndex={} randomLanes={} mode=packed-direct-device-display maxEdgeChunk={} logical={}x{} batchPublication=true",
+                self.getBlockPos(), deviceIndex, current.directRandomDeviceDisplayRandomLanes(deviceIndex),
+                LOGIC_BULK_EDGE_CHUNK, surface.logicalWidth(), surface.logicalHeight()
+        );
+    }
+
     /**
-     * Both clock-worker calls (queue elapsed time with budget 0, then consume fixed chunks) pass through here. The
-     * compiled direct plan keeps exact virtual edge accounting but emits only DATA64 commands that can affect the local
-     * display. Generic circuits keep their 4K fairness chunk; this single-clock zero-gate path can safely amortize the
-     * same bookkeeping over a much larger 64K chunk.
+     * Both clock-worker calls (queue elapsed time with budget 0, then consume fixed chunks) pass through here. Generic
+     * circuits keep their 4K fairness chunk. Proven single-clock direct-RANDOM display streams can safely amortize the
+     * same bookkeeping over a 64K chunk, whether the user sees legacy DATA64 or the V2.1A typed DISPLAY pins.
      */
     @WrapOperation(
             method = "runClockWorkerSlice",
@@ -237,6 +291,24 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
             Runnable afterSettledEdge,
             Operation<Long> original
     ) {
+        RealtimeDisplaySurface.Surface deviceSurface = logic$bulkDeviceSurface;
+        int deviceIndex = logic$bulkDeviceIndex;
+        if (deviceSurface != null
+                && deviceIndex >= 0
+                && current == runtime
+                && current.outputPortCount() == 0
+                && current.externalDeviceCount() == 1
+                && current.directRandomDeviceDisplayBatchEligible(deviceIndex)) {
+            long bulkBudget = logic$bulkBudget(edgeBudget);
+            long emitted = current.advanceDirectRandomDeviceDisplayNanos(
+                    elapsedNanos,
+                    bulkBudget,
+                    deviceIndex,
+                    deviceSurface::recordBatch
+            );
+            if (emitted >= 0L) return emitted;
+        }
+
         int outputIndex = logic$bulkOutputIndex;
         RealtimeDisplaySurface.Surface surface = logic$bulkSurface;
         if (surface != null
@@ -244,10 +316,7 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
                 && current == runtime
                 && current.outputPortCount() == 1
                 && current.directRandomBoundaryBatchEligible(outputIndex)) {
-            long bulkBudget = edgeBudget;
-            if (edgeBudget >= LOGIC_GENERIC_EDGE_CHUNK) {
-                bulkBudget = Math.min(LOGIC_BULK_EDGE_CHUNK, edgeBudget << 4);
-            }
+            long bulkBudget = logic$bulkBudget(edgeBudget);
             long emitted = current.advanceDirectRandomDisplayBoundaryNanos(
                     elapsedNanos,
                     bulkBudget,
@@ -259,6 +328,12 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
             if (emitted >= 0L) return emitted;
         }
         return original.call(current, elapsedNanos, edgeBudget, afterSettledEdge);
+    }
+
+    @Unique
+    private static long logic$bulkBudget(long edgeBudget) {
+        if (edgeBudget < LOGIC_GENERIC_EDGE_CHUNK) return edgeBudget;
+        return Math.min(LOGIC_BULK_EDGE_CHUNK, edgeBudget << 4);
     }
 
     @WrapOperation(
@@ -356,9 +431,12 @@ public abstract class CircuitBlockRealtimeDisplayMixin {
         logic$realtimeDeviceTargets = Map.of();
         logic$bulkSurface = null;
         logic$bulkOutputIndex = -1;
+        logic$bulkDeviceSurface = null;
+        logic$bulkDeviceIndex = -1;
         logic$lastLoggedRealtimeTargetCount = -1;
         logic$lastLoggedRealtimeDeviceTargetCount = -1;
         logic$lastLoggedBulkOutputIndex = Integer.MIN_VALUE;
+        logic$lastLoggedBulkDeviceIndex = Integer.MIN_VALUE;
     }
 
     @Unique
