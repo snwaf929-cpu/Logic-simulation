@@ -44,7 +44,17 @@ public final class CableRuntime {
             if (!(level.getBlockEntity(endpoint.devicePos()) instanceof CircuitBlockEntity circuit)) continue;
             PortSpec port = DirectPortResolver.unique(circuit, network.kind(), network.width());
             if (port == null || port.direction() != PortDirection.OUTPUT) continue;
-            long value = circuit.outputValue(port.name()) & mask(network.width());
+
+            long value;
+            try {
+                value = circuit.outputValue(port.name()) & mask(network.width());
+            } catch (IllegalStateException unknownPortValue) {
+                // Sequential circuits legitimately expose UNKNOWN during power-up/reset settling. Physical cables and
+                // displays must hold their last known level (or the default 0 for a never-initialized network), not
+                // crash the server because a boundary bus is temporarily X.
+                continue;
+            }
+
             if (source == null) source = value;
             else if (source.longValue() != value) {
                 source = 0L;

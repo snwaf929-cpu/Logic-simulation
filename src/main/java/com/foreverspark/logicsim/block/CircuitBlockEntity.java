@@ -34,6 +34,13 @@ public final class CircuitBlockEntity extends BlockEntity {
     public static final int MAX_BOARD_JSON = 2_000_000;
     private static final int MAX_PROGRAM_JSON = 2_000_000;
     private static final Gson BOARD_GSON = new GsonBuilder().disableHtmlEscaping().create();
+    /**
+     * NBT String payloads are written with modified UTF and therefore have a 65,535-byte ceiling. A Java char can
+     * occupy up to three bytes there, so 20k chars keeps every persisted chunk safely below the format limit even
+     * when labels contain non-ASCII text.
+     */
+    private static final int NBT_STRING_CHUNK_CHARS = 20_000;
+    private static final int MAX_NBT_STRING_CHUNKS = 256;
 
     /** Worker budgets are wall-clock fairness limits, NOT Minecraft-tick limits. */
     private static final long WORKER_SLICE_WALL_BUDGET_NANOS = 2_500_000L;
@@ -603,16 +610,16 @@ public final class CircuitBlockEntity extends BlockEntity {
 
     @Override
     protected void saveAdditional(ValueOutput output) {
-        if (!boardJson.isBlank()) output.putString("board", boardJson);
-        if (!programJson.isBlank()) output.putString("program", programJson);
+        putChunkedString(output, "board", boardJson);
+        putChunkedString(output, "program", programJson);
         super.saveAdditional(output);
     }
 
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
-        boardJson = input.getStringOr("board", "");
-        programJson = input.getStringOr("program", "");
+        boardJson = getChunkedString(input, "board");
+        programJson = getChunkedString(input, "program");
         synchronized (runtimeLock) {
             runtime = null;
             runtimeError = "";
@@ -628,6 +635,49 @@ public final class CircuitBlockEntity extends BlockEntity {
                 runtimeError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             }
         }
+    }
+
+    private static void putChunkedString(ValueOutput output, String key, String value) {
+        if (value == null || value.isBlank()) return;
+        if (value.length() <= NBT_STRING_CHUNK_CHARS) {
+            output.putString(key, value);
+            return;
+        }
+
+        int chunkCount = (value.length() + NBT_STRING_CHUNK_CHARS - 1) / NBT_STRING_CHUNK_CHARS;
+        if (chunkCount > MAX_NBT_STRING_CHUNKS) {
+            throw new IllegalStateException("Circuit persistence payload has too many NBT string chunks: " + chunkCount);
+        }
+        output.putString(key + "_chunk_count", Integer.toString(chunkCount));
+        for (int index = 0; index < chunkCount; index++) {
+            int start = index * NBT_STRING_CHUNK_CHARS;
+            int end = Math.min(value.length(), start + NBT_STRING_CHUNK_CHARS);
+            output.putString(key + "_chunk_" + index, value.substring(start, end));
+        }
+    }
+
+    private static String getChunkedString(ValueInput input, String key) {
+        String countText = input.getStringOr(key + "_chunk_count", "");
+        if (countText.isBlank()) return input.getStringOr(key, "");
+
+        final int chunkCount;
+        try {
+            chunkCount = Integer.parseInt(countText);
+        } catch (NumberFormatException ignored) {
+            return input.getStringOr(key, "");
+        }
+        if (chunkCount <= 0 || chunkCount > MAX_NBT_STRING_CHUNKS) return input.getStringOr(key, "");
+
+        StringBuilder joined = new StringBuilder(Math.min(
+                MAX_PROGRAM_JSON,
+                chunkCount * NBT_STRING_CHUNK_CHARS
+        ));
+        for (int index = 0; index < chunkCount; index++) {
+            String chunk = input.getStringOr(key + "_chunk_" + index, "");
+            if (chunk.isEmpty()) return input.getStringOr(key, "");
+            joined.append(chunk);
+        }
+        return joined.toString();
     }
 
     private record OutputEvent(String portName, long value) {}
