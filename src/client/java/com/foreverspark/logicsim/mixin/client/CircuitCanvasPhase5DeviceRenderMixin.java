@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.List;
 
-/** Distinct DEVICE schematic presentation; UNKNOWN persists instead of disappearing when hardware disconnects. */
+/** Distinct physical DEVICE presentation with explicit named/typed ports and persistent disconnect state. */
 @Mixin(value = CircuitCanvasWidget.class, priority = 2700)
 public abstract class CircuitCanvasPhase5DeviceRenderMixin {
     @Unique private static final double DEVICE_WIDTH = 126.0;
@@ -57,31 +57,54 @@ public abstract class CircuitCanvasPhase5DeviceRenderMixin {
         int ports = Math.max(safeInputs(node).size(), safeOutputs(node).size());
         double height = Math.max(54.0, 42.0 + Math.max(0, ports - 1) * DEVICE_PORT_STEP);
         int h = Math.max(28, (int)Math.round(height * zoom));
-        boolean connected = node.externalDeviceState == ExternalDeviceState.CONNECTED;
-        int accent = connected ? 0xFF4DBA78 : 0xFFB47A46;
+
+        int accent = switch (node.externalDeviceState) {
+            case CONNECTED -> 0xFF4DBA78;
+            case DISCONNECTED -> 0xFFE05B5B;
+            case UNKNOWN -> 0xFFB47A46;
+        };
         int border = isNodeSelected(node.id) ? 0xFFFFFFFF : accent;
 
         graphics.fill(x, y, x + w, y + h, 0xF012171C);
         graphics.outline(x, y, w, h, border);
         graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(4 * zoom)), accent);
-        String title = "DEVICE  " + node.externalDeviceType.label();
-        graphics.text(Minecraft.getInstance().font, trim(title, w - 8), x + 5, y + 8, 0xFFF0F4F7, true);
-        String state = connected ? "CONNECTED" : "UNKNOWN";
-        graphics.text(Minecraft.getInstance().font, state, x + 5, y + h - 13, accent, false);
+        String title = node.externalDeviceType == null ? "DEVICE" : node.externalDeviceType.label();
+        if (zoom >= 0.48) graphics.text(Minecraft.getInstance().font, trim(title, w - 8), x + 5, y + 8, 0xFFF0F4F7, true);
+
+        String state = node.externalDeviceState == null ? "UNKNOWN" : node.externalDeviceState.name();
+        if (zoom >= 0.58) graphics.text(Minecraft.getInstance().font, state, x + 5, y + h - 13, accent, false);
 
         List<PortSpec> inputs = safeInputs(node);
         for (int port = 0; port < inputs.size(); port++) {
+            PortSpec spec = inputs.get(port);
             double py = node.y + 30.0 + port * DEVICE_PORT_STEP;
             int sx = screenX(node.x), sy = screenY(py);
-            EditorPinGeometry.draw(graphics, sx, sy, inputs.get(port).width(), portDisplayColor(node, port, inputs.get(port), true));
+            EditorPinGeometry.draw(graphics, sx, sy, spec.width(), portDisplayColor(node, port, spec, true));
+            if (zoom >= 0.60) {
+                String label = logic$portLabel(spec);
+                graphics.text(Minecraft.getInstance().font, label, sx + 7, sy - 4, 0xFFC4CDD6, false);
+            }
         }
+
         List<PortSpec> outputs = safeOutputs(node);
         for (int port = 0; port < outputs.size(); port++) {
+            PortSpec spec = outputs.get(port);
             double py = node.y + 30.0 + port * DEVICE_PORT_STEP;
             int sx = screenX(node.x + DEVICE_WIDTH), sy = screenY(py);
-            EditorPinGeometry.draw(graphics, sx, sy, outputs.get(port).width(), portDisplayColor(node, port, outputs.get(port), false));
+            EditorPinGeometry.draw(graphics, sx, sy, spec.width(), portDisplayColor(node, port, spec, false));
+            if (zoom >= 0.60) {
+                String label = logic$portLabel(spec);
+                int labelX = sx - 7 - Minecraft.getInstance().font.width(label);
+                graphics.text(Minecraft.getInstance().font, label, labelX, sy - 4, 0xFFC4CDD6, false);
+            }
         }
         ci.cancel();
+    }
+
+    @Unique
+    private static String logic$portLabel(PortSpec spec) {
+        if (spec == null) return "?";
+        return spec.name() + " [" + spec.width() + "]";
     }
 
     @Unique
