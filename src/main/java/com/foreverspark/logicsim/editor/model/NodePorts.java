@@ -20,6 +20,7 @@ public final class NodePorts {
             case MERGER -> lanePorts(node, PortDirection.INPUT);
             case NET_LABEL -> List.of(new PortSpec("NET", PortDirection.INPUT, node.width));
             case CUSTOM_CHIP -> requireChip(node, chips).inputPorts();
+            case EXTERNAL_DEVICE -> deviceType(node).inputs();
         };
     }
 
@@ -35,7 +36,13 @@ public final class NodePorts {
             case BUS_SLICE -> slicePorts(node);
             case NET_LABEL -> List.of(new PortSpec("NET", PortDirection.OUTPUT, node.width));
             case CUSTOM_CHIP -> requireChip(node, chips).outputPorts();
+            case EXTERNAL_DEVICE -> deviceType(node).outputs();
         };
+    }
+
+    private static ExternalDeviceType deviceType(EditorNode node) {
+        if (node.externalDeviceType == null) node.externalDeviceType = ExternalDeviceType.DISPLAY;
+        return node.externalDeviceType;
     }
 
     private static List<PortSpec> lanePorts(EditorNode node, PortDirection direction) {
