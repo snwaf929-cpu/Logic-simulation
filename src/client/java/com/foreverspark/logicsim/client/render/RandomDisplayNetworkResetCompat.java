@@ -4,25 +4,18 @@ import com.foreverspark.logicsim.core.Signal;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
-import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 
 /**
- * Structural adapter for DISPLAY boards whose RESET is electrically tied to a provably static LOW signal.
+ * Adapter that lets the RANDOM DISPLAY bulk compiler accept a real wired RESET input.
  *
- * <p>The high-rate RANDOM display engines historically required RESET to be literally unwired. Electrically, an
- * unwired DISPLAY reset is a floating LOW, so a routed LOW constant is equivalent. The editor may route that constant
- * through BUS, SPLITTER, MERGER, BUS_SLICE, NET_LABEL or branch metadata before it reaches the DISPLAY. Looking only at
- * the immediate source node therefore rejects valid boards. This adapter proves the actual compiled signal identity:
- * the DISPLAY RESET signal must alias a LOW bit of an ordinary non-clock/non-random CONSTANT and must currently read
- * LOW. Passive routing nodes preserve the same compiled Signal object/id, so this proof survives all of those routes
- * without treating dynamic INPUT/CLOCK/RANDOM/NAND/custom-chip sources as static.</p>
- *
- * <p>After proof, only the presentation/model RESET wire is temporarily hidden while the strict fast-path compiler is
- * asked to build its plan. The immutable compiled runtime is untouched and the real wire is restored in a finally
- * block. The saved BOARD is never modified.</p>
+ * <p>The packed RANDOM engine does not use RESET to compute X/Y/COLOR or RANDOM state, so RESET does not need to
+ * disable compilation. The strict compiler still rejects a RESET wire to keep its closed-world proof simple. This
+ * adapter temporarily hides only that presentation/model wire while the immutable already-compiled runtime is
+ * inspected, then restores it immediately. The real compiled RESET signal remains intact and is monitored by the
+ * worker mixin with normal rising-edge CLEAR semantics.</p>
  */
 public final class RandomDisplayNetworkResetCompat {
     private RandomDisplayNetworkResetCompat() {}
@@ -44,12 +37,12 @@ public final class RandomDisplayNetworkResetCompat {
         if (board == null) return direct;
         EditorNode display = findDisplay(runtime, board, deviceIndex);
         if (display == null) return direct;
-
         WireConnection resetWire = resetWire(board, display.id);
         if (resetWire == null) return direct;
-        StaticLowProof proof = proveStaticLow(runtime, board, display, resetWire);
-        if (!proof.proven()) {
-            return new RandomDisplayNetworkFastPath.CompileResult(null, "display-reset-not-static-low:" + proof.detail());
+
+        int resetSignalId = resetSignalId(runtime, deviceIndex);
+        if (resetSignalId < 0) {
+            return new RandomDisplayNetworkFastPath.CompileResult(null, "display-reset-signal-unresolved");
         }
 
         int index = board.wires.indexOf(resetWire);
@@ -60,55 +53,29 @@ public final class RandomDisplayNetworkResetCompat {
                     runtime, deviceIndex, displayWidth, displayHeight
             );
             if (!compatible.active()) return compatible;
+            EditorNode immediate = nodeById(board, resetWire.sourceNodeId());
+            String source = immediate == null
+                    ? "missing-node-" + resetWire.sourceNodeId()
+                    : immediate.kind + "-node-" + immediate.id + "-port-" + resetWire.sourcePort();
             return new RandomDisplayNetworkFastPath.CompileResult(
                     compatible.plan(),
-                    "active-static-low-reset:" + proof.detail()
+                    "active-dynamic-reset:source=" + source + ":signal=" + resetSignalId
             );
         } finally {
             board.wires.add(Math.min(index, board.wires.size()), resetWire);
         }
     }
 
-    private static StaticLowProof proveStaticLow(
-            CircuitProgramRuntime runtime,
-            CircuitDocument board,
-            EditorNode display,
-            WireConnection resetWire
-    ) {
-        CompiledCircuit compiled = runtime.compiled();
-        Signal reset = compiled.inputSignal(CompiledCircuit.ROOT_SCOPE, display.id, 4, 0);
-        if (reset == null) return new StaticLowProof(false, "compiled-reset-missing");
-        if (compiled.simulator().isHighFast(reset.id())) {
-            return new StaticLowProof(false, "reset-currently-high:signal=" + reset.id());
-        }
-
-        // Passive routing is compiled as signal aliasing. If RESET shares the exact signal id with a LOW bit from an
-        // ordinary CONSTANT, it cannot change during runtime and is safe to treat exactly like an unwired LOW reset.
-        for (EditorNode source : board.nodes) {
-            if (source == null || source.kind != NodeKind.CONSTANT || source.clockSource || source.randomSource) continue;
-            Signal[] outputs = compiled.outputSignals(CompiledCircuit.ROOT_SCOPE, source.id, 0);
-            if (outputs == null) continue;
-            for (int bit = 0; bit < outputs.length; bit++) {
-                if (outputs[bit] == null || outputs[bit].id() != reset.id()) continue;
-                boolean high = bit < 64 && ((source.constantValue >>> bit) & 1L) != 0L;
-                if (!high) {
-                    return new StaticLowProof(
-                            true,
-                            "constant-node=" + source.id + ":bit=" + bit + ":signal=" + reset.id()
-                    );
-                }
-                return new StaticLowProof(
-                        false,
-                        "aliases-high-constant:node=" + source.id + ":bit=" + bit + ":signal=" + reset.id()
-                );
-            }
-        }
-
-        EditorNode immediate = nodeById(board, resetWire.sourceNodeId());
-        String source = immediate == null
-                ? "missing-node-" + resetWire.sourceNodeId()
-                : immediate.kind + "-node-" + immediate.id + "-port-" + resetWire.sourcePort();
-        return new StaticLowProof(false, "source=" + source + ":signal=" + reset.id());
+    /** Returns the real compiled one-bit RESET signal. It remains live even while the model wire is hidden for proof. */
+    public static int resetSignalId(CircuitProgramRuntime runtime, int deviceIndex) {
+        if (runtime == null || deviceIndex < 0 || deviceIndex >= runtime.externalDeviceCount()) return -1;
+        if (runtime.externalDeviceType(deviceIndex) != ExternalDeviceType.DISPLAY) return -1;
+        CircuitDocument board = runtime.program().root.circuit;
+        if (board == null) return -1;
+        EditorNode display = findDisplay(runtime, board, deviceIndex);
+        if (display == null) return -1;
+        Signal reset = runtime.compiled().inputSignal(CompiledCircuit.ROOT_SCOPE, display.id, 4, 0);
+        return reset == null ? -1 : reset.id();
     }
 
     private static EditorNode findDisplay(CircuitProgramRuntime runtime, CircuitDocument board, int deviceIndex) {
@@ -139,6 +106,4 @@ public final class RandomDisplayNetworkResetCompat {
         }
         return null;
     }
-
-    private record StaticLowProof(boolean proven, String detail) {}
 }
