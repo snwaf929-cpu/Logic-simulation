@@ -93,6 +93,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                 logic$resetAwareDeviceIndex = index;
                 logic$log(self,
                         "active:device=" + index
+                                + ":logical=" + surface.logicalWidth() + "x" + surface.logicalHeight()
                                 + ":groups=" + existing.triggerGroupCount()
                                 + ":lanes=" + existing.randomLaneCount()
                                 + ":external=" + existing.externalTriggerGroupCount()
@@ -123,6 +124,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
             logic$resetTracker = new DisplayResetEdgeTracker(current, resetSignalId);
             logic$log(self,
                     "active:device=" + index
+                            + ":logical=" + surface.logicalWidth() + "x" + surface.logicalHeight()
                             + ":groups=" + result.plan().triggerGroupCount()
                             + ":lanes=" + result.plan().randomLaneCount()
                             + ":external=" + result.plan().externalTriggerGroupCount()
@@ -235,14 +237,14 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
 
     @Unique
     private static RealtimeDisplaySurface.Surface logic$surfaceForDisplay(Level level, BlockPos displayPos) {
-        RealtimeDisplaySurface.TileView existing = RealtimeDisplaySurface.tileView(displayPos);
-        if (existing != null) return existing.surface();
-
+        if (level == null || level.isClientSide() || displayPos == null) return null;
         BlockState state = level.getBlockState(displayPos);
         if (!(state.getBlock() instanceof DisplayBlock)) return null;
         DisplayBlockEntity.WallInfo info = DisplayBlockEntity.wallInfo(level, displayPos, state);
         if (info == null || info.pixelWidth() <= 0 || info.pixelHeight() <= 0) return null;
         try {
+            // Do not return an existing TileView blindly. configureWall compares density/geometry and replaces stale
+            // 32px surfaces when the same physical wall is now 64px per tile.
             Object value = logic$configureRealtimeWallMethod.invoke(null, level, displayPos, state, info.pixelsPerTile());
             return value instanceof RealtimeDisplaySurface.Surface surface ? surface : null;
         } catch (ReflectiveOperationException exception) {
