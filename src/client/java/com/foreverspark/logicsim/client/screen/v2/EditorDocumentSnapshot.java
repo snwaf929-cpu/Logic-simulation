@@ -1,0 +1,94 @@
+package com.foreverspark.logicsim.client.screen.v2;
+
+import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.RoutePoint;
+import com.foreverspark.logicsim.editor.model.WireConnection;
+
+import java.util.ArrayList;
+
+/** Dependency-free deep copies used by editor undo/redo and regression tests. */
+public final class EditorDocumentSnapshot {
+    private EditorDocumentSnapshot() {}
+
+    public static CircuitDocument copy(CircuitDocument source) {
+        CircuitDocument result = new CircuitDocument();
+        if (source == null) return result;
+
+        result.formatVersion = source.formatVersion;
+        result.nextNodeId = source.nextNodeId;
+        result.nodes = new ArrayList<>(source.nodes.size());
+        for (EditorNode node : source.nodes) result.nodes.add(copyNode(node));
+
+        result.wires = new ArrayList<>(source.wires.size());
+        for (WireConnection wire : source.wires) result.wires.add(copyWire(wire));
+        result.normalize();
+        return result;
+    }
+
+    public static boolean same(CircuitDocument a, CircuitDocument b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.formatVersion != b.formatVersion || a.nextNodeId != b.nextNodeId) return false;
+        if (a.nodes.size() != b.nodes.size() || a.wires.size() != b.wires.size()) return false;
+
+        for (int i = 0; i < a.nodes.size(); i++) {
+            if (!sameNode(a.nodes.get(i), b.nodes.get(i))) return false;
+        }
+        for (int i = 0; i < a.wires.size(); i++) {
+            if (!a.wires.get(i).equals(b.wires.get(i))) return false;
+        }
+        return true;
+    }
+
+    private static EditorNode copyNode(EditorNode source) {
+        EditorNode node = new EditorNode();
+        node.id = source.id;
+        node.kind = source.kind;
+        node.x = source.x;
+        node.y = source.y;
+        node.width = source.width;
+        node.laneWidth = source.laneWidth;
+        node.label = source.label == null ? "" : source.label;
+        node.chipName = source.chipName == null ? "" : source.chipName;
+        node.constantValue = source.constantValue;
+        node.inputDefaultValue = source.inputDefaultValue;
+        node.clockSource = source.clockSource;
+        node.clockFrequencyHz = source.clockFrequencyHz;
+        node.randomSource = source.randomSource;
+        node.randomChancePercent = source.randomChancePercent;
+        return node;
+    }
+
+    private static WireConnection copyWire(WireConnection source) {
+        WireConnection wire = new WireConnection(
+                source.sourceNodeId(), source.sourcePort(), source.targetNodeId(), source.targetPort());
+        ArrayList<RoutePoint> route = new ArrayList<>();
+        for (RoutePoint point : source.routePoints()) route.add(new RoutePoint(point.x(), point.y()));
+        wire.setRoutePoints(route);
+        RoutePoint branch = source.branchStart();
+        if (branch != null) wire.setBranchStart(new RoutePoint(branch.x(), branch.y()));
+        return wire;
+    }
+
+    private static boolean sameNode(EditorNode a, EditorNode b) {
+        return a.id == b.id
+                && a.kind == b.kind
+                && Double.compare(a.x, b.x) == 0
+                && Double.compare(a.y, b.y) == 0
+                && a.width == b.width
+                && a.laneWidth == b.laneWidth
+                && safe(a.label).equals(safe(b.label))
+                && safe(a.chipName).equals(safe(b.chipName))
+                && a.constantValue == b.constantValue
+                && a.inputDefaultValue == b.inputDefaultValue
+                && a.clockSource == b.clockSource
+                && a.clockFrequencyHz == b.clockFrequencyHz
+                && a.randomSource == b.randomSource
+                && a.randomChancePercent == b.randomChancePercent;
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+}
