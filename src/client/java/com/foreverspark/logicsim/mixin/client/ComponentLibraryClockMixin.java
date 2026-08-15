@@ -21,15 +21,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.function.Consumer;
 
+/** Adds CLOCK/RANDOM infrastructure only. Physical DEVICE nodes are discovered from the world, never placed here. */
 @Mixin(value = ComponentLibraryWidget.class, priority = 1200)
 public abstract class ComponentLibraryClockMixin {
     private static final int EXTRA_ROW_HEIGHT = 18;
     private static final int EXTRA_ROW_STEP = 19;
-    private static final int SECTION_HEIGHT = 14;
     private static final int CONTENT_TOP_OFFSET = 25;
 
     @Shadow private CircuitCanvasWidget canvas;
@@ -37,46 +35,21 @@ public abstract class ComponentLibraryClockMixin {
 
     @Unique private int logic$clockRowY = Integer.MIN_VALUE;
     @Unique private int logic$randomRowY = Integer.MIN_VALUE;
-    @Unique private final Map<String, Integer> logic$deviceRowYs = new HashMap<>();
 
     @Inject(method = "drawComponent", at = @At("RETURN"), cancellable = true)
     private void logic$insertExtraRows(GuiGraphicsExtractor graphics, String name, NodeKind kind, int color,
                                        int y, int clipTop, int clipBottom, CallbackInfoReturnable<Integer> cir) {
-        if (kind == NodeKind.CONSTANT) {
-            EditorClockRuntime.attach(canvas);
-            int rowY = cir.getReturnValue();
-            logic$clockRowY = rowY;
-            logic$drawRow(graphics, rowY, clipTop, clipBottom, "CLOCK", 0xFF5FA8FF,
-                    EditorNode.formatFrequency(ClockPlacementState.frequencyHz()), 0xFF9BCBFF);
-            rowY += EXTRA_ROW_STEP;
-
-            logic$randomRowY = rowY;
-            logic$drawRow(graphics, rowY, clipTop, clipBottom, "RANDOM", 0xFFB06CE8,
-                    RandomPlacementState.chancePercent() + "% HIGH", 0xFFC9A7E8);
-            cir.setReturnValue(rowY + EXTRA_ROW_STEP);
-            return;
-        }
-
-        if (kind == NodeKind.PROBE) {
-            int sectionY = cir.getReturnValue() + 3;
-            logic$drawSection(graphics, sectionY, clipTop, clipBottom, "DEVICES");
-            int rowY = sectionY + SECTION_HEIGHT;
-            logic$deviceRowYs.clear();
-            for (BuiltinDevices.DeviceEntry device : BuiltinDevices.devices()) {
-                logic$deviceRowYs.put(device.id(), rowY);
-                logic$drawRow(graphics, rowY, clipTop, clipBottom, device.label(), device.color(),
-                        device.badge(), device.badgeColor());
-                rowY += EXTRA_ROW_STEP;
-            }
-            cir.setReturnValue(rowY);
-        }
-    }
-
-    @Unique
-    private void logic$drawSection(GuiGraphicsExtractor graphics, int rowY, int clipTop, int clipBottom, String text) {
-        if (rowY + SECTION_HEIGHT <= clipTop || rowY >= clipBottom) return;
-        ComponentLibraryWidget self = (ComponentLibraryWidget)(Object)this;
-        graphics.text(Minecraft.getInstance().font, text, self.getX() + 7, rowY + 3, 0xFF737E8B, false);
+        if (kind != NodeKind.CONSTANT) return;
+        EditorClockRuntime.attach(canvas);
+        int rowY = cir.getReturnValue();
+        logic$clockRowY = rowY;
+        logic$drawRow(graphics, rowY, clipTop, clipBottom, "CLOCK", 0xFF5FA8FF,
+                EditorNode.formatFrequency(ClockPlacementState.frequencyHz()), 0xFF9BCBFF);
+        rowY += EXTRA_ROW_STEP;
+        logic$randomRowY = rowY;
+        logic$drawRow(graphics, rowY, clipTop, clipBottom, "RANDOM", 0xFFB06CE8,
+                RandomPlacementState.chancePercent() + "% HIGH", 0xFFC9A7E8);
+        cir.setReturnValue(rowY + EXTRA_ROW_STEP);
     }
 
     @Unique
@@ -138,42 +111,19 @@ public abstract class ComponentLibraryClockMixin {
                 }));
             } else return;
             ci.cancel();
-            return;
-        }
-
-        for (BuiltinDevices.DeviceEntry device : BuiltinDevices.devices()) {
-            int rowY = logic$deviceRowYs.getOrDefault(device.id(), Integer.MIN_VALUE);
-            if (!logic$visibleHit(rowY, event.y(), clipTop, clipBottom)) continue;
-            if (event.button() == 0) {
-                ClockPlacementState.disarm();
-                RandomPlacementState.disarm();
-                canvas.setCustomChipPlacement(device.id());
-                if (BuiltinDevices.isDisplay(device.id())) {
-                    status.accept("Place SCREEN OUTPUT — it automatically adds and wires the required SCREEN_DATA OUTPUT[64].");
-                } else {
-                    status.accept("Place " + device.label() + " — " + device.help());
-                }
-            } else if (event.button() == 1) {
-                status.accept(device.label() + ": " + device.help());
-            } else return;
-            ci.cancel();
-            return;
         }
     }
 
     @Unique
     private static boolean logic$visibleHit(int rowY, double mouseY, int clipTop, int clipBottom) {
-        return rowY != Integer.MIN_VALUE
-                && rowY + EXTRA_ROW_HEIGHT > clipTop
-                && rowY < clipBottom
-                && mouseY >= rowY
-                && mouseY < rowY + EXTRA_ROW_HEIGHT;
+        return rowY != Integer.MIN_VALUE && rowY + EXTRA_ROW_HEIGHT > clipTop && rowY < clipBottom
+                && mouseY >= rowY && mouseY < rowY + EXTRA_ROW_HEIGHT;
     }
 
-    /** Suppress user-saved entries that collide with reserved built-in device IDs. */
+    /** Old fake built-in IDs stay hidden if stale chip files exist on disk. */
     @Inject(method = "drawChip", at = @At("HEAD"), cancellable = true)
-    private void logic$hideLegacyBuiltinChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom,
-                                             CallbackInfoReturnable<Integer> cir) {
-        if (BuiltinDevices.isBuiltin(chipName)) cir.setReturnValue(y);
+    private void logic$hideLegacyFakeChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom,
+                                          CallbackInfoReturnable<Integer> cir) {
+        if (BuiltinDevices.isRemovedFake(chipName) || BuiltinDevices.isDisplay(chipName)) cir.setReturnValue(y);
     }
 }
