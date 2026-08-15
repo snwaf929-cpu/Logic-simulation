@@ -4,7 +4,6 @@ import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceDescriptor;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceState;
-import com.foreverspark.logicsim.editor.model.NodeKind;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -12,7 +11,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Reconciles transient world discovery with persistent schematic DEVICE nodes. */
+/**
+ * Reconciles transient world discovery with persistent schematic DEVICE nodes.
+ *
+ * <p>V2.1A deliberately never creates canvas nodes from discovery. Physical devices first appear in the
+ * DEVICES library; a user explicitly places a reference on a BOARD. Once placed, that reference survives
+ * unplugging and reconnects by stable device id without moving or rewiring it.</p>
+ */
 public final class ExternalDeviceSync {
     private ExternalDeviceSync() {}
 
@@ -21,37 +26,55 @@ public final class ExternalDeviceSync {
         document.normalize();
         List<ExternalDeviceDescriptor> safe = discovered == null ? List.of() : List.copyOf(discovered);
 
-        Map<String, EditorNode> existing = new HashMap<>();
-        for (EditorNode node : document.externalDeviceNodes()) {
-            node.externalDeviceState = ExternalDeviceState.UNKNOWN;
-            if (node.externalDeviceId != null && !node.externalDeviceId.isBlank()) existing.put(node.externalDeviceId, node);
-        }
-
-        double baseX = document.nodes.stream().filter(node -> !node.isExternalDevice())
-                .mapToDouble(node -> node.x).max().orElse(0.0) + 150.0;
-        double baseY = document.nodes.stream().filter(EditorNode::isExternalDevice)
-                .mapToDouble(node -> node.y).max().orElse(-72.0) + 72.0;
-        int created = 0;
-        int connected = 0;
-        Set<String> seen = new HashSet<>();
-
+        Map<String, ExternalDeviceDescriptor> byId = new HashMap<>();
+        Set<String> duplicateIds = new HashSet<>();
         for (ExternalDeviceDescriptor descriptor : safe) {
             if (descriptor == null || descriptor.deviceId() == null || descriptor.deviceId().isBlank()) continue;
-            if (!seen.add(descriptor.deviceId())) continue;
-            EditorNode node = existing.get(descriptor.deviceId());
-            if (node == null) {
-                node = document.addNode(NodeKind.EXTERNAL_DEVICE, EditorGrid.snap(baseX), EditorGrid.snap(baseY + created * 72.0));
-                created++;
+            String id = descriptor.deviceId().trim();
+            if (byId.putIfAbsent(id, descriptor) != null) duplicateIds.add(id);
+        }
+
+        int connected = 0;
+        int disconnected = 0;
+        int unknown = 0;
+        boolean changed = false;
+
+        for (EditorNode node : document.externalDeviceNodes()) {
+            String id = node.externalDeviceId == null ? "" : node.externalDeviceId.trim();
+            if (id.isEmpty()) {
+                if (node.externalDeviceState != ExternalDeviceState.UNKNOWN) changed = true;
+                node.externalDeviceState = ExternalDeviceState.UNKNOWN;
+                unknown++;
+                continue;
             }
-            node.configureExternalDevice(descriptor.type(), descriptor.deviceId(), ExternalDeviceState.CONNECTED,
+
+            ExternalDeviceDescriptor descriptor = duplicateIds.contains(id) ? null : byId.get(id);
+            if (descriptor == null) {
+                if (node.externalDeviceState != ExternalDeviceState.DISCONNECTED) changed = true;
+                node.externalDeviceState = ExternalDeviceState.DISCONNECTED;
+                disconnected++;
+                continue;
+            }
+
+            if (node.externalDeviceState != ExternalDeviceState.CONNECTED
+                    || node.externalDeviceType != descriptor.type()
+                    || !same(node.externalDeviceWorld, descriptor.world())
+                    || node.externalDeviceX != descriptor.x()
+                    || node.externalDeviceY != descriptor.y()
+                    || node.externalDeviceZ != descriptor.z()) {
+                changed = true;
+            }
+            node.configureExternalDevice(descriptor.type(), id, ExternalDeviceState.CONNECTED,
                     descriptor.world(), descriptor.x(), descriptor.y(), descriptor.z());
             connected++;
         }
-        document.normalize();
-        int unknown = (int) document.externalDeviceNodes().stream()
-                .filter(node -> node.externalDeviceState == ExternalDeviceState.UNKNOWN).count();
-        return new Result(connected, created, unknown);
+
+        return new Result(connected, disconnected, unknown, changed);
     }
 
-    public record Result(int connected, int created, int unknown) {}
+    private static boolean same(String a, String b) {
+        return (a == null ? "" : a).equals(b == null ? "" : b);
+    }
+
+    public record Result(int connected, int disconnected, int unknown, boolean changed) {}
 }
