@@ -11,6 +11,7 @@ public final class EditorV2FoundationChecks {
 
     public static void run() {
         gridChecks();
+        pinGeometryChecks();
         snapshotChecks();
         historyChecks();
     }
@@ -22,6 +23,17 @@ public final class EditorV2FoundationChecks {
         for (double value : new double[] {-42, -6, 0, 6, 72, 138}) {
             check(EditorGrid.aligned(value), "known grid value remains aligned: " + value);
         }
+    }
+
+    private static void pinGeometryChecks() {
+        check(EditorPinGeometry.halfSize(1) == 3, "one-bit signal terminal stays compact");
+        check(EditorPinGeometry.halfSize(8) == 5, "8-bit bus is visibly heavier than a signal");
+        check(EditorPinGeometry.halfSize(64) == 6, "64-bit bus is heavier without becoming oversized");
+        check(EditorPinGeometry.contains(3, 3, 1), "visible square signal corner is clickable");
+        check(!EditorPinGeometry.contains(4, 0, 1), "outside signal square is not clickable");
+        check(EditorPinGeometry.contains(0, 0, 16), "bus center is clickable");
+        check(!EditorPinGeometry.contains(5, 5, 16), "clipped bus corner is not clickable");
+        check(!EditorPinGeometry.contains(7, 0, 64), "outside widest bus connector is not clickable");
     }
 
     private static void snapshotChecks() {
