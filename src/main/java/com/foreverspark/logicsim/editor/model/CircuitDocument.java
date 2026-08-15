@@ -5,8 +5,10 @@ import java.util.Comparator;
 import java.util.List;
 
 public final class CircuitDocument {
-    public int formatVersion = 2;
+    public int formatVersion = 3;
     public int nextNodeId = 1;
+    /** Stable monotonically increasing id for cloned BOARD template groups. */
+    public int nextTemplateInstanceId = 1;
     public List<EditorNode> nodes = new ArrayList<>();
     public List<WireConnection> wires = new ArrayList<>();
 
@@ -74,17 +76,41 @@ public final class CircuitDocument {
 
     public void normalize() {
         if (nodes == null) nodes = new ArrayList<>();
+        nodes.removeIf(node -> node == null);
         if (wires == null) wires = new ArrayList<>();
         wires.removeIf(wire -> wire == null);
         for (WireConnection wire : wires) wire.normalize();
 
         int maxId = nodes.stream().mapToInt(node -> node.id).max().orElse(0);
+        int maxTemplateInstanceId = nodes.stream().mapToInt(node -> Math.max(0, node.templateInstanceId)).max().orElse(0);
         nextNodeId = Math.max(nextNodeId, maxId + 1);
+        nextTemplateInstanceId = Math.max(nextTemplateInstanceId, maxTemplateInstanceId + 1);
+        formatVersion = Math.max(formatVersion, 3);
+
         for (EditorNode node : nodes) {
             if (node.kind == null) node.kind = NodeKind.NAND;
             node.width = Math.max(1, Math.min(64, node.width));
             if (node.label == null) node.label = "";
             if (node.chipName == null) node.chipName = "";
+            if (node.interfaceId == null) node.interfaceId = "";
+            if (node.socketDirection == null) node.socketDirection = PortDirection.INPUT;
+            node.interfaceOrder = Math.max(0, node.interfaceOrder);
+            node.templateInstanceId = Math.max(0, node.templateInstanceId);
+            if (node.templateName == null) node.templateName = "";
+            node.templateName = node.templateName.trim();
+            if (node.templateInstanceId == 0) node.templateName = "";
+
+            if (node.boardSocket) {
+                // A socket is deliberately implemented as BUS routing infrastructure. This preserves
+                // the NAND-only primitive invariant while giving BOARD templates a named boundary.
+                node.kind = NodeKind.BUS;
+                node.label = node.label.isBlank() ? "SOCKET" + node.id : node.label.trim();
+                node.interfaceId = node.interfaceId.isBlank() ? "socket-" + node.id : node.interfaceId.trim();
+            } else {
+                node.interfaceId = "";
+                node.interfaceOrder = 0;
+                node.socketDirection = PortDirection.INPUT;
+            }
 
             if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) {
                 int lane = node.laneWidth;
