@@ -30,8 +30,8 @@ public final class EditorGrid {
         return Math.abs(value - snap(value)) < 0.0001;
     }
 
-    /** Ctrl+D stacks the duplicate directly against the selected group's snapped footprint. */
+    /** Ctrl+D stacks the duplicate one editor-grid cell below the selected group's rendered footprint. */
     public static double duplicateGap() {
-        return 0.0;
+        return STEP;
     }
 }
