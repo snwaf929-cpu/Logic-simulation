@@ -12,7 +12,7 @@ import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 
 import java.util.Map;
 
-/** Reproduces the real 48-RANDOM / 11-trigger-group physical DISPLAY workload from the 50 MHz regression log. */
+/** Reproduces the real 48-RANDOM / 11-trigger-group / INPUT-driven RESET physical DISPLAY workload. */
 public final class RandomDisplayNetworkSelfTest {
     private RandomDisplayNetworkSelfTest() {}
 
@@ -25,17 +25,10 @@ public final class RandomDisplayNetworkSelfTest {
         clock.randomSource = false;
         clock.clockFrequencyHz = 50_000_000L;
 
-        EditorNode resetLow = board.addNode(NodeKind.CONSTANT, -180, 80);
-        resetLow.width = 1;
-        resetLow.constantValue = 0L;
-        resetLow.clockSource = false;
-        resetLow.randomSource = false;
-
-        // Route RESET through a passive BUS so the immediate DISPLAY source is NOT the CONSTANT itself. The compiled
-        // signal still aliases the same immutable LOW constant, matching real editor boards that use routing helpers.
-        EditorNode resetRoute = board.addNode(NodeKind.BUS, -40, 80);
-        resetRoute.width = 1;
-        board.connect(resetLow.id, 0, resetRoute.id, 0);
+        // Matches the real regression log: DISPLAY RESET is driven by a root INPUT, not a static constant.
+        EditorNode resetInput = board.addNode(NodeKind.INPUT, -180, 80);
+        resetInput.width = 1;
+        resetInput.label = "RESET";
 
         EditorNode x = merger16(board, 180, 0);
         EditorNode y = merger16(board, 180, 180);
@@ -64,7 +57,6 @@ public final class RandomDisplayNetworkSelfTest {
         for (int lane = 0; lane < 11; lane++) board.connect(clock.id, 0, randoms[lane].id, 0);
 
         // Groups 1..10: the remaining 37 RANDOMs are triggered from rising outputs of RANDOM 0..9.
-        // This gives exactly 11 trigger groups while remaining a closed, acyclic, zero-NAND trigger graph.
         for (int lane = 11; lane < randoms.length; lane++) {
             int triggerLane = (lane - 11) % 10;
             board.connect(randoms[triggerLane].id, 0, randoms[lane].id, 0);
@@ -84,11 +76,11 @@ public final class RandomDisplayNetworkSelfTest {
         board.connect(y.id, 0, display.id, 1);
         board.connect(color.id, 0, display.id, 2);
         board.connect(clock.id, 0, display.id, 3);
-        board.connect(resetRoute.id, 0, display.id, 4);
+        board.connect(resetInput.id, 0, display.id, 4);
         int wireCountBeforeCompile = board.wires.size();
 
         CircuitProgramRuntime runtime = new CircuitProgramRuntime(
-                new CircuitProgram(new ChipDefinition("RANDOM_NETWORK_11", board), Map.of())
+                new CircuitProgram(new ChipDefinition("RANDOM_NETWORK_11_DYNAMIC_RESET", board), Map.of())
         );
 
         check(runtime.externalDeviceCount() == 1, "self-test must compile one physical DISPLAY");
@@ -99,18 +91,33 @@ public final class RandomDisplayNetworkSelfTest {
                 runtime, 0, 65_536, 65_536
         );
         check(!strict.active() && "display-reset-wired".equals(strict.reason()),
-                "strict network compiler must expose the historical wired-RESET rejection");
+                "strict network compiler must expose the wired-RESET boundary");
 
         RandomDisplayNetworkFastPath.CompileResult compiled = RandomDisplayNetworkResetCompat.compile(
                 runtime, 0, 65_536, 65_536
         );
-        check(compiled.active(), "routed static-LOW RESET compatibility compiler rejected test board: " + compiled.reason());
-        check(compiled.reason().startsWith("active-static-low-reset:"),
-                "compat compiler must report static-LOW RESET proof details");
+        check(compiled.active(), "dynamic RESET compatibility compiler rejected test board: " + compiled.reason());
+        check(compiled.reason().startsWith("active-dynamic-reset:"),
+                "compat compiler must report dynamic RESET activation details");
         check(board.wires.size() == wireCountBeforeCompile,
                 "compat compiler must restore the real RESET wire after structural proof");
         check(compiled.plan().randomLaneCount() == 48, "compiled network must contain all 48 RANDOM lanes");
         check(compiled.plan().triggerGroupCount() == 11, "compiled network must preserve all 11 trigger groups");
+
+        int resetSignalId = RandomDisplayNetworkResetCompat.resetSignalId(runtime, 0);
+        check(resetSignalId >= 0, "dynamic RESET signal must resolve");
+        DisplayResetEdgeTracker resetTracker = new DisplayResetEdgeTracker(runtime, resetSignalId);
+
+        check(resetTracker.pollCommand() == 0L, "RESET low must not clear");
+        runtime.compiled().driveInputUnsigned(resetInput.id, 1L);
+        check(DisplayCommandCodec.decode(resetTracker.pollCommand()).isClear(), "RESET rising edge must emit CLEAR");
+        check(resetTracker.pollCommand() == 0L, "held RESET high must not repeat CLEAR");
+        runtime.compiled().driveInputUnsigned(resetInput.id, 0L);
+        check(resetTracker.pollCommand() == 0L, "RESET falling edge must not clear");
+        runtime.compiled().driveInputUnsigned(resetInput.id, 1L);
+        check(DisplayCommandCodec.decode(resetTracker.pollCommand()).isClear(), "second RESET rising edge must emit CLEAR");
+        runtime.compiled().driveInputUnsigned(resetInput.id, 0L);
+        check(resetTracker.pollCommand() == 0L, "RESET low must re-arm without clearing");
 
         final int[] commandCount = {0};
         final long[] firstCommand = {0L};
@@ -123,9 +130,9 @@ public final class RandomDisplayNetworkSelfTest {
         check(commandCount[0] > 0, "compiled network must emit physical DISPLAY writes");
         check(DisplayCommandCodec.decode(firstCommand[0]).isPixel(), "compiled network must emit PIXEL commands");
 
-        System.out.println("48-RANDOM / 11-trigger-group / routed static-LOW RESET physical DISPLAY bulk self-test: PASS"
+        System.out.println("48-RANDOM / 11-trigger-group / dynamic INPUT RESET physical DISPLAY bulk self-test: PASS"
                 + " | emittedEdges=" + emitted + " commands=" + commandCount[0]
-                + " proof=" + compiled.reason());
+                + " resetSignal=" + resetSignalId + " compile=" + compiled.reason());
     }
 
     private static EditorNode merger16(CircuitDocument board, double x, double y) {
