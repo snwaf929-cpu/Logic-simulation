@@ -1,6 +1,8 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinGeometry;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -165,12 +167,12 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         List<PortSpec> inputs = safeInputs(node);
         List<PortSpec> outputs = safeOutputs(node);
         for (int i = 0; i < inputs.size(); i++) {
-            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5,
-                    portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
+            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5, inputs.get(i).width(),
+                    portDisplayColor(node, i, inputs.get(i), true));
         }
         for (int i = 0; i < outputs.size(); i++) {
-            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5,
-                    portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
+            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5, outputs.get(i).width(),
+                    portDisplayColor(node, i, outputs.get(i), false));
         }
     }
 
@@ -183,12 +185,10 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         graphics.pose().popMatrix();
     }
 
-    @Unique private void logic$pin(GuiGraphicsExtractor graphics, double wx, double wy, int color, boolean target) {
-        int x = screenX(Math.round(wx / 6.0) * 6.0);
-        int y = screenY(Math.round(wy / 6.0) * 6.0);
-        int r = Math.max(1, (int)Math.round((target ? 4.0 : 3.0) * zoom));
-        graphics.fill(x-r, y-r, x+r+1, y+r+1, color);
-        graphics.outline(x-r-1, y-r-1, r*2+3, r*2+3, 0xFF090B0D);
+    @Unique private void logic$pin(GuiGraphicsExtractor graphics, double wx, double wy, int width, int color) {
+        int x = screenX(EditorGrid.snap(wx));
+        int y = screenY(EditorGrid.snap(wy));
+        EditorPinGeometry.draw(graphics, x, y, width, color);
     }
 
     @Unique private static boolean logic$isHigh(LogicValue[] values) {

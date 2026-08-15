@@ -4,6 +4,7 @@
   "package": "com.foreverspark.logicsim.mixin.client",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "CircuitCanvasEditorV2Mixin",
     "CircuitCanvasBranchMixin",
     "CircuitCanvasBitTerminalMixin",
     "CircuitCanvasCompactGeometryMixin",
@@ -21,6 +22,7 @@
     "CircuitCanvasLowZoomTitleMixin",
     "CircuitCanvasBusWireTextMixin",
     "CircuitCanvasWorkspaceBackMixin",
+    "CircuitEditorUndoRedoMixin",
     "CircuitEditorScreenContextMixin",
     "CircuitEditorModalStateMixin",
     "CircuitEditorProgramMixin",

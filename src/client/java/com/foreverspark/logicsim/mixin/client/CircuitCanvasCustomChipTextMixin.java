@@ -2,6 +2,8 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.device.BuiltinDevices;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinGeometry;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import net.minecraft.client.gui.Font;
@@ -117,11 +119,13 @@ public abstract class CircuitCanvasCustomChipTextMixin {
     private void logic$ports(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs) {
         for (int port = 0; port < inputs.size(); port++) {
             double py = centeredPortY(node, port, inputs.size());
-            logic$port(graphics, node.x, py, portDisplayColor(node, port, inputs.get(port), true), validTarget(true));
+            logic$port(graphics, node.x, py, inputs.get(port).width(),
+                    portDisplayColor(node, port, inputs.get(port), true));
         }
         for (int port = 0; port < outputs.size(); port++) {
             double py = centeredPortY(node, port, outputs.size());
-            logic$port(graphics, node.x + nodeWidth(node), py, portDisplayColor(node, port, outputs.get(port), false), validTarget(false));
+            logic$port(graphics, node.x + nodeWidth(node), py, outputs.get(port).width(),
+                    portDisplayColor(node, port, outputs.get(port), false));
         }
     }
 
@@ -151,12 +155,10 @@ public abstract class CircuitCanvasCustomChipTextMixin {
     }
 
     @Unique
-    private void logic$port(GuiGraphicsExtractor graphics, double worldX, double worldY, int color, boolean target) {
-        int x = screenX(logic$snap(worldX));
-        int y = screenY(logic$snap(worldY));
-        int r = Math.max(1, (int)Math.round((target ? 4.0 : 3.0) * zoom));
-        graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
-        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
+    private void logic$port(GuiGraphicsExtractor graphics, double worldX, double worldY, int width, int color) {
+        int x = screenX(EditorGrid.snap(worldX));
+        int y = screenY(EditorGrid.snap(worldY));
+        EditorPinGeometry.draw(graphics, x, y, width, color);
     }
 
     @Unique
@@ -165,10 +167,5 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         int g = (int)(((color >>> 8) & 0xFF) * factor);
         int b = (int)((color & 0xFF) * factor);
         return 0xFF000000 | (r << 16) | (g << 8) | b;
-    }
-
-    @Unique
-    private static double logic$snap(double value) {
-        return Math.round(value / 6.0) * 6.0;
     }
 }

@@ -1,6 +1,8 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinGeometry;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -79,12 +81,12 @@ public abstract class CircuitCanvasCompactRenderMixin {
 
         for (int port = 0; port < inputs.size(); port++) {
             LogicPoint point = logic$inputPoint(node, port);
-            logic$drawPort(graphics, point,
+            logic$drawPort(graphics, point, inputs.get(port).width(),
                     portDisplayColor(node, port, inputs.get(port), true), validTarget(true));
         }
         for (int port = 0; port < outputs.size(); port++) {
             LogicPoint point = logic$outputPoint(node, port);
-            logic$drawPort(graphics, point,
+            logic$drawPort(graphics, point, outputs.get(port).width(),
                     portDisplayColor(node, port, outputs.get(port), false), validTarget(false));
         }
 
@@ -138,12 +140,12 @@ public abstract class CircuitCanvasCompactRenderMixin {
 
         for (int port = 0; port < inputs.size(); port++) {
             LogicPoint point = logic$inputPoint(node, port);
-            logic$drawPort(graphics, point,
+            logic$drawPort(graphics, point, inputs.get(port).width(),
                     portDisplayColor(node, port, inputs.get(port), true), validTarget(true));
         }
         for (int port = 0; port < outputs.size(); port++) {
             LogicPoint point = logic$outputPoint(node, port);
-            logic$drawPort(graphics, point,
+            logic$drawPort(graphics, point, outputs.get(port).width(),
                     portDisplayColor(node, port, outputs.get(port), false), validTarget(false));
         }
     }
@@ -155,12 +157,16 @@ public abstract class CircuitCanvasCompactRenderMixin {
             List<PortSpec> inputs = safeInputs(node);
             for (int port = 0; port < inputs.size(); port++) {
                 LogicPoint point = logic$inputPointAny(node, port);
-                if (logic$near(mouseX, mouseY, point, 9.0)) return new LogicHover(inputs.get(port), true, point);
+                if (logic$near(mouseX, mouseY, point, inputs.get(port).width())) {
+                    return new LogicHover(inputs.get(port), true, point);
+                }
             }
             List<PortSpec> outputs = safeOutputs(node);
             for (int port = 0; port < outputs.size(); port++) {
                 LogicPoint point = logic$outputPointAny(node, port);
-                if (logic$near(mouseX, mouseY, point, 9.0)) return new LogicHover(outputs.get(port), false, point);
+                if (logic$near(mouseX, mouseY, point, outputs.get(port).width())) {
+                    return new LogicHover(outputs.get(port), false, point);
+                }
             }
         }
         return null;
@@ -202,12 +208,10 @@ public abstract class CircuitCanvasCompactRenderMixin {
 
     @Unique
     private void logic$drawPort(GuiGraphicsExtractor graphics, LogicPoint point,
-                                int color, boolean wiringTarget) {
+                                int width, int color, boolean wiringTarget) {
         int x = screenX(point.x);
         int y = screenY(point.y);
-        int r = Math.max(2, (int) Math.round((wiringTarget ? 4.0 : 3.0) * zoom));
-        graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
-        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
+        EditorPinGeometry.draw(graphics, x, y, width, color);
     }
 
     @Unique
@@ -277,10 +281,10 @@ public abstract class CircuitCanvasCompactRenderMixin {
     }
 
     @Unique
-    private boolean logic$near(double mouseX, double mouseY, LogicPoint point, double radius) {
+    private boolean logic$near(double mouseX, double mouseY, LogicPoint point, int width) {
         double dx = mouseX - screenX(point.x);
         double dy = mouseY - screenY(point.y);
-        return dx * dx + dy * dy <= radius * radius;
+        return EditorPinGeometry.contains(dx, dy, width);
     }
 
     @Unique
@@ -291,7 +295,7 @@ public abstract class CircuitCanvasCompactRenderMixin {
         return 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 
-    @Unique private static double logic$snap(double value) { return Math.round(value / 6.0) * 6.0; }
+    @Unique private static double logic$snap(double value) { return EditorGrid.snap(value); }
     @Unique private record LogicPoint(double x, double y) {}
     @Unique private record LogicHover(PortSpec spec, boolean input, LogicPoint point) {}
 }

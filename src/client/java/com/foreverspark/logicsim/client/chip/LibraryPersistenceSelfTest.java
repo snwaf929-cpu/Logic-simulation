@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.client.chip;
 
+import com.foreverspark.logicsim.client.screen.v2.EditorV2FoundationChecks;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
@@ -23,7 +24,8 @@ public final class LibraryPersistenceSelfTest {
         Path root = Files.createTempDirectory("logic-simulation-library-test-");
         try {
             runPersistenceChecks(root);
-            System.out.println("Client chip library reopen/color/folder persistence self-test: PASS");
+            EditorV2FoundationChecks.run();
+            System.out.println("Client chip library + Editor V2 foundation self-test: PASS");
         } finally {
             deleteRecursively(root);
         }
