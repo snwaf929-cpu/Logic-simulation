@@ -1,6 +1,9 @@
 package com.foreverspark.logicsim.network;
 
 import com.foreverspark.logicsim.block.CircuitBlockEntity;
+import com.foreverspark.logicsim.interconnect.ExternalDeviceDiscovery;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
@@ -9,6 +12,7 @@ import net.minecraft.world.phys.Vec3;
 
 public final class ModNetworking {
     private static final double MAX_PROGRAM_DISTANCE_SQUARED = 100.0;
+    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
     private ModNetworking() {}
 
@@ -29,15 +33,10 @@ public final class ModNetworking {
             try {
                 circuit.installProgramJson(payload.programJson());
                 double elapsedMs = Math.max(0L, System.nanoTime() - started) / 1_000_000.0;
-                player.sendSystemMessage(Component.literal(
-                        "Programmed Circuit Block with " + circuit.programName()
-                                + " in " + String.format(java.util.Locale.ROOT, "%.2f", elapsedMs) + " ms"
-                ));
-                if (elapsedMs >= 100.0) {
-                    player.sendSystemMessage(Component.literal(
-                            "Circuit performance warning: install/compile took over 100 ms. Shift+Right Click the block for runtime stats."
-                    ));
-                }
+                player.sendSystemMessage(Component.literal("Programmed Circuit Block with " + circuit.programName()
+                        + " in " + String.format(java.util.Locale.ROOT, "%.2f", elapsedMs) + " ms"));
+                if (elapsedMs >= 100.0) player.sendSystemMessage(Component.literal(
+                        "Circuit performance warning: install/compile took over 100 ms. Shift+Right Click the block for runtime stats."));
             } catch (RuntimeException error) {
                 String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
                 player.sendSystemMessage(Component.literal("Circuit program rejected: " + message));
@@ -49,8 +48,9 @@ public final class ModNetworking {
             if (!near(player, payload.pos())) return;
             if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
             String json = circuit.boardJson();
-            if (json.length() <= CircuitBlockEntity.MAX_BOARD_JSON) {
-                ServerPlayNetworking.send(player, new CircuitBoardPayload(payload.pos(), json));
+            String devicesJson = GSON.toJson(ExternalDeviceDiscovery.discover(player.level(), payload.pos()));
+            if (json.length() <= CircuitBlockEntity.MAX_BOARD_JSON && devicesJson.length() <= CircuitBoardPayload.MAX_DEVICES_JSON) {
+                ServerPlayNetworking.send(player, new CircuitBoardPayload(payload.pos(), json, devicesJson));
             }
         });
 
