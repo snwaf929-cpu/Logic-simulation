@@ -14,7 +14,7 @@ import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 
 import java.util.Map;
 
-/** Reproduces the real 48-RANDOM / 11-trigger-group / external-trigger physical DISPLAY workload. */
+/** Reproduces the real 48-RANDOM / 11-trigger-group physical DISPLAY workloads. */
 public final class RandomDisplayNetworkSelfTest {
     private RandomDisplayNetworkSelfTest() {}
 
@@ -32,7 +32,7 @@ public final class RandomDisplayNetworkSelfTest {
         resetInput.width = 1;
         resetInput.label = "RESET";
 
-        // Reproduces the real board: one RANDOM trigger group comes from outside CLOCK/RANDOM outputs.
+        // Generic-DAG regression: one group is external and nine groups are RANDOM-output triggered.
         EditorNode externalTrigger = board.addNode(NodeKind.INPUT, -180, 140);
         externalTrigger.width = 1;
         externalTrigger.label = "RANDOM_TRIGGER";
@@ -118,8 +118,13 @@ public final class RandomDisplayNetworkSelfTest {
         check("field-shift".equals(compiled.plan().boundaryPackMode()),
                 "three contiguous 16-bit banks must use shift/mask DISPLAY packing");
 
-        // The user's current wall is 1024x1024 logical. A 16-bit coordinate is in range iff bits 10..15 are zero.
-        // X and Y therefore compile to one 12-lane reject mask, avoiding DISPLAY packing for out-of-range coordinates.
+        IndependentRandomDisplayFastPath.CompileResult independentReject = IndependentRandomDisplayFastPath.compile(
+                runtime, 0, 2_048, 2_048
+        );
+        check(!independentReject.active() && independentReject.reason().startsWith("random-dependent-trigger-"),
+                "independent-trigger specialization must reject a true RANDOM->RANDOM cascade");
+
+        // The earlier benchmark wall was 1024x1024 logical. A 16-bit coordinate is in range iff bits 10..15 are zero.
         RandomDisplayNetworkFastPath.CompileResult filtered1024 = RandomDisplayNetworkResetCompat.compile(
                 runtime, 0, 1_024, 1_024
         );
@@ -130,6 +135,13 @@ public final class RandomDisplayNetworkSelfTest {
                 "1024x1024 X/Y prefilter must test exactly twelve high coordinate lanes");
         check("field-shift".equals(filtered1024.plan().boundaryPackMode()),
                 "1024x1024 plan must retain shift/mask field packing");
+
+        RandomDisplayNetworkFastPath.CompileResult filtered2048 = RandomDisplayNetworkResetCompat.compile(
+                runtime, 0, 2_048, 2_048
+        );
+        check(filtered2048.active(), "2048x2048 coordinate-prefilter plan must compile");
+        check(filtered2048.plan().coordinatePrefilterLaneCount() == 10,
+                "2048x2048 X/Y prefilter must test exactly ten high coordinate lanes");
 
         RandomDisplayNetworkFastPath.CompileResult nonPowerOfTwo = RandomDisplayNetworkResetCompat.compile(
                 runtime, 0, 1_000, 1_000
@@ -184,12 +196,133 @@ public final class RandomDisplayNetworkSelfTest {
         check(commandCount[0] > 0, "compiled network must emit physical DISPLAY writes");
         check(DisplayCommandCodec.decode(firstCommand[0]).isPixel(), "compiled network must emit PIXEL commands");
 
-        System.out.println("48-RANDOM / 11-trigger-group / external INPUT trigger / dynamic RESET DISPLAY bulk self-test: PASS"
+        runIndependentTriggerSpecialization();
+
+        System.out.println("48-RANDOM generic DAG + dynamic RESET DISPLAY bulk self-test: PASS"
                 + " | emittedEdges=" + emitted + " commands=" + commandCount[0]
                 + " externalFires=" + compiled.plan().externalTriggerFireCount()
                 + " coordPrefilter1024=" + filtered1024.plan().coordinatePrefilterLaneCount() + " lanes"
+                + " coordPrefilter2048=" + filtered2048.plan().coordinatePrefilterLaneCount() + " lanes"
                 + " boundaryPack=" + compiled.plan().boundaryPackMode()
                 + " resetSignal=" + resetSignalId + " compile=" + compiled.reason());
+    }
+
+    /** Exact shape reported by the real benchmark log: 11 groups total, 10 independent external groups. */
+    private static void runIndependentTriggerSpecialization() {
+        CircuitDocument board = new CircuitDocument();
+
+        EditorNode clock = board.addNode(NodeKind.CONSTANT, -200, 0);
+        clock.width = 1;
+        clock.clockSource = true;
+        clock.randomSource = false;
+        clock.clockFrequencyHz = 50_000_000L;
+
+        EditorNode reset = board.addNode(NodeKind.INPUT, -200, 60);
+        reset.width = 1;
+        reset.label = "RESET";
+
+        EditorNode[] triggers = new EditorNode[10];
+        for (int index = 0; index < triggers.length; index++) {
+            EditorNode trigger = board.addNode(NodeKind.INPUT, -200, 120 + index * 24);
+            trigger.width = 1;
+            trigger.label = "TRIGGER_" + index;
+            triggers[index] = trigger;
+        }
+
+        EditorNode x = merger16(board, 220, 0);
+        EditorNode y = merger16(board, 220, 180);
+        EditorNode color = merger16(board, 220, 360);
+        EditorNode[] mergers = {x, y, color};
+        EditorNode[] randoms = new EditorNode[48];
+
+        for (int lane = 0; lane < randoms.length; lane++) {
+            int bank = lane >>> 4;
+            int bit = lane & 15;
+            EditorNode random = board.addNode(NodeKind.CONSTANT, 0, bank * 180 + bit * 9);
+            random.width = 1;
+            random.clockSource = false;
+            random.randomSource = true;
+
+            // Keep X/Y high bits permanently LOW so every generated command is inside the 2048x2048 test wall.
+            boolean coordinateHighBit = (lane >= 11 && lane <= 15) || (lane >= 27 && lane <= 31);
+            random.randomChancePercent = coordinateHighBit ? 0 : switch (lane % 3) {
+                case 0 -> 25;
+                case 1 -> 50;
+                default -> 75;
+            };
+            randoms[lane] = random;
+            board.connect(random.id, 0, mergers[bank].id, bit);
+        }
+
+        // One hot CLOCK group with 18 lanes.
+        for (int lane = 0; lane < 18; lane++) board.connect(clock.id, 0, randoms[lane].id, 0);
+        // Ten independent groups, three lanes each -> 18 + 30 = all 48 RANDOM lanes.
+        for (int group = 0; group < 10; group++) {
+            for (int offset = 0; offset < 3; offset++) {
+                int lane = 18 + group * 3 + offset;
+                board.connect(triggers[group].id, 0, randoms[lane].id, 0);
+            }
+        }
+
+        EditorNode display = board.addNode(NodeKind.EXTERNAL_DEVICE, 460, 180);
+        display.configureExternalDevice(
+                ExternalDeviceType.DISPLAY,
+                "display-independent-selftest",
+                ExternalDeviceState.CONNECTED,
+                "test",
+                0,
+                0,
+                0
+        );
+        board.connect(x.id, 0, display.id, 0);
+        board.connect(y.id, 0, display.id, 1);
+        board.connect(color.id, 0, display.id, 2);
+        board.connect(clock.id, 0, display.id, 3);
+        board.connect(reset.id, 0, display.id, 4);
+
+        CircuitProgramRuntime runtime = new CircuitProgramRuntime(
+                new CircuitProgram(new ChipDefinition("RANDOM_INDEPENDENT_11", board), Map.of())
+        );
+
+        IndependentRandomDisplayFastPath.CompileResult result = IndependentRandomDisplayFastPath.compile(
+                runtime, 0, 2_048, 2_048
+        );
+        check(result.active(), "independent-trigger specialization rejected exact benchmark shape: " + result.reason());
+        check(result.plan().randomLaneCount() == 48, "independent path must contain all 48 RANDOM lanes");
+        check(result.plan().clockLaneCount() == 18, "independent path must preserve the 18-lane CLOCK group");
+        check(result.plan().externalTriggerGroupCount() == 10,
+                "independent path must preserve all ten external trigger groups");
+        check(result.plan().coordinatePrefilterEnabled(), "2048x2048 independent path must prefilter coordinates");
+        check(result.plan().coordinatePrefilterLaneCount() == 10,
+                "2048x2048 independent path must reject exactly ten X/Y high lanes");
+        check("field-shift".equals(result.plan().boundaryPackMode()),
+                "independent path must use field-shift DISPLAY packing");
+
+        check(result.plan().externalTriggerFireCount() == 0L, "external trigger counter must start at zero");
+        runtime.compiled().driveInputUnsigned(triggers[0].id, 1L);
+        result.plan().advance(0L, 0L, null);
+        check(result.plan().externalTriggerFireCount() == 1L,
+                "independent external LOW->HIGH must fire exactly one group");
+        runtime.compiled().driveInputUnsigned(triggers[0].id, 0L);
+        result.plan().advance(0L, 0L, null);
+
+        final int[] commands = {0};
+        final long[] first = {0L};
+        long emitted = result.plan().advance(100_000L, 20_000L, (values, count) -> {
+            if (count > 0 && commands[0] == 0) first[0] = values[0];
+            commands[0] += count;
+        });
+        check(emitted == 10_000L, "50 MHz over 100us must consume exactly 10,000 clock edges");
+        check(commands[0] == 5_000, "all 5,000 rising edges must produce in-range DISPLAY writes");
+        check(DisplayCommandCodec.decode(first[0]).isPixel(), "independent hot path must emit PIXEL commands");
+
+        System.out.println("48-RANDOM / 11-group / 10-independent-trigger hotloop-v3 self-test: PASS"
+                + " | emittedEdges=" + emitted
+                + " commands=" + commands[0]
+                + " clockLanes=" + result.plan().clockLaneCount()
+                + " externalGroups=" + result.plan().externalTriggerGroupCount()
+                + " prefilter2048=" + result.plan().coordinatePrefilterLaneCount()
+                + " boundaryPack=" + result.plan().boundaryPackMode());
     }
 
     private static EditorNode merger16(CircuitDocument board, double x, double y) {
