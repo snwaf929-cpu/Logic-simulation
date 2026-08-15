@@ -6,6 +6,9 @@ import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
@@ -139,13 +142,16 @@ public final class CircuitExchange {
 
     private static ParsedImport readImport(Path file) throws IOException {
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            JsonElement json = JsonParser.parseReader(reader);
+            normalizeUnsignedArgbColors(json);
+
             if (file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".logicchip.json")) {
-                ChipDefinition definition = GSON.fromJson(reader, ChipDefinition.class);
+                ChipDefinition definition = GSON.fromJson(json, ChipDefinition.class);
                 validateDefinition(definition);
                 return new ParsedImport(definition.name, List.of(definition));
             }
 
-            ExchangeBundle bundle = GSON.fromJson(reader, ExchangeBundle.class);
+            ExchangeBundle bundle = GSON.fromJson(json, ExchangeBundle.class);
             if (bundle == null || !FORMAT.equals(bundle.format)) {
                 throw new IOException("Not a " + FORMAT + " bundle");
             }
@@ -156,6 +162,41 @@ public final class CircuitExchange {
             for (ChipDefinition definition : bundle.chips) validateDefinition(definition);
             String root = bundle.root == null || bundle.root.isBlank() ? bundle.chips.get(0).name : bundle.root.trim();
             return new ParsedImport(root, List.copyOf(bundle.chips));
+        }
+    }
+
+    /**
+     * ARGB colors are Java signed ints internally, but external tools commonly serialize them as
+     * the equivalent unsigned 32-bit decimal value (for example 0xFF5FA8FF = 4284459263).
+     * Accept both representations so portable/AI-generated bundles do not fail in Gson's int adapter.
+     */
+    private static void normalizeUnsignedArgbColors(JsonElement element) throws IOException {
+        if (element == null || element.isJsonNull()) return;
+        if (element.isJsonArray()) {
+            for (JsonElement child : element.getAsJsonArray()) normalizeUnsignedArgbColors(child);
+            return;
+        }
+        if (!element.isJsonObject()) return;
+
+        JsonObject object = element.getAsJsonObject();
+        JsonElement color = object.get("color");
+        if (color != null && color.isJsonPrimitive() && color.getAsJsonPrimitive().isNumber()) {
+            long value;
+            try {
+                value = color.getAsLong();
+            } catch (RuntimeException exception) {
+                throw new IOException("Invalid ARGB color value", exception);
+            }
+            if (value > Integer.MAX_VALUE) {
+                if (value > 0xFFFF_FFFFL) throw new IOException("ARGB color exceeds 32 bits: " + value);
+                object.addProperty("color", (int) value);
+            } else if (value < Integer.MIN_VALUE) {
+                throw new IOException("ARGB color is below signed 32-bit range: " + value);
+            }
+        }
+
+        for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
+            if (!"color".equals(entry.getKey())) normalizeUnsignedArgbColors(entry.getValue());
         }
     }
 
