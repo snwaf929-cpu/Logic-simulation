@@ -4,6 +4,7 @@
   "package": "com.foreverspark.logicsim.mixin.client",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "CircuitCanvasWireSelectionMixin",
     "CircuitCanvasPcbLayerMixin",
     "CircuitCanvasPhase2ConfigMixin",
     "CircuitCanvasWiringV2Mixin",

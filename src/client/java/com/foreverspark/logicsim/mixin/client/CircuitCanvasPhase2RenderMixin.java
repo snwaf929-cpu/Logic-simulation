@@ -54,7 +54,9 @@ public abstract class CircuitCanvasPhase2RenderMixin {
             String summary = logic$sliceSummary(node);
             logic$center(graphics, summary, x, w, y + Math.max(20, h - 14), 0xFF8FC7D2);
         } else {
-            logic$center(graphics, node.label == null || node.label.isBlank() ? "NET" : node.label, x, w, y + Math.max(7, (h - 9) / 2), 0xFFF2ECFF);
+            String name = node.label == null || node.label.isBlank() ? "NET" + node.id : node.label.trim();
+            logic$center(graphics, "NET LABEL", x, w, y + 8, 0xFFD9CCFF);
+            logic$center(graphics, name, x, w, y + Math.max(20, (h - 9) / 2), 0xFFF2ECFF);
             String width = "[" + node.width + "]";
             graphics.text(font(), width, x + w - font().width(width) - 4, y + h - 11, 0xFFAA96E5, false);
         }

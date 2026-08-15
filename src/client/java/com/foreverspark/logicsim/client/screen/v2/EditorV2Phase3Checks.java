@@ -20,7 +20,8 @@ public final class EditorV2Phase3Checks {
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPcbLayerMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPhase2ConfigMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasWiringV2Mixin",
-            "com.foreverspark.logicsim.mixin.client.CircuitCanvasDuplicateMixin"
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasDuplicateMixin",
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasWireSelectionMixin"
     );
 
     private EditorV2Phase3Checks() {}
@@ -30,6 +31,7 @@ public final class EditorV2Phase3Checks {
         viaNormalizationChecks();
         snapshotChecks();
         compilerIsolationChecks();
+        wireMarqueeGeometryChecks();
         mixinHistorySignatureChecks();
     }
 
@@ -102,6 +104,17 @@ public final class EditorV2Phase3Checks {
         compiled.driveInputUnsigned(input.id, 0xA5L);
         check(compiled.inputUnsigned(output.id, 0) == 0xA5L,
                 "PCB layers and vias remain presentation-only and do not alter electrical simulation");
+    }
+
+    private static void wireMarqueeGeometryChecks() {
+        check(EditorWireGeometry.segmentIntersectsRect(0, 10, 100, 10, 40, 60, 0, 20),
+                "wire marquee selects a trace crossing the box even when neither endpoint is contained");
+        check(EditorWireGeometry.segmentIntersectsRect(50, -20, 50, 40, 40, 60, 0, 20),
+                "wire marquee selects a vertical trace crossing the box");
+        check(EditorWireGeometry.segmentIntersectsRect(0, 0, 40, 0, 40, 60, 0, 20),
+                "wire marquee includes a trace touching the selection edge");
+        check(!EditorWireGeometry.segmentIntersectsRect(0, 30, 100, 30, 40, 60, 0, 20),
+                "wire marquee rejects traces outside the box");
     }
 
     /**
