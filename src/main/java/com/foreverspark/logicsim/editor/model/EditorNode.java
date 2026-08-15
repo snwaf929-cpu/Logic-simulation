@@ -29,6 +29,19 @@ public final class EditorNode {
     /** Arbitrary named output ranges for BUS_SLICE. */
     public List<BusSliceOutput> slices = new ArrayList<>();
 
+    /**
+     * Phase 4 BOARD socket metadata. Electrically a socket remains an ordinary BUS routing node,
+     * so this adds no primitive logic. The direction describes which side of a template boundary is public.
+     */
+    public boolean boardSocket = false;
+    public String interfaceId = "";
+    public PortDirection socketDirection = PortDirection.INPUT;
+    public int interfaceOrder = 0;
+
+    /** Non-zero only for nodes cloned from a reusable BOARD template instance. */
+    public int templateInstanceId = 0;
+    public String templateName = "";
+
     public EditorNode() {}
 
     public EditorNode(int id, NodeKind kind, double x, double y) {
@@ -48,6 +61,19 @@ public final class EditorNode {
             // existing NET still preserves its name, which is the intentional way to create aliases.
             this.label = "NET" + id;
         }
+    }
+
+    public boolean isBoardSocket() {
+        return boardSocket && kind == NodeKind.BUS;
+    }
+
+    public void configureBoardSocket(String name, PortDirection direction, int order) {
+        kind = NodeKind.BUS;
+        boardSocket = true;
+        label = name == null || name.isBlank() ? "SOCKET" + id : name.trim();
+        socketDirection = direction == null ? PortDirection.INPUT : direction;
+        interfaceOrder = Math.max(0, order);
+        if (interfaceId == null || interfaceId.isBlank()) interfaceId = "socket-" + id;
     }
 
     public int laneCount() {
@@ -84,6 +110,7 @@ public final class EditorNode {
     }
 
     public String displayName() {
+        if (isBoardSocket()) return "SOCKET " + ((label == null || label.isBlank()) ? interfaceId : label.trim());
         if (kind == NodeKind.CUSTOM_CHIP && chipName != null && !chipName.isBlank()) return chipName;
         if (randomSource && kind == NodeKind.CONSTANT) return "RANDOM " + randomChancePercent + "%";
         if (clockSource && kind == NodeKind.CONSTANT) return "CLOCK " + formatFrequency(clockFrequencyHz);
