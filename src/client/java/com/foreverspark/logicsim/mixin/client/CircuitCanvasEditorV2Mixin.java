@@ -12,8 +12,8 @@ import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -92,8 +92,8 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
         if (event.button() != 0) return;
 
         logic$history.checkpoint("Canvas edit", document);
-        boolean alt = Screen.hasAltDown();
-        boolean shift = Screen.hasShiftDown();
+        boolean alt = (event.modifiers() & GLFW.GLFW_MOD_ALT) != 0;
+        boolean shift = (event.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0;
         LogicPinHit exactPin = logic$pinAt(event.x(), event.y(), true);
 
         // The old canvas used an invisible 8/9 px circular halo. V2 blocks that halo so the
@@ -210,6 +210,12 @@ public abstract class CircuitCanvasEditorV2Mixin implements EditorHistoryAccess 
                 : hits.size() + " component" + (hits.size() == 1 ? "" : "s") + " selected"
                 + (logic$marqueeAdditive && newlyContained > 0 ? " (added " + newlyContained + ")" : ""));
         ci.cancel();
+    }
+
+    @Inject(method = "selectAllNodes", at = @At("HEAD"))
+    private void logic$selectAllUsesComponentMode(CallbackInfo ci) {
+        logic$enterComponentMode();
+        logic$selectedPins.clear();
     }
 
     /* ----------------------------- pin geometry / z order ----------------------------- */
