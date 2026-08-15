@@ -9,6 +9,9 @@ import com.foreverspark.logicsim.editor.model.WireLayer;
 import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.Arrays;
 import java.util.List;
 
 /** Dependency-light PCB routing regression checks for Logic Editor V2 Phase 3. */
@@ -20,6 +23,7 @@ public final class EditorV2Phase3Checks {
         viaNormalizationChecks();
         snapshotChecks();
         compilerIsolationChecks();
+        mixinHistorySignatureChecks();
     }
 
     private static void layerTransitionChecks() {
@@ -91,6 +95,31 @@ public final class EditorV2Phase3Checks {
         compiled.driveInputUnsigned(input.id, 0xA5L);
         check(compiled.inputUnsigned(output.id, 0) == 0xA5L,
                 "PCB layers and vias remain presentation-only and do not alter electrical simulation");
+    }
+
+    /**
+     * Multiple mixins target CircuitCanvasWidget. A private @Unique helper must not reuse the
+     * signature of a public interface method supplied by another mixin: Mixin can otherwise try
+     * to upgrade the private helper and fail while transforming the target class at runtime.
+     */
+    private static void mixinHistorySignatureChecks() {
+        try {
+            Class<?> pcbMixin = Class.forName(
+                    "com.foreverspark.logicsim.mixin.client.CircuitCanvasPcbLayerMixin",
+                    false,
+                    EditorV2Phase3Checks.class.getClassLoader());
+            for (Method helper : pcbMixin.getDeclaredMethods()) {
+                if (!Modifier.isPrivate(helper.getModifiers())) continue;
+                for (Method api : EditorHistoryAccess.class.getDeclaredMethods()) {
+                    boolean collision = helper.getName().equals(api.getName())
+                            && Arrays.equals(helper.getParameterTypes(), api.getParameterTypes());
+                    check(!collision, "PCB mixin private helper collides with EditorHistoryAccess method: "
+                            + helper.getName());
+                }
+            }
+        } catch (ClassNotFoundException exception) {
+            throw new AssertionError("PCB layer mixin class missing from client self-test classpath", exception);
+        }
     }
 
     private static void check(boolean condition, String message) {
