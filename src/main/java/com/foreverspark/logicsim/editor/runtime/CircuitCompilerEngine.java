@@ -46,9 +46,6 @@ final class CircuitCompilerEngine {
                 scopedOutputs
         );
         try {
-            // Build the complete hierarchy without forcing parent input values. Then allocate every NAND output
-            // before dependency walking. A NAND output is a legal sequential-state boundary, even when that NAND
-            // lives several custom-chip levels below the wire that eventually feeds back to it.
             root.instantiateHierarchy();
             root.preallocateNandsRecursive();
             root.resolveAllRecursive();
@@ -228,11 +225,20 @@ final class CircuitCompilerEngine {
                     case BUS -> resolveInput(node, 0);
                     case SPLITTER -> {
                         Signal[] bus = resolveInput(node, 0);
-                        yield new Signal[]{bus[port]};
+                        int laneWidth = node.normalizedLaneWidth();
+                        int start = port * laneWidth;
+                        Signal[] lane = new Signal[laneWidth];
+                        System.arraycopy(bus, start, lane, 0, laneWidth);
+                        yield lane;
                     }
                     case MERGER -> {
+                        int laneWidth = node.normalizedLaneWidth();
+                        int laneCount = Math.max(1, node.width / laneWidth);
                         Signal[] merged = new Signal[node.width];
-                        for (int bit = 0; bit < node.width; bit++) merged[bit] = resolveInput(node, bit)[0];
+                        for (int lane = 0; lane < laneCount; lane++) {
+                            Signal[] laneSignals = resolveInput(node, lane);
+                            System.arraycopy(laneSignals, 0, merged, lane * laneWidth, laneWidth);
+                        }
                         yield merged;
                     }
                     case CUSTOM_CHIP -> resolveCustomOutput(node, port);

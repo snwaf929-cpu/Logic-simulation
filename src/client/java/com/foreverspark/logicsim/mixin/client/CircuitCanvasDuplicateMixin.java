@@ -21,14 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-/**
- * Deep-copy support for editor nodes.
- *
- * The original clipboard only copied the generic CONSTANT fields. CLOCK and RANDOM are persisted as
- * CONSTANT subtypes, so Ctrl+D / Ctrl+C / Ctrl+V silently dropped clockSource/randomSource and turned
- * the clone back into a plain CONSTANT. This clipboard deliberately copies every current EditorNode
- * persisted/configuration field, including the source subtype parameters.
- */
+/** Deep-copy support for every persisted/configuration field on editor nodes. */
 @Mixin(value = CircuitCanvasWidget.class, priority = 1600)
 public abstract class CircuitCanvasDuplicateMixin {
     @Unique private static final double LOGIC_COPY_OFFSET = 24.0;
@@ -171,6 +164,7 @@ public abstract class CircuitCanvasDuplicateMixin {
             int originalId,
             NodeKind kind,
             int width,
+            int laneWidth,
             String label,
             String chipName,
             long constantValue,
@@ -189,6 +183,7 @@ public abstract class CircuitCanvasDuplicateMixin {
                     node.id,
                     node.kind,
                     node.width,
+                    node.laneWidth,
                     node.label == null ? "" : node.label,
                     node.chipName == null ? "" : node.chipName,
                     node.constantValue,
@@ -206,6 +201,7 @@ public abstract class CircuitCanvasDuplicateMixin {
 
         void apply(EditorNode node) {
             node.width = width;
+            node.laneWidth = laneWidth;
             node.label = label;
             node.chipName = chipName;
             node.constantValue = constantValue;

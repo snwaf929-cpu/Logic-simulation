@@ -17,12 +17,13 @@ public final class InfrastructureSelfTest {
         testConstantBus();
         testProbeSink();
         testConstantSplitMerge();
+        testGroupedSplitMerge64();
         testSixteenIndividualBitsIntoBusAndBack();
         testFloatingInputsDefaultLow();
         testStructuralBusLoopRejectedWithoutStackOverflow();
         testNandFeedbackStillCompiles();
         testNestedCustomChipNandFeedbackCompiles();
-        System.out.println("CPU editor infrastructure + bus packing + floating-low + cycle safety self-test: PASS");
+        System.out.println("CPU editor infrastructure + grouped bus lanes + floating-low + cycle safety self-test: PASS");
     }
 
     private static void testBusPassThrough() {
@@ -84,7 +85,45 @@ public final class InfrastructureSelfTest {
         document.connect(merger.id, 0, output.id, 0);
 
         CompiledCircuit compiled = CircuitCompiler.compile(document, name -> null);
-        check(compiled.inputUnsigned(output.id, 0) == 0xA5L, "CONSTANT -> SPLITTER -> MERGER");
+        check(compiled.inputUnsigned(output.id, 0) == 0xA5L, "legacy 1-bit CONSTANT -> SPLITTER -> MERGER");
+    }
+
+    /** 64-bit bus -> four 16-bit outputs -> four 16-bit inputs -> 64-bit bus. */
+    private static void testGroupedSplitMerge64() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode input = document.addNode(NodeKind.INPUT, 0, 0);
+        input.width = 64;
+
+        EditorNode splitter = document.addNode(NodeKind.SPLITTER, 100, 0);
+        splitter.width = 64;
+        splitter.laneWidth = 16;
+
+        EditorNode merger = document.addNode(NodeKind.MERGER, 280, 0);
+        merger.width = 64;
+        merger.laneWidth = 16;
+
+        EditorNode[] laneOutputs = new EditorNode[4];
+        for (int lane = 0; lane < 4; lane++) {
+            laneOutputs[lane] = document.addNode(NodeKind.OUTPUT, 200, lane * 50.0);
+            laneOutputs[lane].width = 16;
+            document.connect(splitter.id, lane, laneOutputs[lane].id, 0);
+            document.connect(splitter.id, lane, merger.id, lane);
+        }
+
+        EditorNode output = document.addNode(NodeKind.OUTPUT, 420, 0);
+        output.width = 64;
+        document.connect(input.id, 0, splitter.id, 0);
+        document.connect(merger.id, 0, output.id, 0);
+
+        CompiledCircuit compiled = CircuitCompiler.compile(document, name -> null);
+        long pattern = 0x0123456789ABCDEFL;
+        compiled.driveInputUnsigned(input.id, pattern);
+
+        check(compiled.inputUnsigned(laneOutputs[0].id, 0) == 0xCDEFL, "grouped lane 0 = bits 0..15");
+        check(compiled.inputUnsigned(laneOutputs[1].id, 0) == 0x89ABL, "grouped lane 1 = bits 16..31");
+        check(compiled.inputUnsigned(laneOutputs[2].id, 0) == 0x4567L, "grouped lane 2 = bits 32..47");
+        check(compiled.inputUnsigned(laneOutputs[3].id, 0) == 0x0123L, "grouped lane 3 = bits 48..63");
+        check(compiled.inputUnsigned(output.id, 0) == pattern, "four 16-bit lanes reassemble into original 64-bit bus");
     }
 
     /**
@@ -123,16 +162,12 @@ public final class InfrastructureSelfTest {
         }
     }
 
-    /** Floating/unconnected input ports behave like real pulled-low infrastructure: 0, not X. */
     private static void testFloatingInputsDefaultLow() {
         CircuitDocument document = new CircuitDocument();
-
-        // Both NAND inputs are intentionally left unconnected. 0 NAND 0 must produce 1.
         EditorNode nand = document.addNode(NodeKind.NAND, 80, 0);
         EditorNode nandOutput = document.addNode(NodeKind.OUTPUT, 200, 0);
         document.connect(nand.id, 0, nandOutput.id, 0);
 
-        // A completely floating multi-bit sink must read all zeroes as well.
         EditorNode floatingBusOutput = document.addNode(NodeKind.OUTPUT, 200, 80);
         floatingBusOutput.width = 16;
 
@@ -176,15 +211,9 @@ public final class InfrastructureSelfTest {
         document.connect(q.id, 0, nq.id, 1);
         document.connect(q.id, 0, output.id, 0);
 
-        // Cross-coupled NAND feedback is intentional sequential logic and must remain legal.
         CircuitCompiler.compile(document, name -> null);
     }
 
-    /**
-     * Regression for a register/latch hidden inside a reusable custom chip. The feedback leaves the chip,
-     * travels through routing, and returns to an input. The compiler must see the NAND state boundary inside
-     * the custom chip instead of incorrectly treating the whole custom chip as combinational.
-     */
     private static void testNestedCustomChipNandFeedbackCompiles() {
         CircuitDocument stateCircuit = new CircuitDocument();
         EditorNode d = stateCircuit.addNode(NodeKind.INPUT, 0, 0);
