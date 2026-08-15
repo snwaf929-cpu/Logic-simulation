@@ -16,6 +16,7 @@ public final class ModNetworking {
         PayloadTypeRegistry.serverboundPlay().register(ProgramCircuitPayload.TYPE, ProgramCircuitPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(RequestCircuitBoardPayload.TYPE, RequestCircuitBoardPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(SaveCircuitBoardPayload.TYPE, SaveCircuitBoardPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(DriveCircuitInputPayload.TYPE, DriveCircuitInputPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(CircuitBoardPayload.TYPE, CircuitBoardPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(ProgramCircuitPayload.TYPE, (payload, context) -> {
@@ -63,6 +64,21 @@ public final class ModNetworking {
             } catch (RuntimeException error) {
                 String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
                 player.sendSystemMessage(Component.literal("Board autosave failed: " + message));
+            }
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DriveCircuitInputPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!near(player, payload.pos())) return;
+            if (payload.portName() == null || payload.portName().isBlank() || payload.portName().length() > 64) return;
+            if (payload.valueHex() == null || payload.valueHex().isBlank() || payload.valueHex().length() > 16) return;
+            if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
+            try {
+                long value = Long.parseUnsignedLong(payload.valueHex(), 16);
+                circuit.acceptExternalInput(payload.portName(), value);
+            } catch (RuntimeException error) {
+                String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+                player.sendSystemMessage(Component.literal("Circuit input rejected: " + message));
             }
         });
     }
