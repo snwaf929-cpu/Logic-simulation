@@ -23,7 +23,7 @@ public final class EditorV2FoundationChecks {
     private static void gridChecks() {
         check(EditorGrid.snap(13.0) == 12.0, "grid rounds to six-unit lattice");
         check(EditorGrid.snapUp(13.0) == 18.0, "grid snapUp uses six-unit lattice");
-        check(EditorGrid.duplicateGap() == 0.0, "smart duplicate stacks flush with no forced gap");
+        check(EditorGrid.duplicateGap() == EditorGrid.STEP, "smart duplicate leaves exactly one editor-grid cell below the rendered footprint");
         for (double value : new double[] {-42, -6, 0, 6, 72, 138}) check(EditorGrid.aligned(value), "known grid value remains aligned: " + value);
     }
 
