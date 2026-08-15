@@ -105,8 +105,9 @@ public final class CircuitProgramRuntime {
 
         // V2.1A moved DISPLAY from a visible DATA64 OUTPUT to typed DEVICE sink pins. Rebuild the exact same packed
         // boundary internally as COLOR[15:0], X[31:16], Y[47:32]. WRITE remains a real 1-bit strobe and is required to
-        // be the one direct CLOCK. RESET must be unwired for this aggressive path. The user-facing schematic therefore
-        // stays X/Y/COLOR/WRITE/RESET while the proven packed RANDOM engine remains available underneath it.
+        // be the one direct CLOCK. RESET may be unwired or provably tied LOW by an ordinary CONSTANT; dynamic RESET
+        // sources retain the exact ordinary DEVICE engine. The user-facing schematic therefore stays
+        // X/Y/COLOR/WRITE/RESET while the proven packed RANDOM engine remains available underneath it.
         this.directRandomDeviceDisplayPlans = new DeviceDisplayBulkPlan[externalDevices.length];
         for (int index = 0; index < externalDevices.length; index++) {
             directRandomDeviceDisplayPlans[index] = compileDeviceDisplayBulkPlan(externalDevices[index]);
@@ -191,8 +192,9 @@ public final class CircuitProgramRuntime {
 
     /**
      * Packed V2.1A physical DISPLAY execution. The cached plan synthesizes only the 48 data bits; this method restores
-     * the internal PIXEL opcode before publishing to the realtime framebuffer. A raised/wired RESET disables the bulk
-     * path before any virtual edge is consumed, so the ordinary exact DEVICE engine remains the semantic fallback.
+     * the internal PIXEL opcode before publishing to the realtime framebuffer. RESET is either unwired or structurally
+     * proven static LOW when the plan is compiled. A defensive runtime LOW check remains here in case loaded state is
+     * malformed; a raised RESET falls back before any virtual edge is consumed.
      */
     public long advanceDirectRandomDeviceDisplayNanos(
             long elapsedNanos,
@@ -329,7 +331,7 @@ public final class CircuitProgramRuntime {
     private DeviceDisplayBulkPlan compileDeviceDisplayBulkPlan(DeviceBinding device) {
         if (device == null || device.type() != ExternalDeviceType.DISPLAY || device.inputs().length != 5) return null;
         if (outputRuntimePorts.length != 0 || externalDevices.length != 1 || timing.clocks().size() != 1) return null;
-        if (!displayWriteIsDirectClock(device.nodeId()) || hasWireToDevicePort(device.nodeId(), 4)) return null;
+        if (!displayWriteIsDirectClock(device.nodeId()) || !displayResetBulkSafe(device.nodeId())) return null;
 
         int[] x = device.inputs()[0].valueSignalIds();
         int[] y = device.inputs()[1].valueSignalIds();
@@ -356,11 +358,27 @@ public final class CircuitProgramRuntime {
         return false;
     }
 
-    private boolean hasWireToDevicePort(int deviceNodeId, int portIndex) {
+    /**
+     * RESET is bulk-safe when floating LOW or tied directly to an ordinary one-bit CONSTANT 0. Dynamic sources must
+     * keep the exact edge engine because DISPLAY RESET is rising-edge triggered and can clear the framebuffer.
+     */
+    private boolean displayResetBulkSafe(int deviceNodeId) {
+        WireConnection resetWire = null;
         for (WireConnection wire : program.root.circuit.wires) {
-            if (wire.targetNodeId() == deviceNodeId && wire.targetPort() == portIndex) return true;
+            if (wire.targetNodeId() != deviceNodeId || wire.targetPort() != 4) continue;
+            if (resetWire != null) return false;
+            resetWire = wire;
         }
-        return false;
+        if (resetWire == null) return true;
+        if (resetWire.sourcePort() != 0) return false;
+
+        EditorNode source = nodeById(resetWire.sourceNodeId());
+        return source != null
+                && source.kind == NodeKind.CONSTANT
+                && !source.clockSource
+                && !source.randomSource
+                && source.width == 1
+                && (source.constantValue & 1L) == 0L;
     }
 
     private EditorNode nodeById(int nodeId) {
