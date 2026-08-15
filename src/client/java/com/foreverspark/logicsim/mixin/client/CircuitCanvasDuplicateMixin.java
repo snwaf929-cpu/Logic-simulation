@@ -65,11 +65,11 @@ public abstract class CircuitCanvasDuplicateMixin {
             cir.setReturnValue(false);
             return;
         }
-        logic$checkpoint("Paste");
+        logic$duplicateHistoryCheckpoint("Paste");
         logic$pasteSerial++;
         double offset = LOGIC_PASTE_OFFSET * logic$pasteSerial;
         logic$pasteSelection(logic$clipboard, offset, offset);
-        logic$commitHistory();
+        logic$duplicateHistoryCommit();
         status.accept("Pasted " + selectedNodeIds.size() + " node" + (selectedNodeIds.size() == 1 ? "" : "s"));
         cir.setReturnValue(true);
     }
@@ -81,11 +81,11 @@ public abstract class CircuitCanvasDuplicateMixin {
             cir.setReturnValue(false);
             return;
         }
-        logic$checkpoint("Duplicate");
+        logic$duplicateHistoryCheckpoint("Duplicate");
         LogicClipboard copy = logic$captureSelection();
         double verticalStep = EditorGrid.snapUp(copy.height()) + EditorGrid.duplicateGap();
         logic$pasteSelection(copy, 0.0, verticalStep);
-        logic$commitHistory();
+        logic$duplicateHistoryCommit();
         status.accept("Duplicated " + selectedNodeIds.size() + " node" + (selectedNodeIds.size() == 1 ? "" : "s")
                 + " below on the editor grid");
         cir.setReturnValue(true);
@@ -165,12 +165,14 @@ public abstract class CircuitCanvasDuplicateMixin {
         recompile();
     }
 
-    @Unique private void logic$checkpoint(String label) {
+    // Keep bridge helper JVM signatures distinct from EditorHistoryAccess methods on the same
+    // transformed CircuitCanvasWidget class.
+    @Unique private void logic$duplicateHistoryCheckpoint(String label) {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$checkpoint(label);
     }
 
-    @Unique private void logic$commitHistory() {
+    @Unique private void logic$duplicateHistoryCommit() {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$commitHistory();
     }
