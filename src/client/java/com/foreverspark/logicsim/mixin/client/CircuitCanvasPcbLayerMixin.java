@@ -74,9 +74,9 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
             status.accept("Selected trace already starts on " + logic$pcbViewLayer + " copper");
             return true;
         }
-        logic$checkpoint("Move trace to " + logic$pcbViewLayer);
+        logic$pcbHistoryCheckpoint("Move trace to " + logic$pcbViewLayer);
         selectedWire.setLayer(logic$pcbViewLayer);
-        logic$commitHistory();
+        logic$pcbHistoryCommit();
         status.accept("Selected trace now starts on " + logic$pcbViewLayer + " copper" +
                 (selectedWire.viaRouteIndices().isEmpty() ? "" : "; existing vias still alternate layers"));
         return true;
@@ -97,9 +97,9 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
             status.accept("VIA: click near a permanent route corner, then press V");
             return false;
         }
-        logic$checkpoint("Toggle PCB via");
+        logic$pcbHistoryCheckpoint("Toggle PCB via");
         boolean added = selectedWire.toggleViaAtRouteIndex(index);
-        logic$commitHistory();
+        logic$pcbHistoryCommit();
         RoutePoint point = selectedWire.routePoints().get(index);
         status.accept((added ? "VIA added" : "VIA removed") + " at " + Math.round(point.x()) + "," + Math.round(point.y())
                 + (added ? " — copper switches side after this point" : ""));
@@ -348,12 +348,14 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
         return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
     }
 
-    @Unique private void logic$checkpoint(String label) {
+    // Deliberately named away from EditorHistoryAccess#logic$checkpoint/logic$commitHistory.
+    // Those interface methods are implemented by CircuitCanvasEditorV2Mixin on the same target class.
+    @Unique private void logic$pcbHistoryCheckpoint(String label) {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$checkpoint(label);
     }
 
-    @Unique private void logic$commitHistory() {
+    @Unique private void logic$pcbHistoryCommit() {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$commitHistory();
     }
