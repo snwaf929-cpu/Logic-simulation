@@ -82,7 +82,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
             long value = node.kind == NodeKind.INPUT
                     ? inputStates.getOrDefault(node.id, node.inputDefaultValue)
                     : node.constantValue;
-            Minecraft.getInstance().setScreen(Phase2NodeConfigScreen.value(
+            Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.value(
                     parent,
                     node.kind == NodeKind.INPUT ? "INPUT VALUE" : "CONSTANT VALUE",
                     node.width,
@@ -111,7 +111,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
         if (node.kind == NodeKind.BUS_SLICE) {
             List<BusSliceOutput> slices = new ArrayList<>();
             for (BusSliceOutput slice : node.normalizedSlices()) slices.add(slice.copy());
-            Minecraft.getInstance().setScreen(Phase2NodeConfigScreen.slice(parent, node.width, slices, (width, nextSlices) -> {
+            Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.slice(parent, node.width, slices, (width, nextSlices) -> {
                 logic$checkpoint("Configure bus slice");
                 node.width = width;
                 node.slices = new ArrayList<>();
@@ -127,7 +127,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
         }
 
         if (node.kind == NodeKind.NET_LABEL) {
-            Minecraft.getInstance().setScreen(Phase2NodeConfigScreen.net(parent, node.label, node.width, (name, width) -> {
+            Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.net(parent, node.label, node.width, (name, width) -> {
                 logic$checkpoint("Configure net label");
                 boolean electricalChange = node.width != width || !name.equals(node.label);
                 node.label = name;
@@ -141,7 +141,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
         }
 
         int lane = (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) ? node.normalizedLaneWidth() : 1;
-        Minecraft.getInstance().setScreen(Phase2NodeConfigScreen.width(parent, node.displayName(), node.width, lane, (width, laneWidth) -> {
+        Minecraft.getInstance().gui.setScreen(Phase2NodeConfigScreen.width(parent, node.displayName(), node.width, lane, (width, laneWidth) -> {
             logic$checkpoint("Configure width");
             boolean changed = node.width != width || ((node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) && node.laneWidth != laneWidth);
             node.width = width;
