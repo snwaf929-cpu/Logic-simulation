@@ -4,6 +4,7 @@ import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.block.CircuitBlockEntity;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
+import com.foreverspark.logicsim.client.render.DisplayResetEdgeTracker;
 import com.foreverspark.logicsim.client.render.RandomDisplayNetworkFastPath;
 import com.foreverspark.logicsim.client.render.RandomDisplayNetworkResetCompat;
 import com.foreverspark.logicsim.client.render.RealtimeDisplaySurface;
@@ -26,11 +27,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.lang.reflect.Method;
 
 /**
- * Compatibility worker for physical DISPLAY boards whose RESET pin is explicitly tied to CONSTANT 0.
+ * Bulk worker for physical DISPLAY boards with a real wired RESET input.
  *
- * <p>The generic multi-trigger fast-path compiler historically treats any RESET wire as dynamic. This mixin runs after
- * physical-device discovery, proves RESET is a static LOW through RandomDisplayNetworkResetCompat, and then drives the
- * exact same compiled RANDOM trigger-DAG engine. Dynamic/high RESET continues through the ordinary exact simulator.</p>
+ * <p>RESET is a command strobe, not part of the RANDOM/X/Y/COLOR data dependency graph. The packed RANDOM engine can
+ * therefore remain active while RESET is dynamic. This mixin monitors the real compiled RESET signal and publishes one
+ * CLEAR command on each LOW->HIGH transition, while the 48-lane RANDOM trigger DAG continues through 64K-edge chunks.
+ * Holding RESET high never repeats CLEAR; dropping it low re-arms the next rising edge.</p>
  */
 @Mixin(value = CircuitBlockEntity.class, priority = 1300)
 public abstract class CircuitBlockStaticResetRandomDisplayMixin {
@@ -41,26 +43,27 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
 
     @Unique private static final Method logic$configureRealtimeWallMethod = logic$findConfigureRealtimeWallMethod();
 
-    @Unique private volatile RandomDisplayNetworkFastPath.Plan logic$staticResetPlan;
-    @Unique private volatile RealtimeDisplaySurface.Surface logic$staticResetSurface;
-    @Unique private volatile int logic$staticResetDeviceIndex = -1;
-    @Unique private String logic$lastStaticResetSignature = "";
+    @Unique private volatile RandomDisplayNetworkFastPath.Plan logic$resetAwarePlan;
+    @Unique private volatile RealtimeDisplaySurface.Surface logic$resetAwareSurface;
+    @Unique private volatile DisplayResetEdgeTracker logic$resetTracker;
+    @Unique private volatile int logic$resetAwareDeviceIndex = -1;
+    @Unique private String logic$lastResetAwareSignature = "";
 
     @Inject(method = "refreshExternalDeviceTargets", at = @At("TAIL"))
-    private void logic$refreshStaticResetNetwork(CallbackInfo ci) {
+    private void logic$refreshResetAwareNetwork(CallbackInfo ci) {
         CircuitBlockEntity self = (CircuitBlockEntity) (Object) this;
         CircuitProgramRuntime current = runtime;
         Level level = self.getLevel();
         if (current == null || level == null || level.isClientSide()) {
-            logic$clearStaticResetPlan(true);
+            logic$clearResetAwarePlan(true);
             logic$log(self, "inactive:runtime-or-level");
             return;
         }
 
-        // The original one-group engine is faster and now also accepts a proven CONSTANT-0 RESET.
+        // The older one-group specialization remains preferred when it can prove the whole boundary itself.
         for (int index = 0; index < current.externalDeviceCount(); index++) {
             if (current.directRandomDeviceDisplayBatchEligible(index)) {
-                logic$clearStaticResetPlan(true);
+                logic$clearResetAwarePlan(true);
                 logic$log(self, "inactive:direct-device-fast-path");
                 return;
             }
@@ -81,14 +84,18 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                 continue;
             }
 
-            RandomDisplayNetworkFastPath.Plan existing = logic$staticResetPlan;
-            if (existing != null && existing.matches(current, index, surface.logicalWidth(), surface.logicalHeight())) {
-                logic$staticResetSurface = surface;
-                logic$staticResetDeviceIndex = index;
+            RandomDisplayNetworkFastPath.Plan existing = logic$resetAwarePlan;
+            DisplayResetEdgeTracker existingTracker = logic$resetTracker;
+            if (existing != null
+                    && existingTracker != null
+                    && existing.matches(current, index, surface.logicalWidth(), surface.logicalHeight())) {
+                logic$resetAwareSurface = surface;
+                logic$resetAwareDeviceIndex = index;
                 logic$log(self,
                         "active:device=" + index
                                 + ":groups=" + existing.triggerGroupCount()
-                                + ":lanes=" + existing.randomLaneCount());
+                                + ":lanes=" + existing.randomLaneCount()
+                                + ":resetSignal=" + existingTracker.signalId());
                 return;
             }
 
@@ -100,18 +107,26 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                 continue;
             }
 
-            logic$clearStaticResetPlan(true);
-            logic$staticResetPlan = result.plan();
-            logic$staticResetSurface = surface;
-            logic$staticResetDeviceIndex = index;
+            int resetSignalId = RandomDisplayNetworkResetCompat.resetSignalId(current, index);
+            if (resetSignalId < 0) {
+                lastReason = "display-reset-signal-unresolved";
+                continue;
+            }
+
+            logic$clearResetAwarePlan(true);
+            logic$resetAwarePlan = result.plan();
+            logic$resetAwareSurface = surface;
+            logic$resetAwareDeviceIndex = index;
+            logic$resetTracker = new DisplayResetEdgeTracker(current, resetSignalId);
             logic$log(self,
                     "active:device=" + index
                             + ":groups=" + result.plan().triggerGroupCount()
-                            + ":lanes=" + result.plan().randomLaneCount());
+                            + ":lanes=" + result.plan().randomLaneCount()
+                            + ":resetSignal=" + resetSignalId);
             return;
         }
 
-        logic$clearStaticResetPlan(true);
+        logic$clearResetAwarePlan(true);
         logic$log(self, "inactive:" + lastReason);
     }
 
@@ -122,22 +137,27 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
                     target = "Lcom/foreverspark/logicsim/interconnect/CircuitProgramRuntime;advanceClocksNanos(JJLjava/lang/Runnable;)J"
             )
     )
-    private long logic$advanceStaticResetNetwork(
+    private long logic$advanceResetAwareNetwork(
             CircuitProgramRuntime current,
             long elapsedNanos,
             long edgeBudget,
             Runnable afterSettledEdge,
             Operation<Long> original
     ) {
-        RandomDisplayNetworkFastPath.Plan plan = logic$staticResetPlan;
-        RealtimeDisplaySurface.Surface surface = logic$staticResetSurface;
-        int deviceIndex = logic$staticResetDeviceIndex;
+        RandomDisplayNetworkFastPath.Plan plan = logic$resetAwarePlan;
+        RealtimeDisplaySurface.Surface surface = logic$resetAwareSurface;
+        DisplayResetEdgeTracker tracker = logic$resetTracker;
+        int deviceIndex = logic$resetAwareDeviceIndex;
 
         if (plan != null
                 && surface != null
+                && tracker != null
                 && deviceIndex >= 0
                 && current == runtime
                 && plan.matches(current, deviceIndex, surface.logicalWidth(), surface.logicalHeight())) {
+            long resetCommand = tracker.pollCommand();
+            if (resetCommand != 0L) surface.record(resetCommand);
+
             long bulkBudget = edgeBudget;
             if (edgeBudget >= LOGIC_GENERIC_EDGE_CHUNK) {
                 bulkBudget = Math.min(LOGIC_NETWORK_EDGE_CHUNK, edgeBudget << 4);
@@ -145,36 +165,39 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
             return plan.advance(elapsedNanos, bulkBudget, surface::recordBatch);
         }
 
-        if (plan != null) logic$clearStaticResetPlan(true);
+        if (plan != null) logic$clearResetAwarePlan(true);
         return original.call(current, elapsedNanos, edgeBudget, afterSettledEdge);
     }
 
     @Inject(method = "setRemoved", at = @At("HEAD"))
-    private void logic$removeStaticResetNetwork(CallbackInfo ci) {
-        logic$clearStaticResetPlan(false);
-        logic$lastStaticResetSignature = "";
+    private void logic$removeResetAwareNetwork(CallbackInfo ci) {
+        logic$clearResetAwarePlan(false);
+        logic$lastResetAwareSignature = "";
     }
 
     @Unique
-    private void logic$clearStaticResetPlan(boolean synchronizeFallback) {
-        RandomDisplayNetworkFastPath.Plan old = logic$staticResetPlan;
-        logic$staticResetPlan = null;
-        logic$staticResetSurface = null;
-        logic$staticResetDeviceIndex = -1;
+    private void logic$clearResetAwarePlan(boolean synchronizeFallback) {
+        RandomDisplayNetworkFastPath.Plan old = logic$resetAwarePlan;
+        logic$resetAwarePlan = null;
+        logic$resetAwareSurface = null;
+        logic$resetTracker = null;
+        logic$resetAwareDeviceIndex = -1;
         if (synchronizeFallback && old != null) old.synchronizeFallback();
     }
 
     @Unique
     private void logic$log(CircuitBlockEntity self, String signature) {
-        if (signature.equals(logic$lastStaticResetSignature)) return;
-        logic$lastStaticResetSignature = signature;
+        if (signature.equals(logic$lastResetAwareSignature)) return;
+        logic$lastResetAwareSignature = signature;
         if (signature.startsWith("active:")) {
-            RandomDisplayNetworkFastPath.Plan plan = logic$staticResetPlan;
-            RealtimeDisplaySurface.Surface surface = logic$staticResetSurface;
+            RandomDisplayNetworkFastPath.Plan plan = logic$resetAwarePlan;
+            RealtimeDisplaySurface.Surface surface = logic$resetAwareSurface;
+            DisplayResetEdgeTracker tracker = logic$resetTracker;
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BULK DEVICE NETWORK RESET] circuit={} active=true reset=static-low deviceIndex={} triggerGroups={} randomLanes={} mode=compiled-random-trigger-dag maxEdgeChunk={} logical={}x{} batchPublication=true",
+                    "[CLOCK BULK DEVICE NETWORK RESET] circuit={} active=true reset=dynamic-edge resetSignalId={} deviceIndex={} triggerGroups={} randomLanes={} mode=compiled-random-trigger-dag maxEdgeChunk={} logical={}x{} batchPublication=true",
                     self.getBlockPos(),
-                    logic$staticResetDeviceIndex,
+                    tracker == null ? -1 : tracker.signalId(),
+                    logic$resetAwareDeviceIndex,
                     plan == null ? 0 : plan.triggerGroupCount(),
                     plan == null ? 0 : plan.randomLaneCount(),
                     LOGIC_NETWORK_EDGE_CHUNK,
@@ -213,7 +236,7 @@ public abstract class CircuitBlockStaticResetRandomDisplayMixin {
             Object value = logic$configureRealtimeWallMethod.invoke(null, level, displayPos, state, info.pixelsPerTile());
             return value instanceof RealtimeDisplaySurface.Surface surface ? surface : null;
         } catch (ReflectiveOperationException exception) {
-            throw new IllegalStateException("Could not map static-reset RANDOM DISPLAY to realtime surface", exception);
+            throw new IllegalStateException("Could not map reset-aware RANDOM DISPLAY to realtime surface", exception);
         }
     }
 
