@@ -25,6 +25,12 @@ public final class RandomDisplayNetworkSelfTest {
         clock.randomSource = false;
         clock.clockFrequencyHz = 50_000_000L;
 
+        EditorNode resetLow = board.addNode(NodeKind.CONSTANT, -180, 80);
+        resetLow.width = 1;
+        resetLow.constantValue = 0L;
+        resetLow.clockSource = false;
+        resetLow.randomSource = false;
+
         EditorNode x = merger16(board, 180, 0);
         EditorNode y = merger16(board, 180, 180);
         EditorNode color = merger16(board, 180, 360);
@@ -72,7 +78,9 @@ public final class RandomDisplayNetworkSelfTest {
         board.connect(y.id, 0, display.id, 1);
         board.connect(color.id, 0, display.id, 2);
         board.connect(clock.id, 0, display.id, 3);
-        // RESET intentionally unwired.
+        // Match the real board: RESET is explicitly wired to a permanent LOW constant.
+        board.connect(resetLow.id, 0, display.id, 4);
+        int wireCountBeforeCompile = board.wires.size();
 
         CircuitProgramRuntime runtime = new CircuitProgramRuntime(
                 new CircuitProgram(new ChipDefinition("RANDOM_NETWORK_11", board), Map.of())
@@ -82,10 +90,19 @@ public final class RandomDisplayNetworkSelfTest {
         check(!runtime.directRandomDeviceDisplayBatchEligible(0),
                 "legacy one-trigger bulk path must reject the eleven-group RANDOM network");
 
-        RandomDisplayNetworkFastPath.CompileResult compiled = RandomDisplayNetworkFastPath.compile(
+        RandomDisplayNetworkFastPath.CompileResult strict = RandomDisplayNetworkFastPath.compile(
                 runtime, 0, 65_536, 65_536
         );
-        check(compiled.active(), "compiled RANDOM network fast path rejected test board: " + compiled.reason());
+        check(!strict.active() && "display-reset-wired".equals(strict.reason()),
+                "strict network compiler must expose the historical wired-RESET rejection");
+
+        RandomDisplayNetworkFastPath.CompileResult compiled = RandomDisplayNetworkResetCompat.compile(
+                runtime, 0, 65_536, 65_536
+        );
+        check(compiled.active(), "static-LOW RESET compatibility compiler rejected test board: " + compiled.reason());
+        check("active-static-low-reset".equals(compiled.reason()), "compat compiler must report static-LOW RESET mode");
+        check(board.wires.size() == wireCountBeforeCompile,
+                "compat compiler must restore the real RESET wire after structural proof");
         check(compiled.plan().randomLaneCount() == 48, "compiled network must contain all 48 RANDOM lanes");
         check(compiled.plan().triggerGroupCount() == 11, "compiled network must preserve all 11 trigger groups");
 
@@ -100,7 +117,7 @@ public final class RandomDisplayNetworkSelfTest {
         check(commandCount[0] > 0, "compiled network must emit physical DISPLAY writes");
         check(DisplayCommandCodec.decode(firstCommand[0]).isPixel(), "compiled network must emit PIXEL commands");
 
-        System.out.println("48-RANDOM / 11-trigger-group physical DISPLAY bulk self-test: PASS"
+        System.out.println("48-RANDOM / 11-trigger-group / static-LOW RESET physical DISPLAY bulk self-test: PASS"
                 + " | emittedEdges=" + emitted + " commands=" + commandCount[0]);
     }
 
