@@ -14,7 +14,6 @@ import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.model.RoutePoint;
 import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.model.WireLayer;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.input.MouseButtonEvent;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Final;
@@ -161,20 +160,6 @@ public abstract class CircuitCanvasWireSelectionMixin implements EditorWireSelec
         ci.cancel();
     }
 
-    /** Draw every selected trace as one selection set; PCB rendering still owns signal/layer colors. */
-    @Inject(method = "extractWidgetRenderState", at = @At(value = "INVOKE", target = "Lcom/foreverspark/logicsim/client/screen/CircuitCanvasWidget;drawMarquee(Lnet/minecraft/client/gui/GuiGraphicsExtractor;)V", shift = At.Shift.BEFORE))
-    private void logic$drawMultiWireSelection(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        logic$pruneWireSelection();
-        if (logic$wireSelection.size() <= 1) return;
-        WireLayer view = logic$currentLayer();
-        for (WireConnection wire : logic$wireSelection) {
-            for (LogicLayerSegment segment : logic$segments(wire)) {
-                if (segment.layer() != view) continue;
-                logic$drawSelectedSegment(graphics, segment.a(), segment.b());
-            }
-        }
-    }
-
     @Inject(method = "deletionIntent", at = @At("HEAD"), cancellable = true)
     private void logic$multiWireDeletionIntent(CallbackInfoReturnable<CircuitCanvasWidget.DeletionIntent> cir) {
         List<WireConnection> wires = logic$selectedWires();
@@ -225,9 +210,8 @@ public abstract class CircuitCanvasWireSelectionMixin implements EditorWireSelec
 
     @Unique
     private void logic$leavePinSelectionMode() {
-        // Editor V2 already clears its private pin set whenever selectAllNodes runs. Trigger that
-        // public path, then immediately clear the temporary component selection before entering
-        // wire mode. No document state changes and the final wire status replaces its status text.
+        // Editor V2 clears its private pin set whenever selectAllNodes runs. Trigger that public
+        // path, then immediately clear the temporary component selection before entering wire mode.
         ((CircuitCanvasWidget)(Object)this).selectAllNodes();
         selectedNodeIds.clear();
         selectedNodeId = null;
@@ -370,17 +354,6 @@ public abstract class CircuitCanvasWireSelectionMixin implements EditorWireSelec
 
     @Unique private static void logic$append(List<LogicLayerSegment> result, LogicPoint a, LogicPoint b, WireLayer layer) {
         if (Math.hypot(b.x() - a.x(), b.y() - a.y()) > 0.001) result.add(new LogicLayerSegment(a, b, layer));
-    }
-
-    @Unique
-    private void logic$drawSelectedSegment(GuiGraphicsExtractor graphics, LogicPoint a, LogicPoint b) {
-        int x1 = screenX(a.x()), y1 = screenY(a.y());
-        int x2 = screenX(b.x()), y2 = screenY(b.y());
-        if (Math.abs(a.y() - b.y()) < 0.001) {
-            graphics.fill(Math.min(x1, x2), y1 - 1, Math.max(x1, x2) + 1, y1 + 2, 0xFFFFFFFF);
-        } else {
-            graphics.fill(x1 - 1, Math.min(y1, y2), x1 + 2, Math.max(y1, y2) + 1, 0xFFFFFFFF);
-        }
     }
 
     @Unique private record LogicPoint(double x, double y) {}
