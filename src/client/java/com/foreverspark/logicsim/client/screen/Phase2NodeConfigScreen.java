@@ -2,7 +2,6 @@ package com.foreverspark.logicsim.client.screen;
 
 import com.foreverspark.logicsim.client.screen.v2.NumericValueCodec;
 import com.foreverspark.logicsim.editor.model.BusSliceOutput;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -247,7 +246,7 @@ public final class Phase2NodeConfigScreen extends Screen {
 
     @Override
     public void onClose() {
-        Minecraft.getInstance().setScreen(parent);
+        if (this.minecraft != null) this.minecraft.gui.setScreen(parent);
     }
 
     @Override
