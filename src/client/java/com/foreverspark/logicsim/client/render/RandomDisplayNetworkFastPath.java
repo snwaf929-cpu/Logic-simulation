@@ -25,15 +25,19 @@ import java.util.Map;
  * Compiled fast path for physical DISPLAY stress boards with a zero-NAND RANDOM trigger network.
  *
  * <p>The MHz clock is handled in large pulse batches. RANDOM groups driven by the clock or another RANDOM lane are
- * evaluated as a primitive event DAG. A third class of trigger is also supported: an independent root INPUT, ordinary
- * CONSTANT, or floating-low net. Those signals are polled once per worker slice and retain normal LOW->HIGH semantics;
- * they are never scanned once per virtual MHz edge. NAND/device-produced triggers remain ineligible because polling
- * those only once per slice could hide simulator-internal pulses.</p>
+ * evaluated as a primitive event DAG. Independent root INPUT/ordinary CONSTANT/floating-low triggers are polled once
+ * per worker slice and keep normal LOW->HIGH semantics; they are never scanned once per virtual MHz edge.</p>
+ *
+ * <p>The hot loop deliberately stays in one packed 48-bit RANDOM state. Group probability masks are compiled directly
+ * into those global lane coordinates, so firing a group no longer needs a local-to-global scatter. For power-of-two
+ * displays, X/Y high bits are also compiled back into RANDOM-lane space. Most random coordinates can therefore be
+ * rejected with one AND before the comparatively expensive 48-bit DISPLAY packing step.</p>
  */
 public final class RandomDisplayNetworkFastPath {
     private static final long RNG_NONZERO_FALLBACK = 0x9E3779B97F4A7C15L;
     private static final long RNG_SEED_GAMMA = 0x9E3779B97F4A7C15L;
     private static final long PIXEL_OPCODE = (long) DisplayCommandCodec.OP_PIXEL << 48;
+    private static final long DISPLAY_DATA_MASK = (1L << 48) - 1L;
     private static final int DISPLAY_RANDOM_LANES = 48;
     private static final int TRIGGER_CLOCK = -1;
     private static final int TRIGGER_EXTERNAL = -2;
@@ -100,11 +104,13 @@ public final class RandomDisplayNetworkFastPath {
         if (boundarySignalIds == null) return fail("display-data-unresolved");
         int[] boundaryLane = new int[DISPLAY_RANDOM_LANES];
         boolean[] represented = new boolean[DISPLAY_RANDOM_LANES];
+        boolean boundaryIdentity = true;
         for (int bit = 0; bit < boundarySignalIds.length; bit++) {
             Integer lane = laneBySignal.get(boundarySignalIds[bit]);
             if (lane == null) return fail("display-data-not-random-bit-" + bit);
             boundaryLane[bit] = lane;
             represented[lane] = true;
+            boundaryIdentity &= lane == bit;
         }
         for (int lane = 0; lane < represented.length; lane++) {
             if (!represented[lane]) return fail("random-not-on-display-" + lane);
@@ -182,6 +188,9 @@ public final class RandomDisplayNetworkFastPath {
             parentGroup[groupIndex] = owner;
         }
         if (hasTriggerCycle(parentGroup)) return fail("random-trigger-cycle");
+        for (GroupPlan group : groups) {
+            group.downstreamTriggerMask = group.globalOutputMask & triggerConsumerMask;
+        }
 
         int[] externalGroupIndices = new int[externalGroupCount];
         int[] externalSignalIds = new int[externalGroupCount];
@@ -198,7 +207,13 @@ public final class RandomDisplayNetworkFastPath {
         for (int bit = 0; bit < boundaryLane.length; bit++) {
             laneBoundaryMasks[boundaryLane[bit]] |= 1L << bit;
         }
-        long[][] boundaryScatter = scatterTables(laneBoundaryMasks);
+        long[][] boundaryScatter = boundaryIdentity ? null : scatterTables(laneBoundaryMasks);
+
+        boolean exactCoordinatePrefilter = exactCoordinateLimit(displayWidth) && exactCoordinateLimit(displayHeight);
+        long coordinateRejectLaneMask = exactCoordinatePrefilter
+                ? coordinateRejectLaneMask(displayWidth, 16, boundaryLane)
+                        | coordinateRejectLaneMask(displayHeight, 32, boundaryLane)
+                : 0L;
 
         long initialState = 0L;
         for (int lane = 0; lane < outputSignalIds.length; lane++) {
@@ -216,8 +231,10 @@ public final class RandomDisplayNetworkFastPath {
                 groups,
                 clockGroup,
                 dependentGroupByLane,
-                triggerConsumerMask,
                 boundaryScatter,
+                boundaryIdentity,
+                exactCoordinatePrefilter,
+                coordinateRejectLaneMask,
                 externalGroupIndices,
                 externalSignalIds,
                 initialState
@@ -240,8 +257,10 @@ public final class RandomDisplayNetworkFastPath {
         private final GroupPlan[] groups;
         private final int clockGroup;
         private final int[] dependentGroupByLane;
-        private final long triggerConsumerMask;
         private final long[][] boundaryScatter;
+        private final boolean boundaryIdentity;
+        private final boolean exactCoordinatePrefilter;
+        private final long coordinateRejectLaneMask;
         private final int[] eventQueue;
         private final int[] externalGroupIndices;
         private final int[] externalSignalIds;
@@ -261,8 +280,10 @@ public final class RandomDisplayNetworkFastPath {
                 GroupPlan[] groups,
                 int clockGroup,
                 int[] dependentGroupByLane,
-                long triggerConsumerMask,
                 long[][] boundaryScatter,
+                boolean boundaryIdentity,
+                boolean exactCoordinatePrefilter,
+                long coordinateRejectLaneMask,
                 int[] externalGroupIndices,
                 int[] externalSignalIds,
                 long initialState
@@ -277,8 +298,10 @@ public final class RandomDisplayNetworkFastPath {
             this.groups = groups;
             this.clockGroup = clockGroup;
             this.dependentGroupByLane = dependentGroupByLane;
-            this.triggerConsumerMask = triggerConsumerMask;
             this.boundaryScatter = boundaryScatter;
+            this.boundaryIdentity = boundaryIdentity;
+            this.exactCoordinatePrefilter = exactCoordinatePrefilter;
+            this.coordinateRejectLaneMask = coordinateRejectLaneMask;
             this.eventQueue = new int[Math.max(1, groups.length)];
             this.externalGroupIndices = externalGroupIndices;
             this.externalSignalIds = externalSignalIds;
@@ -296,6 +319,9 @@ public final class RandomDisplayNetworkFastPath {
         public int deviceIndex() { return deviceIndex; }
         public int displayWidth() { return displayWidth; }
         public int displayHeight() { return displayHeight; }
+        public boolean coordinatePrefilterEnabled() { return exactCoordinatePrefilter && coordinateRejectLaneMask != 0L; }
+        public int coordinatePrefilterLaneCount() { return Long.bitCount(coordinateRejectLaneMask); }
+        public boolean boundaryIdentity() { return boundaryIdentity; }
 
         public boolean matches(CircuitProgramRuntime candidate, int candidateDevice, int width, int height) {
             return candidate == runtime
@@ -339,12 +365,21 @@ public final class RandomDisplayNetworkFastPath {
             int cycles = (int) risingEdges;
             ensureScratch(cycles);
             int outputCount = 0;
-            for (int cycle = 0; cycle < cycles; cycle++) {
-                state = runCascade(state, clockGroup);
-                long raw = PIXEL_OPCODE | scatter(boundaryScatter, state);
-                int x = (int) ((raw >>> 16) & 0xFFFFL);
-                int y = (int) ((raw >>> 32) & 0xFFFFL);
-                if (x < displayWidth && y < displayHeight) scratch[outputCount++] = raw;
+
+            if (exactCoordinatePrefilter) {
+                for (int cycle = 0; cycle < cycles; cycle++) {
+                    state = runCascade(state, clockGroup);
+                    if ((state & coordinateRejectLaneMask) != 0L) continue;
+                    scratch[outputCount++] = PIXEL_OPCODE | packBoundary(state);
+                }
+            } else {
+                for (int cycle = 0; cycle < cycles; cycle++) {
+                    state = runCascade(state, clockGroup);
+                    long raw = PIXEL_OPCODE | packBoundary(state);
+                    int x = (int) ((raw >>> 16) & 0xFFFFL);
+                    int y = (int) ((raw >>> 32) & 0xFFFFL);
+                    if (x < displayWidth && y < displayHeight) scratch[outputCount++] = raw;
+                }
             }
 
             commitState(state);
@@ -360,13 +395,12 @@ public final class RandomDisplayNetworkFastPath {
             while (head < tail) {
                 int groupIndex = eventQueue[head++];
                 GroupPlan group = groups[groupIndex];
-                long sampledLocal = group.sample();
-                long sampledGlobal = group.scatter(sampledLocal);
+                long sampledGlobal = group.sampleGlobal();
                 long nextState = (state & ~group.globalOutputMask) | sampledGlobal;
                 long changed = state ^ nextState;
                 state = nextState;
 
-                long rising = changed & state & triggerConsumerMask;
+                long rising = changed & state & group.downstreamTriggerMask;
                 while (rising != 0L) {
                     int lane = Long.numberOfTrailingZeros(rising);
                     int dependent = dependentGroupByLane[lane];
@@ -380,6 +414,10 @@ public final class RandomDisplayNetworkFastPath {
                 }
             }
             return state;
+        }
+
+        private long packBoundary(long state) {
+            return boundaryIdentity ? (state & DISPLAY_DATA_MASK) : scatter(boundaryScatter, state);
         }
 
         private void commitState(long state) {
@@ -406,15 +444,16 @@ public final class RandomDisplayNetworkFastPath {
         private final int externalTriggerSignalId;
         private final int[] globalLanes;
         private final long globalOutputMask;
-        private final long[][] globalScatter;
-        private final long validLaneMask;
         private final long chance25Mask;
         private final long chance50Mask;
         private final long chance75Mask;
         private final long chance100Mask;
+        private final long commonActiveMask;
         private final long probabilisticMask;
         private final long[] thresholdBitMasks;
         private final boolean commonChanceFastPath;
+        private final boolean commonNeedsSecondWord;
+        private long downstreamTriggerMask;
         private long rng0;
         private long rng1;
 
@@ -422,6 +461,7 @@ public final class RandomDisplayNetworkFastPath {
             this.triggerLane = triggerLane;
             this.externalTriggerSignalId = externalTriggerSignalId;
             this.globalLanes = new int[lanes.size()];
+
             long outputMask = 0L;
             long chance25 = 0L;
             long chance50 = 0L;
@@ -430,76 +470,73 @@ public final class RandomDisplayNetworkFastPath {
             long probabilistic = 0L;
             long[] thresholdBits = new long[8];
             boolean common = true;
-            long[] localToGlobal = new long[lanes.size()];
 
-            for (int local = 0; local < lanes.size(); local++) {
-                LaneSpec lane = lanes.get(local);
-                globalLanes[local] = lane.globalLane;
-                long globalBit = 1L << lane.globalLane;
-                localToGlobal[local] = globalBit;
-                outputMask |= globalBit;
+            for (int index = 0; index < lanes.size(); index++) {
+                LaneSpec lane = lanes.get(index);
+                globalLanes[index] = lane.globalLane;
+                long laneBit = 1L << lane.globalLane;
+                outputMask |= laneBit;
 
-                long localBit = 1L << local;
                 int chance = lane.chancePercent;
                 switch (chance) {
                     case 0 -> {
                     }
                     case 25 -> {
-                        chance25 |= localBit;
-                        probabilistic |= localBit;
+                        chance25 |= laneBit;
+                        probabilistic |= laneBit;
                     }
                     case 50 -> {
-                        chance50 |= localBit;
-                        probabilistic |= localBit;
+                        chance50 |= laneBit;
+                        probabilistic |= laneBit;
                     }
                     case 75 -> {
-                        chance75 |= localBit;
-                        probabilistic |= localBit;
+                        chance75 |= laneBit;
+                        probabilistic |= laneBit;
                     }
-                    case 100 -> chance100 |= localBit;
+                    case 100 -> chance100 |= laneBit;
                     default -> {
                         common = false;
-                        probabilistic |= localBit;
+                        probabilistic |= laneBit;
                     }
                 }
 
                 if (chance > 0 && chance < 100) {
                     int threshold = (chance * 256 + 50) / 100;
                     for (int bit = 0; bit < 8; bit++) {
-                        if (((threshold >>> bit) & 1) != 0) thresholdBits[bit] |= localBit;
+                        if (((threshold >>> bit) & 1) != 0) thresholdBits[bit] |= laneBit;
                     }
                 }
             }
 
             this.globalOutputMask = outputMask;
-            this.globalScatter = scatterTables(localToGlobal);
-            this.validLaneMask = lanes.size() >= 64 ? -1L : ((1L << lanes.size()) - 1L);
             this.chance25Mask = chance25;
             this.chance50Mask = chance50;
             this.chance75Mask = chance75;
             this.chance100Mask = chance100;
+            this.commonActiveMask = chance25 | chance50 | chance75;
             this.probabilisticMask = probabilistic;
             this.thresholdBitMasks = thresholdBits;
             this.commonChanceFastPath = common;
+            this.commonNeedsSecondWord = (chance25 | chance75) != 0L;
             this.rng0 = mix64(seed);
             this.rng1 = mix64(seed + RNG_SEED_GAMMA);
             if ((rng0 | rng1) == 0L) rng1 = RNG_NONZERO_FALLBACK;
         }
 
-        private long sample() {
-            if (validLaneMask == 0L) return 0L;
+        /** Sample directly into global 48-lane state coordinates; no local->global scatter exists in the hot loop. */
+        private long sampleGlobal() {
+            if (globalOutputMask == 0L) return 0L;
             if (commonChanceFastPath) {
                 long result = chance100Mask;
-                long active = chance25Mask | chance50Mask | chance75Mask;
-                if (active == 0L) return result & validLaneMask;
+                if (commonActiveMask == 0L) return result;
                 long r0 = nextLong();
                 result |= r0 & chance50Mask;
-                if ((chance25Mask | chance75Mask) != 0L) {
+                if (commonNeedsSecondWord) {
                     long r1 = nextLong();
                     result |= (r0 & r1) & chance25Mask;
                     result |= (r0 | r1) & chance75Mask;
                 }
-                return result & validLaneMask;
+                return result;
             }
 
             long less = 0L;
@@ -510,11 +547,7 @@ public final class RandomDisplayNetworkFastPath {
                 less |= equal & thresholdPlane & ~randomPlane;
                 equal &= ~(randomPlane ^ thresholdPlane);
             }
-            return (chance100Mask | less) & validLaneMask;
-        }
-
-        private long scatter(long localMask) {
-            return RandomDisplayNetworkFastPath.scatter(globalScatter, localMask);
+            return chance100Mask | less;
         }
 
         private long nextLong() {
@@ -593,6 +626,23 @@ public final class RandomDisplayNetworkFastPath {
             result[bit] = color[bit].id();
             result[16 + bit] = x[bit].id();
             result[32 + bit] = y[bit].id();
+        }
+        return result;
+    }
+
+    /** True when a 16-bit unsigned coordinate can be rejected exactly by testing only its high bits. */
+    private static boolean exactCoordinateLimit(int limit) {
+        return limit >= 65_536 || (limit > 0 && (limit & (limit - 1)) == 0);
+    }
+
+    /** Convert the high coordinate bits that must be zero into the corresponding RANDOM global-lane mask. */
+    private static long coordinateRejectLaneMask(int limit, int boundaryShift, int[] boundaryLane) {
+        if (limit >= 65_536) return 0L;
+        int lowBits = Integer.numberOfTrailingZeros(limit);
+        long result = 0L;
+        for (int bit = lowBits; bit < 16; bit++) {
+            int lane = boundaryLane[boundaryShift + bit];
+            result |= 1L << lane;
         }
         return result;
     }
