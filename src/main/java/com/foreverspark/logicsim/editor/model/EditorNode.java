@@ -42,6 +42,18 @@ public final class EditorNode {
     public int templateInstanceId = 0;
     public String templateName = "";
 
+    /**
+     * Phase 5 physical DEVICE metadata. DEVICE nodes are discovered world endpoints, never logic gates.
+     * They remain in the document when the physical endpoint disappears and become UNKNOWN.
+     */
+    public ExternalDeviceType externalDeviceType = ExternalDeviceType.DISPLAY;
+    public ExternalDeviceState externalDeviceState = ExternalDeviceState.UNKNOWN;
+    public String externalDeviceId = "";
+    public String externalDeviceWorld = "";
+    public int externalDeviceX;
+    public int externalDeviceY;
+    public int externalDeviceZ;
+
     public EditorNode() {}
 
     public EditorNode(int id, NodeKind kind, double x, double y) {
@@ -57,14 +69,20 @@ public final class EditorNode {
         }
         if (kind == NodeKind.NET_LABEL) {
             this.width = 1;
-            // A fresh NET must not silently join every other untouched NET label. Duplicating an
-            // existing NET still preserves its name, which is the intentional way to create aliases.
             this.label = "NET" + id;
+        }
+        if (kind == NodeKind.EXTERNAL_DEVICE) {
+            this.label = ExternalDeviceType.DISPLAY.label();
+            this.width = 1;
         }
     }
 
     public boolean isBoardSocket() {
         return boardSocket && kind == NodeKind.BUS;
+    }
+
+    public boolean isExternalDevice() {
+        return kind == NodeKind.EXTERNAL_DEVICE;
     }
 
     public void configureBoardSocket(String name, PortDirection direction, int order) {
@@ -74,6 +92,21 @@ public final class EditorNode {
         socketDirection = direction == null ? PortDirection.INPUT : direction;
         interfaceOrder = Math.max(0, order);
         if (interfaceId == null || interfaceId.isBlank()) interfaceId = "socket-" + id;
+    }
+
+    public void configureExternalDevice(ExternalDeviceType type, String stableId, ExternalDeviceState state,
+                                        String world, int x, int y, int z) {
+        kind = NodeKind.EXTERNAL_DEVICE;
+        boardSocket = false;
+        externalDeviceType = type == null ? ExternalDeviceType.DISPLAY : type;
+        externalDeviceId = stableId == null ? "" : stableId.trim();
+        externalDeviceState = state == null ? ExternalDeviceState.UNKNOWN : state;
+        externalDeviceWorld = world == null ? "" : world.trim();
+        externalDeviceX = x;
+        externalDeviceY = y;
+        externalDeviceZ = z;
+        label = externalDeviceType.label();
+        chipName = "";
     }
 
     public int laneCount() {
@@ -111,6 +144,7 @@ public final class EditorNode {
 
     public String displayName() {
         if (isBoardSocket()) return "SOCKET " + ((label == null || label.isBlank()) ? interfaceId : label.trim());
+        if (isExternalDevice()) return externalDeviceType.label() + "  " + externalDeviceState;
         if (kind == NodeKind.CUSTOM_CHIP && chipName != null && !chipName.isBlank()) return chipName;
         if (randomSource && kind == NodeKind.CONSTANT) return "RANDOM " + randomChancePercent + "%";
         if (clockSource && kind == NodeKind.CONSTANT) return "CLOCK " + formatFrequency(clockFrequencyHz);
@@ -128,6 +162,7 @@ public final class EditorNode {
             case BUS_SLICE -> "BUS SLICE " + width;
             case NET_LABEL -> "NET";
             case CUSTOM_CHIP -> "CUSTOM CHIP";
+            case EXTERNAL_DEVICE -> "DEVICE";
         };
     }
 
