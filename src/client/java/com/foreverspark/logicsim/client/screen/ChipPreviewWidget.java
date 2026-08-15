@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.client.screen;
 
+import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -13,7 +14,6 @@ import java.util.function.Supplier;
 
 /** Resize preview for reusable chips. Labels scale to fit; label length never changes body size. */
 public final class ChipPreviewWidget extends AbstractWidget {
-    private static final double GRID = 6.0;
     private static final double MIN_WIDTH = 66.0;
     private static final double MAX_WIDTH = 260.0;
     private static final double MIN_HEIGHT = 42.0;
@@ -220,7 +220,7 @@ public final class ChipPreviewWidget extends AbstractWidget {
 
     private net.minecraft.client.gui.Font font() { return Minecraft.getInstance().font; }
     private static double clamp(double value, double min, double max) { return Math.max(min, Math.min(max, value)); }
-    private static double snap(double value) { return Math.round(value / GRID) * GRID; }
+    private static double snap(double value) { return EditorGrid.snap(value); }
     private static int darken(int color, double factor) { int r = (int)(((color >>> 16) & 0xFF) * factor), g = (int)(((color >>> 8) & 0xFF) * factor), b = (int)((color & 0xFF) * factor); return 0xFF000000 | (r << 16) | (g << 8) | b; }
     private static int forceOpaque(int color) { return 0xFF000000 | (color & 0x00FFFFFF); }
 
