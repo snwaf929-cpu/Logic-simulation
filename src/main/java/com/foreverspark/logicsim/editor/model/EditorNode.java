@@ -29,6 +29,9 @@ public final class EditorNode {
     /** Arbitrary named output ranges for BUS_SLICE. */
     public List<BusSliceOutput> slices = new ArrayList<>();
 
+    /** Phase 6 CAD protection only. Locked nodes remain electrically identical and fully connected. */
+    public boolean locked = false;
+
     /**
      * Phase 4 BOARD socket metadata. Electrically a socket remains an ordinary BUS routing node,
      * so this adds no primitive logic. The direction describes which side of a template boundary is public.
