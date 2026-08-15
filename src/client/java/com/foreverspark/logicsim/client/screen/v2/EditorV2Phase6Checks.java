@@ -4,10 +4,15 @@ import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import java.util.function.ToDoubleFunction;
 
-/** Dependency-light regression checks for Phase 6 layout/locking behavior. */
+/** Dependency-light regression checks for Phase 6 layout/locking/search/error behavior. */
 public final class EditorV2Phase6Checks {
     private EditorV2Phase6Checks() {}
 
@@ -16,6 +21,8 @@ public final class EditorV2Phase6Checks {
         distributionChecks();
         pinRowChecks();
         lockSnapshotChecks();
+        preferenceChecks();
+        errorLocatorChecks();
     }
 
     private static void alignmentChecks() {
@@ -90,6 +97,72 @@ public final class EditorV2Phase6Checks {
 
         copy.node(input.id).locked = false;
         check(!EditorDocumentSnapshot.same(document, copy), "changing only lock state creates a real editor history change");
+    }
+
+    private static void preferenceChecks() {
+        Path root = null;
+        try {
+            root = Files.createTempDirectory("logic-simulation-phase6-preferences-");
+            ClientEditorPreferences first = new ClientEditorPreferences(root);
+            check(first.toggleFavorite("component:NAND"), "NAND can be pinned");
+            check(first.toggleFavorite("chip:REG16"), "saved chip can be pinned");
+
+            ClientEditorPreferences reopened = new ClientEditorPreferences(root);
+            check(reopened.isFavorite("component:NAND"), "primitive favorite survives fresh reopen");
+            check(reopened.isFavorite("chip:REG16"), "chip favorite survives fresh reopen");
+            reopened.renameFavorite("chip:REG16", "chip:REG16_V2");
+
+            ClientEditorPreferences renamed = new ClientEditorPreferences(root);
+            check(!renamed.isFavorite("chip:REG16") && renamed.isFavorite("chip:REG16_V2"), "favorite follows chip rename");
+            check(!renamed.toggleFavorite("component:NAND"), "favorite can be unpinned atomically");
+        } catch (IOException exception) {
+            throw new AssertionError("Phase 6 preference persistence failed", exception);
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
+    private static void errorLocatorChecks() {
+        CircuitDocument document = new CircuitDocument();
+        EditorNode source = document.addNode(NodeKind.INPUT, 0, 0);
+        source.width = 16;
+        EditorNode target = document.addNode(NodeKind.OUTPUT, 120, 0);
+        target.width = 8;
+        Set<Integer> widthIds = EditorErrorLocator.locate(document,
+                "Width mismatch: node " + source.id + " output is 16-bit but node " + target.id + " input is 8-bit");
+        check(widthIds.equals(Set.of(source.id, target.id)), "width mismatch highlights both exact endpoint nodes");
+
+        EditorNode netA = document.addNode(NodeKind.NET_LABEL, 0, 72);
+        netA.label = "DATA_BUS";
+        EditorNode netB = document.addNode(NodeKind.NET_LABEL, 120, 72);
+        netB.label = "data_bus";
+        Set<Integer> netIds = EditorErrorLocator.locate(document, "NET_LABEL DATA_BUS has multiple drivers");
+        check(netIds.contains(netA.id) && netIds.contains(netB.id), "net conflict highlights every matching label object");
+
+        EditorNode custom = document.addCustomChip("MISSING_ALU", 0, 144);
+        Set<Integer> chipIds = EditorErrorLocator.locate(document, "Missing custom chip: MISSING_ALU");
+        check(chipIds.equals(Set.of(custom.id)), "missing custom chip diagnostic highlights its authored instance");
+
+        EditorNode loop = document.addNode(NodeKind.BUS, 0, 216);
+        loop.label = "LOOP_BUS";
+        Set<Integer> loopIds = EditorErrorLocator.locate(document,
+                "Structural wiring loop detected at " + loop.displayName() + " output 0. BUS routing cannot feed back into itself.");
+        check(loopIds.contains(loop.id), "structural loop diagnostic resolves the named schematic object");
+    }
+
+    private static void deleteRecursively(Path root) {
+        if (root == null || !Files.exists(root)) return;
+        try (var paths = Files.walk(root)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException exception) {
+                    throw new RuntimeException(exception);
+                }
+            });
+        } catch (IOException | RuntimeException exception) {
+            throw new AssertionError("Could not clean Phase 6 preference test directory", exception);
+        }
     }
 
     private static EditorNode node(int id, double x, double y) {
