@@ -53,9 +53,7 @@ public final class CircuitDocument {
     public int connectionCount(int nodeId) {
         int count = 0;
         for (WireConnection wire : wires) {
-            if (wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId) {
-                count++;
-            }
+            if (wire.sourceNodeId() == nodeId || wire.targetNodeId() == nodeId) count++;
         }
         return count;
     }
@@ -75,32 +73,28 @@ public final class CircuitDocument {
     }
 
     public void normalize() {
-        if (nodes == null) {
-            nodes = new ArrayList<>();
-        }
-        if (wires == null) {
-            wires = new ArrayList<>();
-        }
+        if (nodes == null) nodes = new ArrayList<>();
+        if (wires == null) wires = new ArrayList<>();
         wires.removeIf(wire -> wire == null);
-        for (WireConnection wire : wires) {
-            wire.normalize();
-        }
+        for (WireConnection wire : wires) wire.normalize();
 
         int maxId = nodes.stream().mapToInt(node -> node.id).max().orElse(0);
         nextNodeId = Math.max(nextNodeId, maxId + 1);
         for (EditorNode node : nodes) {
-            if (node.kind == null) {
-                node.kind = NodeKind.NAND;
+            if (node.kind == null) node.kind = NodeKind.NAND;
+            if (node.width <= 0 || node.width > 64) node.width = 1;
+            if (node.label == null) node.label = "";
+            if (node.chipName == null) node.chipName = "";
+
+            if (node.kind == NodeKind.SPLITTER || node.kind == NodeKind.MERGER) {
+                int lane = node.laneWidth;
+                if (lane <= 0 || lane > node.width || node.width % lane != 0 || (lane & (lane - 1)) != 0) {
+                    node.laneWidth = 1;
+                }
+            } else {
+                node.laneWidth = 1;
             }
-            if (node.width <= 0 || node.width > 64) {
-                node.width = 1;
-            }
-            if (node.label == null) {
-                node.label = "";
-            }
-            if (node.chipName == null) {
-                node.chipName = "";
-            }
+
             if (node.kind == NodeKind.INPUT && node.width < 64) {
                 node.inputDefaultValue &= (1L << node.width) - 1L;
             }
