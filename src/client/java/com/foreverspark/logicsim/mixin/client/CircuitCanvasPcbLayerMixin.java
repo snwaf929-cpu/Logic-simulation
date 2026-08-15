@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.v2.EditorHistoryAccess;
+import com.foreverspark.logicsim.client.screen.v2.EditorWireSelectionAccess;
 import com.foreverspark.logicsim.client.screen.v2.PcbLayerAccess;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -135,9 +136,9 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
     @Inject(method = "drawWire", at = @At("HEAD"), cancellable = true)
     private void logic$drawLayeredWire(GuiGraphicsExtractor graphics, WireConnection wire, CallbackInfo ci) {
         List<LogicLayerSegment> segments = logic$segments(wire);
+        boolean selected = logic$isSelectedWire(wire);
         for (LogicLayerSegment segment : segments) {
             boolean visible = segment.layer() == logic$pcbViewLayer;
-            boolean selected = selectedWire != null && selectedWire.equals(wire);
             int base = wireColor(wire);
             int color = visible ? (selected ? 0xFFFFFFFF : base) : logic$darken(base, selected ? 0.42 : 0.20);
             int thickness = visible ? (selected ? 3 : 2) : 1;
@@ -182,6 +183,13 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
     @Inject(method = "setDocument(Lcom/foreverspark/logicsim/editor/model/CircuitDocument;Ljava/lang/String;)V", at = @At("RETURN"))
     private void logic$normalizePcbOnDocument(CircuitDocument replacement, String name, CallbackInfo ci) {
         if (document != null) document.normalize();
+    }
+
+    @Unique
+    private boolean logic$isSelectedWire(WireConnection wire) {
+        Object self = this;
+        if (self instanceof EditorWireSelectionAccess selection) return selection.logic$isWireSelected(wire);
+        return selectedWire != null && selectedWire.equals(wire);
     }
 
     @Unique
