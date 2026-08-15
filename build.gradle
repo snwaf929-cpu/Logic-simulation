@@ -129,6 +129,14 @@ tasks.register('denseIndependentRandomDisplaySelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.client.render.DenseIndependentRandomDisplaySelfTest'
 }
 
+tasks.register('displayBatch32SelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates the allocation-free 32px/tile realtime DISPLAY batch writer.'
+    dependsOn clientClasses
+    classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.client.render.RealtimeDisplayBatch32SelfTest'
+}
+
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
     dependsOn tasks.named('displayPipelineSelfTest')
@@ -138,6 +146,7 @@ tasks.named('check') {
     dependsOn tasks.named('randomSourceSelfTest')
     dependsOn tasks.named('randomDisplayNetworkSelfTest')
     dependsOn tasks.named('denseIndependentRandomDisplaySelfTest')
+    dependsOn tasks.named('displayBatch32SelfTest')
 }
 
 tasks.register('clientSelfTest', JavaExec) {
