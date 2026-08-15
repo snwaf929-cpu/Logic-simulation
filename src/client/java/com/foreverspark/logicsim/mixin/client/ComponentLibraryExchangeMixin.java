@@ -6,6 +6,7 @@ import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.input.MouseButtonEvent;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -15,7 +16,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.function.Consumer;
 
 /** Adds portable circuit exchange actions directly above MY CHIPS. */
@@ -26,8 +26,8 @@ public abstract class ComponentLibraryExchangeMixin {
     private static final int SECTION_HEIGHT = 14;
     private static final int CONTENT_TOP_OFFSET = 25;
 
-    @Shadow private ClientChipLibrary library;
-    @Shadow private Consumer<String> status;
+    @Shadow @Final private ClientChipLibrary library;
+    @Shadow @Final private Consumer<String> status;
     @Shadow private String selectedChip;
 
     @Unique private int logic$importRowY = Integer.MIN_VALUE;
