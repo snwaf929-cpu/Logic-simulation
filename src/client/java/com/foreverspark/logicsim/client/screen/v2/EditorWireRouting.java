@@ -27,10 +27,18 @@ public final class EditorWireRouting {
         return autoRoute(start, end);
     }
 
-    /** Materialize the current autoroute without changing its visible shape. */
+    /**
+     * Materialize the route only when the user actually begins editing it. Legacy routes that relied on hidden
+     * diagonal-to-L expansion are converted once to explicit orthogonal points while preserving their visible path
+     * and PCB via attachment.
+     */
     public static void materialize(WireConnection wire, Point start, Point end) {
-        if (wire == null || !wire.routePoints().isEmpty()) return;
-        wire.setRoutePoints(autoRoute(start, end));
+        if (wire == null) return;
+        if (wire.routePoints().isEmpty()) {
+            wire.setRoutePoints(autoRoute(start, end));
+            return;
+        }
+        canonicalizeLegacyRoute(wire, start, end);
     }
 
     /**
@@ -59,9 +67,7 @@ public final class EditorWireRouting {
         for (int index = 1; index < all.size(); index++) {
             Point a = expanded.getLast();
             Point b = all.get(index);
-            if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) {
-                appendUnique(expanded, new Point(b.x, a.y));
-            }
+            if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) appendUnique(expanded, new Point(b.x, a.y));
             appendUnique(expanded, b);
         }
         removeCollinearInterior(expanded);
@@ -179,6 +185,7 @@ public final class EditorWireRouting {
         return insertion + 1;
     }
 
+    /** Relative move retained for deterministic tests and keyboard-style nudges. */
     public static boolean moveSegment(WireConnection wire, int directSegmentIndex, double dx, double dy) {
         if (wire == null) return false;
         List<RoutePoint> route = wire.routePoints();
@@ -197,6 +204,30 @@ public final class EditorWireRouting {
             double delta = EditorGrid.snap(a.x() + dx) - a.x();
             route.set(first, new RoutePoint(a.x() + delta, a.y()));
             route.set(second, new RoutePoint(b.x() + delta, b.y()));
+            return true;
+        }
+        return false;
+    }
+
+    /** Mouse drag uses absolute cursor position so slow one-pixel events do not get lost by grid snapping. */
+    public static boolean moveSegmentTo(WireConnection wire, int directSegmentIndex, double worldX, double worldY) {
+        if (wire == null) return false;
+        List<RoutePoint> route = wire.routePoints();
+        if (directSegmentIndex < 1 || directSegmentIndex >= route.size()) return false;
+        int first = directSegmentIndex - 1;
+        int second = directSegmentIndex;
+        RoutePoint a = route.get(first);
+        RoutePoint b = route.get(second);
+        if (aligned(a.y(), b.y())) {
+            double y = EditorGrid.snap(worldY);
+            route.set(first, new RoutePoint(a.x(), y));
+            route.set(second, new RoutePoint(b.x(), y));
+            return true;
+        }
+        if (aligned(a.x(), b.x())) {
+            double x = EditorGrid.snap(worldX);
+            route.set(first, new RoutePoint(x, a.y()));
+            route.set(second, new RoutePoint(x, b.y()));
             return true;
         }
         return false;
@@ -249,6 +280,50 @@ public final class EditorWireRouting {
         wire.setViaRouteIndices(shiftedVias);
     }
 
+    /** Explicitly expand only legacy hidden diagonal legs. Already-canonical routes are untouched. */
+    private static void canonicalizeLegacyRoute(WireConnection wire, Point start, Point end) {
+        List<RoutePoint> oldRoute = List.copyOf(wire.routePoints());
+        ArrayList<Point> oldFull = new ArrayList<>();
+        oldFull.add(snap(start));
+        for (RoutePoint point : oldRoute) oldFull.add(new Point(EditorGrid.snap(point.x()), EditorGrid.snap(point.y())));
+        oldFull.add(snap(end));
+
+        boolean needsExpansion = false;
+        for (int i = 0; i + 1 < oldFull.size(); i++) {
+            Point a = oldFull.get(i), b = oldFull.get(i + 1);
+            if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) {
+                needsExpansion = true;
+                break;
+            }
+        }
+        if (!needsExpansion) return;
+
+        ArrayList<Point> expanded = new ArrayList<>();
+        expanded.add(oldFull.getFirst());
+        int[] oldRouteToNewRoute = new int[oldRoute.size()];
+        for (int oldFullIndex = 1; oldFullIndex < oldFull.size(); oldFullIndex++) {
+            Point a = expanded.getLast();
+            Point b = oldFull.get(oldFullIndex);
+            if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) appendUnique(expanded, new Point(b.x, a.y));
+            appendUnique(expanded, b);
+            if (oldFullIndex <= oldRoute.size()) {
+                oldRouteToNewRoute[oldFullIndex - 1] = Math.max(0, expanded.size() - 2);
+            }
+        }
+
+        ArrayList<RoutePoint> canonical = new ArrayList<>();
+        for (int i = 1; i + 1 < expanded.size(); i++) {
+            Point point = expanded.get(i);
+            canonical.add(new RoutePoint(point.x, point.y));
+        }
+        ArrayList<Integer> remappedVias = new ArrayList<>();
+        for (int oldVia : wire.viaRouteIndices()) {
+            if (oldVia >= 0 && oldVia < oldRouteToNewRoute.length) remappedVias.add(oldRouteToNewRoute[oldVia]);
+        }
+        wire.setRoutePoints(canonical);
+        wire.setViaRouteIndices(remappedVias);
+    }
+
     private static Point[] anchorsAround(Point a, Point b, double worldX, double worldY) {
         if (a == null || b == null) return null;
         if (aligned(a.y, b.y)) {
@@ -289,9 +364,7 @@ public final class EditorWireRouting {
             Point a = points.get(index - 1);
             Point b = points.get(index);
             Point c = points.get(index + 1);
-            if ((aligned(a.x, b.x) && aligned(b.x, c.x)) || (aligned(a.y, b.y) && aligned(b.y, c.y))) {
-                points.remove(index);
-            }
+            if ((aligned(a.x, b.x) && aligned(b.x, c.x)) || (aligned(a.y, b.y) && aligned(b.y, c.y))) points.remove(index);
         }
     }
 
