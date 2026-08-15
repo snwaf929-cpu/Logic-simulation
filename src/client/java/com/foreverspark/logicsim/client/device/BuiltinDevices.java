@@ -125,7 +125,7 @@ public final class BuiltinDevices {
         RegisteredDevice device = findRegistered(name);
         if (device == null) return new ChipVisualSettings();
         if (isDisplay(name)) return ScreenOutputDeviceDefinition.visual();
-        return device.visual();
+        return copyVisual(device.visual());
     }
 
     public static ChipVisualSettings displayVisual() {
@@ -149,7 +149,7 @@ public final class BuiltinDevices {
                                            String help, Supplier<ChipDefinition> factory) {
         DeviceEntry entry = new DeviceEntry(id, label, color, badge, badgeColor, help);
         ChipDefinition cached = factory.get();
-        ChipVisualSettings visual = isScreenId(id) ? ScreenOutputDeviceDefinition.visual() : cached.visual.copy();
+        ChipVisualSettings visual = isScreenId(id) ? ScreenOutputDeviceDefinition.visual() : copyVisual(cached.visual);
         return new RegisteredDevice(entry, factory, cached, visual);
     }
 
@@ -182,9 +182,14 @@ public final class BuiltinDevices {
             outputY += 36.0;
         }
 
-        ChipDefinition definition = new ChipDefinition(id, circuit, visual.copy());
+        ChipDefinition definition = new ChipDefinition(id, circuit, copyVisual(visual));
         definition.color = color;
         return definition;
+    }
+
+    private static ChipVisualSettings copyVisual(ChipVisualSettings source) {
+        if (source == null) return new ChipVisualSettings();
+        return new ChipVisualSettings(source.width, source.minHeight, source.portSpacing);
     }
 
     private static PortDef port(String label, int width) {
