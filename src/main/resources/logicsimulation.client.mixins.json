@@ -56,6 +56,7 @@
     "CircuitBlockStaticResetRandomDisplayMixin",
     "CircuitBlockRandomDisplayNetworkMixin",
     "CircuitBlockRealtimeDisplayMixin",
+    "RealtimeDisplaySurfaceNative64Mixin",
     "RealtimeDisplaySurfaceBatch32Mixin",
     "DisplayRealtimePersistenceMixin",
     "CanvasAccess"
