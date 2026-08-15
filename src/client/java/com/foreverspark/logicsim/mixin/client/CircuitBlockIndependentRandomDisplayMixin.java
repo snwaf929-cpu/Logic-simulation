@@ -67,7 +67,7 @@ public abstract class CircuitBlockIndependentRandomDisplayMixin {
                 continue;
             }
 
-            // Always rebuild/validate the wall geometry from the physical block entities. Never trust a cached TileView
+            // Always rebuild/validate wall geometry from the physical block entities. Never trust a cached TileView
             // here: density can change 32 -> 64 while the circuit remains programmed.
             RealtimeDisplaySurface.Surface surface = logic$surfaceForDisplay(level, displayPos);
             if (surface == null) {
@@ -82,7 +82,7 @@ public abstract class CircuitBlockIndependentRandomDisplayMixin {
                     && existing.matches(current, index, surface.logicalWidth(), surface.logicalHeight())) {
                 logic$surface = surface;
                 logic$deviceIndex = index;
-                logic$log(self, logic$activeSignature(existing, existingTracker, surface));
+                logic$log(self, logic$activeSignature(index, existing, existingTracker, surface));
                 return;
             }
 
@@ -105,7 +105,7 @@ public abstract class CircuitBlockIndependentRandomDisplayMixin {
             logic$surface = surface;
             logic$deviceIndex = index;
             logic$resetTracker = new DisplayResetEdgeTracker(current, resetSignalId);
-            logic$log(self, logic$activeSignature(result.plan(), logic$resetTracker, surface));
+            logic$log(self, logic$activeSignature(index, result.plan(), logic$resetTracker, surface));
             return;
         }
 
@@ -170,11 +170,12 @@ public abstract class CircuitBlockIndependentRandomDisplayMixin {
 
     @Unique
     private static String logic$activeSignature(
+            int deviceIndex,
             IndependentRandomDisplayFastPath.Plan plan,
             DisplayResetEdgeTracker tracker,
             RealtimeDisplaySurface.Surface surface
     ) {
-        return "active:device=" + plan.deviceIndex()
+        return "active:device=" + deviceIndex
                 + ":logical=" + surface.logicalWidth() + "x" + surface.logicalHeight()
                 + ":clockLanes=" + plan.clockLaneCount()
                 + ":external=" + plan.externalTriggerGroupCount()
