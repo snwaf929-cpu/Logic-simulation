@@ -79,6 +79,18 @@ public final class EditorV2Phase2Checks {
     }
 
     private static void netLabelChecks() {
+        CircuitDocument defaults = new CircuitDocument();
+        EditorNode defaultA = defaults.addNode(NodeKind.NET_LABEL, 0, 0);
+        EditorNode defaultB = defaults.addNode(NodeKind.NET_LABEL, 100, 0);
+        check(!defaultA.label.equalsIgnoreCase(defaultB.label), "fresh NET_LABELs do not accidentally share one default electrical net");
+        check(defaultA.label.equals("NET" + defaultA.id) && defaultB.label.equals("NET" + defaultB.id),
+                "fresh NET_LABELs expose deterministic unique default names");
+        defaultA.label = "";
+        defaultB.label = "NET";
+        defaults.normalize();
+        check(defaultA.label.equals("NET" + defaultA.id), "blank NET_LABEL normalizes to a unique name");
+        check(defaultB.label.equals("NET"), "explicit legacy NET label name remains electrically compatible");
+
         CircuitDocument document = new CircuitDocument();
         EditorNode input = document.addNode(NodeKind.INPUT, 0, 0);
         input.width = 12;
