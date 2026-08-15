@@ -123,7 +123,7 @@ tasks.register('randomDisplayNetworkSelfTest', JavaExec) {
 
 tasks.register('denseIndependentRandomDisplaySelfTest', JavaExec) {
     group = 'verification'
-    description = 'Validates the real 38-CLOCK-lane, 10-independent-trigger one-word DISPLAY hot loop.'
+    description = 'Retained diagnostic for the disabled one-word RNG experiment.'
     dependsOn clientClasses
     classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
     mainClass = 'com.foreverspark.logicsim.client.render.DenseIndependentRandomDisplaySelfTest'
@@ -145,7 +145,6 @@ tasks.named('check') {
     dependsOn tasks.named('clockSignalSelfTest')
     dependsOn tasks.named('randomSourceSelfTest')
     dependsOn tasks.named('randomDisplayNetworkSelfTest')
-    dependsOn tasks.named('denseIndependentRandomDisplaySelfTest')
     dependsOn tasks.named('displayBatch32SelfTest')
 }
 
