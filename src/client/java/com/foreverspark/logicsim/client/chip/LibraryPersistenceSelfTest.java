@@ -1,16 +1,21 @@
 package com.foreverspark.logicsim.client.chip;
 
+import com.foreverspark.logicsim.client.board.ClientBoardTemplateLibrary;
 import com.foreverspark.logicsim.client.screen.v2.EditorV2FoundationChecks;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.model.PortDirection;
+import com.foreverspark.logicsim.editor.model.RoutePoint;
+import com.foreverspark.logicsim.editor.model.WireLayer;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.List;
 
 /**
  * File-system regression test for the editor library metadata path.
@@ -24,8 +29,9 @@ public final class LibraryPersistenceSelfTest {
         Path root = Files.createTempDirectory("logic-simulation-library-test-");
         try {
             runPersistenceChecks(root);
+            runBoardTemplatePersistenceChecks(root.resolve("board-templates"));
             EditorV2FoundationChecks.run();
-            System.out.println("Client chip library + Editor V2 foundation self-test: PASS");
+            System.out.println("Client chip/BOARD-template library + Editor V2 foundation self-test: PASS");
         } finally {
             deleteRecursively(root);
         }
@@ -68,6 +74,57 @@ public final class LibraryPersistenceSelfTest {
         check(recovered.chipColor("ALU_PART") == 0xFF000000, "chip color recovers without library.json");
         check(recovered.folderOf("ALU_PART").equals("Logic"), "folder membership recovers without library.json");
         check(recovered.folders().stream().anyMatch(folder -> folder.name().equals("Logic")), "folder name reconstructed from chip metadata");
+    }
+
+    private static void runBoardTemplatePersistenceChecks(Path root) throws Exception {
+        ClientBoardTemplateLibrary first = new ClientBoardTemplateLibrary(root);
+        CircuitDocument board = new CircuitDocument();
+
+        EditorNode inputSocket = board.addNode(NodeKind.BUS, 12, 18);
+        inputSocket.width = 16;
+        inputSocket.configureBoardSocket("DATA_IN", PortDirection.INPUT, 0);
+        inputSocket.interfaceId = "backplane-data-in";
+
+        EditorNode outputSocket = board.addNode(NodeKind.BUS, 156, 18);
+        outputSocket.width = 16;
+        outputSocket.configureBoardSocket("DATA_OUT", PortDirection.OUTPUT, 1);
+        outputSocket.interfaceId = "backplane-data-out";
+        board.connect(inputSocket.id, 0, outputSocket.id, 0);
+        board.wires.getFirst().setRoutePoints(List.of(new RoutePoint(60, 18), new RoutePoint(108, 18)));
+        board.wires.getFirst().setLayer(WireLayer.BACK);
+        board.wires.getFirst().setViaRouteIndices(List.of(0));
+
+        // Simulate an already-inserted nested template socket. Saving this BOARD as a new template
+        // must flatten the nested module and must NOT accidentally export its socket as another boundary.
+        EditorNode nestedSocket = board.addNode(NodeKind.BUS, 84, 90);
+        nestedSocket.width = 4;
+        nestedSocket.configureBoardSocket("NESTED", PortDirection.INPUT, 0);
+        nestedSocket.interfaceId = "nested-interface";
+        nestedSocket.templateInstanceId = 7;
+        nestedSocket.templateName = "CHILD_TEMPLATE";
+
+        first.save("BACKPLANE", board);
+        check(first.exists("BACKPLANE"), "BOARD template file is created");
+
+        ClientBoardTemplateLibrary reopened = new ClientBoardTemplateLibrary(root);
+        check(reopened.names().equals(List.of("BACKPLANE")), "BOARD template list survives fresh reopen");
+        var definition = reopened.load("BACKPLANE");
+        check(definition.name.equals("BACKPLANE"), "BOARD template name survives persistence");
+        check(definition.sockets().size() == 2, "nested template sockets are internalized when saving a parent template");
+        check(definition.sockets().get(0).interfaceId().equals("backplane-data-in")
+                        && definition.sockets().get(0).direction() == PortDirection.INPUT
+                        && definition.sockets().get(0).width() == 16,
+                "socket identity/direction/width survive template reopen");
+        check(definition.sockets().get(1).interfaceId().equals("backplane-data-out")
+                        && definition.sockets().get(1).order() == 1,
+                "explicit socket ordering survives template reopen");
+        check(definition.circuit.wires.size() == 1, "template internal wiring survives reopen");
+        check(definition.circuit.wires.getFirst().layer() == WireLayer.BACK,
+                "template PCB copper metadata survives reopen");
+        check(definition.circuit.wires.getFirst().viaRouteIndices().equals(List.of(0)),
+                "template PCB via metadata survives reopen");
+        check(definition.circuit.formatVersion == 2,
+                "Phase 4 optional metadata does not force a document-format migration");
     }
 
     private static CircuitDocument sampleCircuit() {
