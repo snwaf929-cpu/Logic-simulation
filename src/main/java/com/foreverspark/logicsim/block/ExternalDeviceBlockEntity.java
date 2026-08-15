@@ -18,7 +18,8 @@ import java.util.UUID;
 
 /**
  * World identity/state for a physical peripheral. Host behavior is intentionally separate from logic simulation.
- * Inputs can be observed from cables; unavailable host-driven outputs remain electrically UNKNOWN in the schematic.
+ * Inputs can be observed from cables or from an explicitly bound BOARD DEVICE node; unavailable host-driven outputs
+ * remain electrically UNKNOWN in the schematic until that host feature exists.
  */
 public final class ExternalDeviceBlockEntity extends BlockEntity {
     private String stableId = UUID.randomUUID().toString();
@@ -35,6 +36,22 @@ public final class ExternalDeviceBlockEntity extends BlockEntity {
     }
 
     public long observedInput(String name) { return observedInputs.getOrDefault(name, 0L); }
+
+    /** Server-thread delivery from one explicit BOARD DEVICE binding. */
+    public void acceptSchematicInput(String name, long value) {
+        if (name == null || name.isBlank()) return;
+        PortSpec matched = null;
+        for (PortSpec port : deviceType().inputs()) {
+            if (port.name().equalsIgnoreCase(name)) {
+                matched = port;
+                break;
+            }
+        }
+        if (matched == null) return;
+        long normalized = matched.width() >= 64 ? value : value & ((1L << matched.width()) - 1L);
+        Long old = observedInputs.put(matched.name(), normalized);
+        if (old == null || old.longValue() != normalized) setChanged();
+    }
 
     public static void tick(Level level, BlockPos pos, BlockState state, ExternalDeviceBlockEntity device) {
         if (level.isClientSide() || !(state.getBlock() instanceof ExternalDeviceBlock block)) return;
