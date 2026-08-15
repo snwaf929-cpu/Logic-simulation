@@ -27,7 +27,8 @@ public final class ClientBoardTemplateLibrary {
         this(FabricLoader.getInstance().getConfigDir().resolve("logic-simulation").resolve("board-templates"));
     }
 
-    ClientBoardTemplateLibrary(Path directory) {
+    /** Alternate storage root used by isolated tooling/tests and future workspace import/export. */
+    public ClientBoardTemplateLibrary(Path directory) {
         if (directory == null) throw new IllegalArgumentException("Template directory is required");
         this.directory = directory;
     }
