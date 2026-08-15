@@ -34,7 +34,6 @@ public abstract class CircuitCanvasDuplicateMixin {
 
     @Shadow private CircuitDocument document;
     @Shadow @Final private LinkedHashSet<Integer> selectedNodeIds;
-    @Shadow private Integer selectedNodeId;
     @Shadow private WireConnection selectedWire;
     @Shadow private boolean wireEditMode;
     @Shadow @Final private Consumer<String> status;
@@ -72,6 +71,7 @@ public abstract class CircuitCanvasDuplicateMixin {
         logic$pasteSerial++;
         double offset = LOGIC_PASTE_OFFSET * logic$pasteSerial;
         logic$pasteSelection(logic$clipboard, offset, offset);
+        logic$commitHistory();
         status.accept("Pasted " + selectedNodeIds.size() + " node" + (selectedNodeIds.size() == 1 ? "" : "s"));
         cir.setReturnValue(true);
     }
@@ -87,6 +87,7 @@ public abstract class CircuitCanvasDuplicateMixin {
         LogicClipboard copy = logic$captureSelection();
         double verticalStep = EditorGrid.snapUp(copy.height()) + EditorGrid.duplicateGap();
         logic$pasteSelection(copy, 0.0, verticalStep);
+        logic$commitHistory();
         status.accept("Duplicated " + selectedNodeIds.size() + " node" + (selectedNodeIds.size() == 1 ? "" : "s")
                 + " below on the editor grid");
         cir.setReturnValue(true);
@@ -181,6 +182,12 @@ public abstract class CircuitCanvasDuplicateMixin {
     private void logic$checkpoint(String label) {
         Object self = this;
         if (self instanceof EditorHistoryAccess history) history.logic$checkpoint(label);
+    }
+
+    @Unique
+    private void logic$commitHistory() {
+        Object self = this;
+        if (self instanceof EditorHistoryAccess history) history.logic$commitHistory();
     }
 
     @Unique
