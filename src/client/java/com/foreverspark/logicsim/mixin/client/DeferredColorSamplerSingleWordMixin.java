@@ -4,12 +4,12 @@ import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.client.render.SingleWordRgbMaskSampler;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -19,6 +19,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Arbitrary RGB probabilities are compiled to a cache-sized mask table. Runtime cost for all arbitrary COLOR lanes
  * is one xorshift32 state transition plus one table load, instead of one packed byte comparison/RNG word per eight
  * lanes. Common 25/50/75/100% lanes retain the established bitwise sampler semantics.</p>
+ *
+ * <p>The sample method is overwritten directly rather than injected with a cancellable callback. This method can run
+ * tens of millions of times per second, so CallbackInfoReturnable construction/return boxing must not exist in the
+ * RGB hot loop.</p>
  */
 @Mixin(targets = "com.foreverspark.logicsim.client.render.DeferredColorRandomDisplayFastPath$ColorSampler", remap = false)
 public abstract class DeferredColorSamplerSingleWordMixin {
@@ -61,7 +65,7 @@ public abstract class DeferredColorSamplerSingleWordMixin {
 
         if (arbitraryMask != 0L && LOGIC_LOGGED.compareAndSet(false, true)) {
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK RGB SAMPLER] active=true mode=single-word-32bit-mask-v6 arbitraryLanes={} tableEntries={} compact16={} rngWordsPerColor={} probabilityQuantum=1/256",
+                    "[CLOCK RGB SAMPLER] active=true mode=single-word-32bit-mask-v6-direct arbitraryLanes={} tableEntries={} compact16={} rngWordsPerColor={} probabilityQuantum=1/256 callbackFree=true",
                     logic$singleWordSampler.laneCount(),
                     logic$singleWordSampler.tableEntries(),
                     logic$singleWordSampler.compact16(),
@@ -70,10 +74,16 @@ public abstract class DeferredColorSamplerSingleWordMixin {
         }
     }
 
-    @Inject(method = "sample()J", at = @At("HEAD"), cancellable = true)
-    private void logic$sampleSingleWordMask(CallbackInfoReturnable<Long> cir) {
+    /**
+     * @author ForeverSpArK / OpenAI
+     * @reason RGB sampling is a measured MHz hot loop; use the compiled one-word mask directly with no callback object.
+     */
+    @Overwrite
+    private long sample() {
         SingleWordRgbMaskSampler sampler = logic$singleWordSampler;
-        if (sampler == null) return;
+        if (sampler == null) {
+            throw new IllegalStateException("Single-word RGB sampler was not initialized");
+        }
 
         long result = chance100Mask;
         if (activeCommonMask != 0L) {
@@ -86,7 +96,7 @@ public abstract class DeferredColorSamplerSingleWordMixin {
             }
         }
         result |= sampler.sampleMask();
-        cir.setReturnValue(result & outputMask);
+        return result & outputMask;
     }
 
     @Unique
