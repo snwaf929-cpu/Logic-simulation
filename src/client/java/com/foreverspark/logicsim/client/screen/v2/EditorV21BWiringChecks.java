@@ -12,6 +12,7 @@ public final class EditorV21BWiringChecks {
     public static void run() {
         virtualAutorouteDoesNotMutate();
         explicitRouteIsOrthogonal();
+        legacyHiddenCornersNormalize();
         endpointSegmentBecomesDraggable();
         segmentMovesPerpendicular();
         viaIndicesFollowInsertedHandles();
@@ -37,14 +38,24 @@ public final class EditorV21BWiringChecks {
         ), end);
         WireConnection wire = new WireConnection(1, 0, 2, 0);
         wire.setRoutePoints(route);
-        List<EditorWireRouting.Point> full = EditorWireRouting.fullPoints(wire, start, end, false);
+        assertOrthogonal(wire, start, end, "persisted V2.1B route contains no hidden diagonal segment");
         check(!route.isEmpty(), "manual click route produces persistent route points");
-        for (int i = 0; i + 1 < full.size(); i++) {
-            var a = full.get(i);
-            var b = full.get(i + 1);
-            check(aligned(a.x(), b.x()) || aligned(a.y(), b.y()), "persisted V2.1B route contains no hidden diagonal segment");
-            check(EditorGrid.aligned(a.x()) && EditorGrid.aligned(a.y()), "manual route stays on editor grid");
+        for (var point : EditorWireRouting.fullPoints(wire, start, end, false)) {
+            check(EditorGrid.aligned(point.x()) && EditorGrid.aligned(point.y()), "manual route stays on editor grid");
         }
+    }
+
+    private static void legacyHiddenCornersNormalize() {
+        WireConnection wire = new WireConnection(1, 0, 2, 0);
+        var start = new EditorWireRouting.Point(0, 0);
+        var end = new EditorWireRouting.Point(96, 54);
+        // The old editor allowed this diagonal metadata and rendered it as a hidden L corner.
+        wire.setRoutePoints(List.of(new RoutePoint(42, 30), new RoutePoint(72, 42)));
+        wire.setViaRouteIndices(List.of(1));
+        EditorWireRouting.materialize(wire, start, end);
+        assertOrthogonal(wire, start, end, "first V2.1B edit expands legacy hidden corners into explicit orthogonal points");
+        check(wire.viaRouteIndices().size() == 1 && wire.viaRouteIndices().getFirst() >= 1,
+                "legacy PCB via remains attached after route normalization");
     }
 
     private static void endpointSegmentBecomesDraggable() {
@@ -66,6 +77,9 @@ public final class EditorV21BWiringChecks {
                 "horizontal segment moves only vertically");
         check(horizontal.routePoints().get(0).x() == 24 && horizontal.routePoints().get(1).x() == 48,
                 "horizontal segment keeps its X span while moving");
+        check(EditorWireRouting.moveSegmentTo(horizontal, 1, 999, 31), "absolute mouse drag updates horizontal segment");
+        check(horizontal.routePoints().get(0).y() == 30 && horizontal.routePoints().get(1).y() == 30,
+                "absolute segment drag snaps directly to cursor row even for tiny incremental mouse events");
 
         WireConnection vertical = new WireConnection(1, 0, 2, 0);
         vertical.setRoutePoints(List.of(new RoutePoint(30, 18), new RoutePoint(30, 54)));
@@ -88,6 +102,15 @@ public final class EditorV21BWiringChecks {
         ));
         check(wire.viaRouteIndices().equals(List.of(3, 4)),
                 "inserting route handles shifts PCB via indices instead of moving vias to unrelated corners");
+    }
+
+    private static void assertOrthogonal(WireConnection wire, EditorWireRouting.Point start, EditorWireRouting.Point end, String message) {
+        List<EditorWireRouting.Point> full = EditorWireRouting.fullPoints(wire, start, end, false);
+        for (int i = 0; i + 1 < full.size(); i++) {
+            var a = full.get(i);
+            var b = full.get(i + 1);
+            check(aligned(a.x(), b.x()) || aligned(a.y(), b.y()), message);
+        }
     }
 
     private static boolean aligned(double a, double b) {
