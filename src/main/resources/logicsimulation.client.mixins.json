@@ -37,6 +37,7 @@
     "CircuitEditorPhase6LibraryMixin",
     "CircuitEditorPhase6ShortcutsMixin",
     "CircuitEditorPhase5DevicesMixin",
+    "CircuitEditorDocumentTypeUiMixin",
     "CircuitEditorPhase4Mixin",
     "CircuitEditorPhase3ShortcutsMixin",
     "CircuitEditorPhase2ShortcutsMixin",
