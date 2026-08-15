@@ -7,6 +7,7 @@ import com.foreverspark.logicsim.editor.model.BusSliceOutput;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.RoutePoint;
 import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.model.WireLayer;
@@ -138,6 +139,14 @@ public abstract class CircuitCanvasDuplicateMixin {
         for (NodeSnapshot snapshot : copy.nodes()) {
             EditorNode node = document.addNode(snapshot.kind(), EditorGrid.snap(originX + snapshot.relativeX()), EditorGrid.snap(originY + snapshot.relativeY()));
             snapshot.apply(node);
+            if (snapshot.boardSocket()) {
+                // Clipboard duplication is intentionally NOT a second instance of the same BOARD template.
+                // It becomes authored board content, so a copied socket receives a fresh stable identity/order.
+                node.templateInstanceId = 0;
+                node.templateName = "";
+                node.interfaceId = (snapshot.interfaceId().isBlank() ? "socket" : snapshot.interfaceId()) + "-copy-" + node.id;
+                node.interfaceOrder = logic$nextAuthoredSocketOrder(node.id);
+            }
             if (snapshot.hasInputState()) inputStates.put(node.id, snapshot.inputState());
             ids.put(snapshot.originalId(), node.id);
             pastedIds.add(node.id);
@@ -163,6 +172,16 @@ public abstract class CircuitCanvasDuplicateMixin {
         selectedWire = null;
         wireEditMode = false;
         recompile();
+    }
+
+    @Unique
+    private int logic$nextAuthoredSocketOrder(int ignoreNodeId) {
+        int max = -1;
+        for (EditorNode node : document.nodes) {
+            if (node.id == ignoreNodeId || !node.isBoardSocket() || node.templateInstanceId > 0) continue;
+            max = Math.max(max, node.interfaceOrder);
+        }
+        return max + 1;
     }
 
     // Keep bridge helper JVM signatures distinct from EditorHistoryAccess methods on the same
@@ -194,6 +213,10 @@ public abstract class CircuitCanvasDuplicateMixin {
             boolean randomSource,
             int randomChancePercent,
             List<BusSliceOutput> slices,
+            boolean boardSocket,
+            String interfaceId,
+            PortDirection socketDirection,
+            int interfaceOrder,
             boolean hasInputState,
             long inputState,
             double relativeX,
@@ -209,7 +232,11 @@ public abstract class CircuitCanvasDuplicateMixin {
                     node.constantValue, node.inputDefaultValue,
                     node.clockSource, node.clockFrequencyHz,
                     node.randomSource, node.randomChancePercent,
-                    List.copyOf(sliceCopy), hasInputState, inputState,
+                    List.copyOf(sliceCopy), node.boardSocket,
+                    node.interfaceId == null ? "" : node.interfaceId,
+                    node.socketDirection == null ? PortDirection.INPUT : node.socketDirection,
+                    node.interfaceOrder,
+                    hasInputState, inputState,
                     node.x - originX, node.y - originY
             );
         }
@@ -225,6 +252,12 @@ public abstract class CircuitCanvasDuplicateMixin {
             node.clockFrequencyHz = clockFrequencyHz;
             node.randomSource = randomSource;
             node.randomChancePercent = randomChancePercent;
+            node.boardSocket = boardSocket;
+            node.interfaceId = interfaceId;
+            node.socketDirection = socketDirection;
+            node.interfaceOrder = interfaceOrder;
+            node.templateInstanceId = 0;
+            node.templateName = "";
             node.slices = new ArrayList<>();
             for (BusSliceOutput slice : slices) node.slices.add(slice.copy());
         }
