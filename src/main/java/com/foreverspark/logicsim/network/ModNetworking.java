@@ -19,9 +19,11 @@ public final class ModNetworking {
     public static void initialize() {
         PayloadTypeRegistry.serverboundPlay().register(ProgramCircuitPayload.TYPE, ProgramCircuitPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(RequestCircuitBoardPayload.TYPE, RequestCircuitBoardPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(RequestExternalDevicesPayload.TYPE, RequestExternalDevicesPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(SaveCircuitBoardPayload.TYPE, SaveCircuitBoardPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(DriveCircuitInputPayload.TYPE, DriveCircuitInputPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(CircuitBoardPayload.TYPE, CircuitBoardPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(ExternalDevicesPayload.TYPE, ExternalDevicesPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(ProgramCircuitPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
@@ -48,9 +50,19 @@ public final class ModNetworking {
             if (!near(player, payload.pos())) return;
             if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity circuit)) return;
             String json = circuit.boardJson();
-            String devicesJson = GSON.toJson(ExternalDeviceDiscovery.discover(player.level(), payload.pos()));
+            String devicesJson = deviceSnapshotJson(player, payload.pos());
             if (json.length() <= CircuitBlockEntity.MAX_BOARD_JSON && devicesJson.length() <= CircuitBoardPayload.MAX_DEVICES_JSON) {
                 ServerPlayNetworking.send(player, new CircuitBoardPayload(payload.pos(), json, devicesJson));
+            }
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(RequestExternalDevicesPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!near(player, payload.pos())) return;
+            if (!(player.level().getBlockEntity(payload.pos()) instanceof CircuitBlockEntity)) return;
+            String devicesJson = deviceSnapshotJson(player, payload.pos());
+            if (devicesJson.length() <= ExternalDevicesPayload.MAX_JSON_LENGTH) {
+                ServerPlayNetworking.send(player, new ExternalDevicesPayload(payload.pos(), devicesJson));
             }
         });
 
@@ -81,6 +93,10 @@ public final class ModNetworking {
                 player.sendSystemMessage(Component.literal("Circuit input rejected: " + message));
             }
         });
+    }
+
+    private static String deviceSnapshotJson(ServerPlayer player, net.minecraft.core.BlockPos pos) {
+        return GSON.toJson(ExternalDeviceDiscovery.discover(player.level(), pos));
     }
 
     private static boolean near(ServerPlayer player, net.minecraft.core.BlockPos pos) {
