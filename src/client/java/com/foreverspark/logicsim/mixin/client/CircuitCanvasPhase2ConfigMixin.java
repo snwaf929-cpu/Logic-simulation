@@ -71,7 +71,7 @@ public abstract class CircuitCanvasPhase2ConfigMixin implements CanvasPhase2Conf
 
     @Unique
     private boolean logic$isConfigurable(EditorNode node) {
-        if (node == null || node.kind == NodeKind.NAND || node.kind == NodeKind.CUSTOM_CHIP) return false;
+        if (node == null || node.isBoardSocket() || node.kind == NodeKind.NAND || node.kind == NodeKind.CUSTOM_CHIP) return false;
         if (node.kind == NodeKind.CONSTANT && (node.clockSource || node.randomSource)) return false;
         return true;
     }
