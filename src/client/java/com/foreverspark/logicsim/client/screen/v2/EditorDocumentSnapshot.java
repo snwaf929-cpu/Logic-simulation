@@ -52,6 +52,7 @@ public final class EditorDocumentSnapshot {
         node.clockFrequencyHz = source.clockFrequencyHz;
         node.randomSource = source.randomSource;
         node.randomChancePercent = source.randomChancePercent;
+        node.locked = source.locked;
         node.boardSocket = source.boardSocket;
         node.interfaceId = source.interfaceId == null ? "" : source.interfaceId;
         node.socketDirection = source.socketDirection;
@@ -88,7 +89,7 @@ public final class EditorDocumentSnapshot {
                 && safe(a.chipName).equals(safe(b.chipName)) && a.constantValue == b.constantValue
                 && a.inputDefaultValue == b.inputDefaultValue && a.clockSource == b.clockSource
                 && a.clockFrequencyHz == b.clockFrequencyHz && a.randomSource == b.randomSource
-                && a.randomChancePercent == b.randomChancePercent && a.boardSocket == b.boardSocket
+                && a.randomChancePercent == b.randomChancePercent && a.locked == b.locked && a.boardSocket == b.boardSocket
                 && safe(a.interfaceId).equals(safe(b.interfaceId)) && a.socketDirection == b.socketDirection
                 && a.interfaceOrder == b.interfaceOrder && a.templateInstanceId == b.templateInstanceId
                 && safe(a.templateName).equals(safe(b.templateName))
