@@ -30,7 +30,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.LinkedHashSet;
-import java.util.Set;
 import java.util.function.Consumer;
 
 /** BOARD-template insertion/replacement and authored socket configuration. */
@@ -62,7 +61,7 @@ public abstract class CircuitCanvasPhase4TemplateMixin implements BoardTemplateC
         logic$pendingSocketDirection = direction == null ? PortDirection.INPUT : direction;
         logic$socketPlacementArmed = true;
         ((CircuitCanvasWidget)(Object)this).setPlacement(NodeKind.BUS);
-        status.accept("Place " + logic$pendingSocketDirection + " BOARD SOCKET — click the board; its interface editor opens automatically");
+        status.accept("Place " + logic$pendingSocketDirection + " BOARD SOCKET — click the board, then press W or double-click it to configure");
     }
 
     @Inject(method = "onClick", at = @At("HEAD"), cancellable = true)
@@ -95,7 +94,8 @@ public abstract class CircuitCanvasPhase4TemplateMixin implements BoardTemplateC
         node.configureBoardSocket("SOCKET" + node.id, logic$pendingSocketDirection, order);
         node.width = 1;
         recompile();
-        logic$openSocketConfig(node, EditorScreenContext.current());
+        status.accept("Placed " + node.socketDirection + " BOARD SOCKET " + node.label
+                + " [1] order " + order + " — press W or double-click to set name, identity, width, and order");
     }
 
     @Inject(method = "cancelTransientMode", at = @At("RETURN"))
