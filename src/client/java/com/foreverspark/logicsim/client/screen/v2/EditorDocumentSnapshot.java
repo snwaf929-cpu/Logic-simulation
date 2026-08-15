@@ -18,6 +18,7 @@ public final class EditorDocumentSnapshot {
 
         result.formatVersion = source.formatVersion;
         result.nextNodeId = source.nextNodeId;
+        result.nextTemplateInstanceId = source.nextTemplateInstanceId;
         result.nodes = new ArrayList<>(source.nodes.size());
         for (EditorNode node : source.nodes) result.nodes.add(copyNode(node));
 
@@ -30,7 +31,8 @@ public final class EditorDocumentSnapshot {
     public static boolean same(CircuitDocument a, CircuitDocument b) {
         if (a == b) return true;
         if (a == null || b == null) return false;
-        if (a.formatVersion != b.formatVersion || a.nextNodeId != b.nextNodeId) return false;
+        if (a.formatVersion != b.formatVersion || a.nextNodeId != b.nextNodeId
+                || a.nextTemplateInstanceId != b.nextTemplateInstanceId) return false;
         if (a.nodes.size() != b.nodes.size() || a.wires.size() != b.wires.size()) return false;
 
         for (int i = 0; i < a.nodes.size(); i++) {
@@ -58,6 +60,12 @@ public final class EditorDocumentSnapshot {
         node.clockFrequencyHz = source.clockFrequencyHz;
         node.randomSource = source.randomSource;
         node.randomChancePercent = source.randomChancePercent;
+        node.boardSocket = source.boardSocket;
+        node.interfaceId = source.interfaceId == null ? "" : source.interfaceId;
+        node.socketDirection = source.socketDirection;
+        node.interfaceOrder = source.interfaceOrder;
+        node.templateInstanceId = source.templateInstanceId;
+        node.templateName = source.templateName == null ? "" : source.templateName;
         node.slices = new ArrayList<>();
         if (source.slices != null) {
             for (BusSliceOutput slice : source.slices) if (slice != null) node.slices.add(slice.copy());
@@ -93,6 +101,12 @@ public final class EditorDocumentSnapshot {
                 && a.clockFrequencyHz == b.clockFrequencyHz
                 && a.randomSource == b.randomSource
                 && a.randomChancePercent == b.randomChancePercent
+                && a.boardSocket == b.boardSocket
+                && safe(a.interfaceId).equals(safe(b.interfaceId))
+                && a.socketDirection == b.socketDirection
+                && a.interfaceOrder == b.interfaceOrder
+                && a.templateInstanceId == b.templateInstanceId
+                && safe(a.templateName).equals(safe(b.templateName))
                 && slicesEqual(a, b);
     }
 
