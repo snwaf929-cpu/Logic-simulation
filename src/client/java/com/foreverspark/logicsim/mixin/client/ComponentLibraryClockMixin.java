@@ -21,6 +21,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Consumer;
 
 @Mixin(value = ComponentLibraryWidget.class, priority = 1200)
@@ -35,7 +37,7 @@ public abstract class ComponentLibraryClockMixin {
 
     @Unique private int logic$clockRowY = Integer.MIN_VALUE;
     @Unique private int logic$randomRowY = Integer.MIN_VALUE;
-    @Unique private int logic$displayRowY = Integer.MIN_VALUE;
+    @Unique private final Map<String, Integer> logic$deviceRowYs = new HashMap<>();
 
     @Inject(method = "drawComponent", at = @At("RETURN"), cancellable = true)
     private void logic$insertExtraRows(GuiGraphicsExtractor graphics, String name, NodeKind kind, int color,
@@ -59,10 +61,14 @@ public abstract class ComponentLibraryClockMixin {
             int sectionY = cir.getReturnValue() + 3;
             logic$drawSection(graphics, sectionY, clipTop, clipBottom, "DEVICES");
             int rowY = sectionY + SECTION_HEIGHT;
-            logic$displayRowY = rowY;
-            logic$drawRow(graphics, rowY, clipTop, clipBottom, BuiltinDevices.DISPLAY_LABEL,
-                    BuiltinDevices.DISPLAY_COLOR, "AUTO OUT64", 0xFF9ADDE8);
-            cir.setReturnValue(rowY + EXTRA_ROW_STEP);
+            logic$deviceRowYs.clear();
+            for (BuiltinDevices.DeviceEntry device : BuiltinDevices.devices()) {
+                logic$deviceRowYs.put(device.id(), rowY);
+                logic$drawRow(graphics, rowY, clipTop, clipBottom, device.label(), device.color(),
+                        device.badge(), device.badgeColor());
+                rowY += EXTRA_ROW_STEP;
+            }
+            cir.setReturnValue(rowY);
         }
     }
 
@@ -135,14 +141,23 @@ public abstract class ComponentLibraryClockMixin {
             return;
         }
 
-        if (logic$visibleHit(logic$displayRowY, event.y(), clipTop, clipBottom)) {
+        for (BuiltinDevices.DeviceEntry device : BuiltinDevices.devices()) {
+            int rowY = logic$deviceRowYs.getOrDefault(device.id(), Integer.MIN_VALUE);
+            if (!logic$visibleHit(rowY, event.y(), clipTop, clipBottom)) continue;
             if (event.button() == 0) {
-                canvas.setCustomChipPlacement(BuiltinDevices.DISPLAY);
-                status.accept("Place SCREEN OUTPUT — it automatically adds and wires the required SCREEN_DATA OUTPUT[64].");
+                ClockPlacementState.disarm();
+                RandomPlacementState.disarm();
+                canvas.setCustomChipPlacement(device.id());
+                if (BuiltinDevices.isDisplay(device.id())) {
+                    status.accept("Place SCREEN OUTPUT — it automatically adds and wires the required SCREEN_DATA OUTPUT[64].");
+                } else {
+                    status.accept("Place " + device.label() + " — " + device.help());
+                }
             } else if (event.button() == 1) {
-                status.accept("SCREEN OUTPUT help: X/Y = pixel position, COLOR = RGB565, DRAW 0->1 draws, CLEAR 0->1 clears. Save chip, then use Bus Cable [64] to the screen.");
+                status.accept(device.label() + ": " + device.help());
             } else return;
             ci.cancel();
+            return;
         }
     }
 
@@ -155,10 +170,10 @@ public abstract class ComponentLibraryClockMixin {
                 && mouseY < rowY + EXTRA_ROW_HEIGHT;
     }
 
-    /** Suppress any old user-saved legacy DISPLAY entry; the dedicated SCREEN OUTPUT row replaces it. */
+    /** Suppress user-saved entries that collide with reserved built-in device IDs. */
     @Inject(method = "drawChip", at = @At("HEAD"), cancellable = true)
-    private void logic$hideLegacyDisplayChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom,
+    private void logic$hideLegacyBuiltinChip(GuiGraphicsExtractor graphics, String chipName, int y, int clipTop, int clipBottom,
                                              CallbackInfoReturnable<Integer> cir) {
-        if (BuiltinDevices.isDisplay(chipName)) cir.setReturnValue(y);
+        if (BuiltinDevices.isBuiltin(chipName)) cir.setReturnValue(y);
     }
 }
