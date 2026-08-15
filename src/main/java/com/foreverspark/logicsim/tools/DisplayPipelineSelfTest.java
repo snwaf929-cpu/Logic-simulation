@@ -2,18 +2,19 @@ package com.foreverspark.logicsim.tools;
 
 import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.display.DisplayFramebuffer;
-import com.foreverspark.logicsim.display.ScreenOutputDeviceDefinition;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceState;
+import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
 import com.foreverspark.logicsim.editor.model.NodeKind;
+import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Regression test for the real compiled BOARD -> SCREEN OUTPUT -> DATA64 -> framebuffer path. */
+/** Regression test for the real compiled BOARD -> physical DISPLAY DATA64 -> framebuffer path. */
 public final class DisplayPipelineSelfTest {
     private DisplayPipelineSelfTest() {}
 
@@ -25,34 +26,25 @@ public final class DisplayPipelineSelfTest {
 
     private static void testCompiledBoardProducesPixelCommand() {
         CircuitDocument board = new CircuitDocument();
-        EditorNode x = constant(board, 16, 1L, 0);
-        EditorNode y = constant(board, 16, 1L, 40);
-        EditorNode color = constant(board, 16, 0xFFFFL, 80);
-        EditorNode draw = constant(board, 1, 1L, 120);
-        EditorNode clear = constant(board, 1, 0L, 160);
-        EditorNode screen = board.addCustomChip(ScreenOutputDeviceDefinition.ID, 180, 60);
-        EditorNode output = board.addNode(NodeKind.OUTPUT, 450, 60);
-        output.width = 64;
-        output.label = "SCREEN_DATA";
-
-        board.connect(x.id, 0, screen.id, 0);
-        board.connect(y.id, 0, screen.id, 1);
-        board.connect(color.id, 0, screen.id, 2);
-        board.connect(draw.id, 0, screen.id, 3);
-        board.connect(clear.id, 0, screen.id, 4);
-        board.connect(screen.id, 0, output.id, 0);
-
-        ChipDefinition screenDefinition = ScreenOutputDeviceDefinition.create();
-        Map<String, ChipDefinition> dependencies = new LinkedHashMap<>();
-        dependencies.put(screenDefinition.name, screenDefinition);
-        CircuitProgramRuntime runtime = new CircuitProgramRuntime(
-                new CircuitProgram(new ChipDefinition("BOARD", board), dependencies)
-        );
-
-        long actual = runtime.outputValue("SCREEN_DATA");
         long expected = DisplayCommandCodec.pixel(1, 1, 0xFFFF);
+
+        EditorNode data = constant(board, 64, expected, 0);
+        EditorNode display = board.addNode(NodeKind.EXTERNAL_DEVICE, 180, 60);
+        display.configureExternalDevice(
+                ExternalDeviceType.DISPLAY,
+                "display-pipeline-test",
+                ExternalDeviceState.CONNECTED,
+                "test",
+                0,
+                0,
+                0
+        );
+        board.connect(data.id, 0, display.id, 0);
+
+        var compiled = CircuitCompiler.compile(board, name -> null);
+        long actual = compiled.inputUnsigned(display.id, 0);
         check(actual == expected,
-                "compiled SCREEN OUTPUT DATA64 mismatch: expected " + DisplayCommandCodec.hex(expected)
+                "compiled physical DISPLAY DATA64 mismatch: expected " + DisplayCommandCodec.hex(expected)
                         + " but got " + DisplayCommandCodec.hex(actual));
 
         DisplayCommandCodec.Command decoded = DisplayCommandCodec.decode(actual);
