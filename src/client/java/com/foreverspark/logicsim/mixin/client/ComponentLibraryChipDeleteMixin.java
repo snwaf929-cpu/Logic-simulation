@@ -10,7 +10,9 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -25,6 +27,11 @@ public abstract class ComponentLibraryChipDeleteMixin {
     @Shadow private Consumer<String> status;
     @Shadow private String selectedChip;
     @Shadow private boolean searchFocused;
+
+    @ModifyConstant(method = "drawNormalLibrary", constant = @Constant(stringValue = "Ctrl+S saves this board"))
+    private String logic$neutralEmptyBoardHint(String original) {
+        return "No saved boards yet";
+    }
 
     @Inject(method = "searchRight", at = @At("HEAD"), cancellable = true)
     private void logic$reserveChipDeleteSpace(CallbackInfoReturnable<Integer> cir) {
