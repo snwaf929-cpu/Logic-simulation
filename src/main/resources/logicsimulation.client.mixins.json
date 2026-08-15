@@ -53,6 +53,7 @@
     "ClientChipLibraryDeletionMixin",
     "CircuitBlockClockTelemetryMixin",
     "CircuitBlockDeferredColorRandomDisplayMixin",
+    "DeferredColorSamplerSingleWordMixin",
     "CircuitBlockIndependentRandomDisplayMixin",
     "CircuitBlockStaticResetRandomDisplayMixin",
     "CircuitBlockRandomDisplayNetworkMixin",
