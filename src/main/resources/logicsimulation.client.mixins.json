@@ -25,6 +25,7 @@
     "CircuitEditorBoardPersistenceMixin",
     "ClientChipLibraryBuiltinMixin",
     "ComponentLibraryClockMixin",
+    "ComponentLibraryExchangeMixin",
     "CircuitBlockRealtimeDisplayMixin",
     "DisplayRealtimePersistenceMixin",
     "CanvasAccess"
