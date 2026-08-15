@@ -44,7 +44,9 @@ public final class EditorNode {
         }
         if (kind == NodeKind.NET_LABEL) {
             this.width = 1;
-            this.label = "NET";
+            // A fresh NET must not silently join every other untouched NET label. Duplicating an
+            // existing NET still preserves its name, which is the intentional way to create aliases.
+            this.label = "NET" + id;
         }
     }
 
