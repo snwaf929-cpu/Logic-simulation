@@ -24,6 +24,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -33,6 +34,7 @@ import java.util.function.Consumer;
 public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
     @Shadow private CircuitDocument document;
     @Shadow private WireConnection selectedWire;
+    @Shadow @Final private LinkedHashSet<Integer> selectedNodeIds;
     @Shadow private double lastWireClickX;
     @Shadow private double lastWireClickY;
     @Shadow @Final private Consumer<String> status;
@@ -105,20 +107,27 @@ public abstract class CircuitCanvasPcbLayerMixin implements PcbLayerAccess {
     }
 
     /**
-     * Phase 2 routing and branch creation select the just-created trace. Detect that new identity
-     * on the same live document and stamp it onto the side currently being edited. Loaded, pasted,
-     * duplicated, and undo-restored traces retain their serialized PCB metadata.
+     * Phase 2 routing and branch creation select the just-created trace. Batch pin wiring creates
+     * several new traces while component selection remains empty. Both cases inherit the side being
+     * edited. Pasted/duplicated traces have a component selection, so their saved PCB metadata stays intact.
      */
     @Inject(method = "extractWidgetRenderState", at = @At("HEAD"))
-    private void logic$adoptNewSelectedTrace(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+    private void logic$adoptNewTraces(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         if (logic$trackedDocument != document) {
             logic$trackedDocument = document;
             logic$knownWires.clear();
             if (document != null) logic$knownWires.addAll(document.wires);
             return;
         }
-        if (selectedWire != null && document.wires.contains(selectedWire) && !logic$knownWires.contains(selectedWire)) {
-            selectedWire.setLayer(logic$pcbViewLayer);
+
+        List<WireConnection> fresh = new ArrayList<>();
+        for (WireConnection wire : document.wires) if (!logic$knownWires.contains(wire)) fresh.add(wire);
+        if (!fresh.isEmpty()) {
+            if (selectedWire != null && fresh.contains(selectedWire)) {
+                selectedWire.setLayer(logic$pcbViewLayer);
+            } else if (selectedNodeIds.isEmpty()) {
+                for (WireConnection wire : fresh) wire.setLayer(logic$pcbViewLayer);
+            }
         }
         logic$knownWires.addAll(document.wires);
     }
