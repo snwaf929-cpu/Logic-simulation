@@ -16,8 +16,9 @@ public final class NodePorts {
                     : List.of();
             case OUTPUT -> List.of(new PortSpec("IN", PortDirection.INPUT, node.width));
             case NAND -> List.of(new PortSpec("A", PortDirection.INPUT, 1), new PortSpec("B", PortDirection.INPUT, 1));
-            case PROBE, BUS, SPLITTER -> List.of(new PortSpec("BUS", PortDirection.INPUT, node.width));
+            case PROBE, BUS, SPLITTER, BUS_SLICE -> List.of(new PortSpec("BUS", PortDirection.INPUT, node.width));
             case MERGER -> lanePorts(node, PortDirection.INPUT);
+            case NET_LABEL -> List.of(new PortSpec("NET", PortDirection.INPUT, node.width));
             case CUSTOM_CHIP -> requireChip(node, chips).inputPorts();
         };
     }
@@ -31,6 +32,8 @@ public final class NodePorts {
             case BUS -> List.of(new PortSpec("BUS", PortDirection.OUTPUT, node.width));
             case SPLITTER -> lanePorts(node, PortDirection.OUTPUT);
             case MERGER -> List.of(new PortSpec("BUS", PortDirection.OUTPUT, node.width));
+            case BUS_SLICE -> slicePorts(node);
+            case NET_LABEL -> List.of(new PortSpec("NET", PortDirection.OUTPUT, node.width));
             case CUSTOM_CHIP -> requireChip(node, chips).outputPorts();
         };
     }
@@ -44,6 +47,16 @@ public final class NodePorts {
             int high = low + laneWidth - 1;
             String name = laneWidth == 1 ? "B" + low : "B" + low + "-" + high;
             ports.add(new PortSpec(name, direction, laneWidth));
+        }
+        return List.copyOf(ports);
+    }
+
+    private static List<PortSpec> slicePorts(EditorNode node) {
+        List<BusSliceOutput> slices = node.normalizedSlices();
+        List<PortSpec> ports = new ArrayList<>(slices.size());
+        for (int i = 0; i < slices.size(); i++) {
+            BusSliceOutput slice = slices.get(i);
+            ports.add(new PortSpec(slice.name, PortDirection.OUTPUT, slice.width));
         }
         return List.copyOf(ports);
     }
