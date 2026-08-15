@@ -27,15 +27,17 @@ public abstract class CircuitCanvasLowZoomTitleMixin {
 
     @Inject(method="drawNode",at=@At("HEAD"),cancellable=true)
     private void logic$dynamicText(GuiGraphicsExtractor g,EditorNode n,CallbackInfo ci){
-        // RANDOM owns its complete visual at every zoom level. Never repaint it as a generic
-        // CONSTANT/title card here, otherwise the one-row control gets a second tall overlay.
+        // CUSTOM_CHIP owns a scale-to-fit renderer at every zoom. Repainting it here created
+        // the old offset/tiny-title effect and bypassed the SCREEN OUTPUT polished renderer.
+        if(n.kind==NodeKind.CUSTOM_CHIP)return;
+        // RANDOM owns its complete visual at every zoom level.
         if(n.kind==NodeKind.CONSTANT&&n.randomSource)return;
         if(zoom>=.70||n.kind==NodeKind.INPUT||n.kind==NodeKind.OUTPUT)return;
         int x=screenX(n.x),y=screenY(n.y),w=Math.max(6,(int)Math.round(nodeWidth(n)*zoom)),h=Math.max(6,(int)Math.round(nodeHeight(n)*zoom));
         int accent=n.kind==NodeKind.BUS?0xFF4B5662:nodeAccent(n);
         g.fill(x,y,x+w,y+h,n.kind==NodeKind.BUS?0xFF080B0F:0xF0191F26);
         g.outline(x,y,w,h,isNodeSelected(n.id)?0xFFFFFFFF:accent);
-        String title=n.kind==NodeKind.BUS?Integer.toString(n.width):n.kind==NodeKind.CUSTOM_CHIP?n.displayName():switch(n.kind){case NAND->"NAND";case CONSTANT->n.clockSource?"CLK "+EditorNode.formatFrequency(n.clockFrequencyHz):"CONST";case PROBE->"PROBE";case SPLITTER->"SPLIT "+n.width;case MERGER->"MERGE "+n.width;default->n.displayName();};
+        String title=n.kind==NodeKind.BUS?Integer.toString(n.width):switch(n.kind){case NAND->"NAND";case CONSTANT->n.clockSource?"CLK "+EditorNode.formatFrequency(n.clockFrequencyHz):"CONST";case PROBE->"PROBE";case SPLITTER->"SPLIT "+n.width;case MERGER->"MERGE "+n.width;default->n.displayName();};
         logic$text(g,title,x+w/2,y+Math.max(2,h/2-4),Math.max(4,w-4),0xFFF2F5F8);
         ci.cancel();
     }
@@ -44,8 +46,6 @@ public abstract class CircuitCanvasLowZoomTitleMixin {
     private void logic$sourceTitleAtNormalZoom(GuiGraphicsExtractor g,int mouseX,int mouseY,float delta,CallbackInfo ci){
         if(zoom<.70)return;
         for(EditorNode n:document.nodes){
-            // CLOCK keeps this extra readable title overlay. RANDOM does not: its dedicated
-            // horizontal renderer already includes RND xx% and the live output value.
             if(n.kind!=NodeKind.CONSTANT||!n.clockSource)continue;
             int x=screenX(n.x),y=screenY(n.y),w=Math.max(18,(int)Math.round(nodeWidth(n)*zoom));
             int top=y+Math.max(6,(int)Math.round(7*zoom));

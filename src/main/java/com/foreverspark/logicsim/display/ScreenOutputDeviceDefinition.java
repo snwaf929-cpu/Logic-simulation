@@ -15,7 +15,9 @@ public final class ScreenOutputDeviceDefinition {
     private ScreenOutputDeviceDefinition() {}
 
     public static ChipVisualSettings visual() {
-        return new ChipVisualSettings(216.0, 132.0, 18.0);
+        // Five ports at 18-unit spacing need about 102 units of height. The previous 216x132 body
+        // dominated small circuits and made the display symbol feel unrelated to the other chips.
+        return new ChipVisualSettings(138.0, 102.0, 18.0);
     }
 
     /**

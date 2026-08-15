@@ -6,6 +6,7 @@ import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
 import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
+import com.foreverspark.logicsim.client.screen.WorldBoardContextAccess;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.WireConnection;
@@ -27,7 +28,7 @@ import java.util.List;
 import java.util.Map;
 
 @Mixin(value = CircuitEditorScreen.class, priority = 1400)
-public abstract class CircuitEditorBoardPersistenceMixin {
+public abstract class CircuitEditorBoardPersistenceMixin implements WorldBoardContextAccess {
     @Unique private static final int MAX_PREVIEW_SESSIONS = 4;
     @Unique private static final Map<BlockPos, PreviewSession> logic$previewSessions = new LinkedHashMap<>();
 
@@ -85,6 +86,17 @@ public abstract class CircuitEditorBoardPersistenceMixin {
     private void logic$newWorldBoard(CallbackInfo ci) {
         if (logic$worldBoardPos == null || canvas == null) return;
         logic$worldBoardRoot = ((CanvasAccess)(Object)canvas).logic$getRuntimeRootDocument();
+    }
+
+    @Override
+    public void logic$replaceWorldBoardRoot(CircuitDocument root) {
+        if (root == null) return;
+        logic$worldBoardRoot = root;
+        // Keep the signature of the hardware currently running in the block. The newly loaded board will therefore
+        // be recognized as a hardware change and installed when the editor closes or explicitly checkpoints it.
+        if (logic$openedHardwareSignature == null && root != null) {
+            logic$openedHardwareSignature = "";
+        }
     }
 
     @Inject(method = "applySave", at = @At("RETURN"))

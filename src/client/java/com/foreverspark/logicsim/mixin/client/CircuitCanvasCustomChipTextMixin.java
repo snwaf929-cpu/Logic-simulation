@@ -15,6 +15,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.List;
 
+/**
+ * Clean custom-chip renderer.
+ *
+ * Text scales to the actual on-screen body rectangle. It never forces the chip body wider and it never uses
+ * fixed screen-pixel offsets that drift as the canvas zoom changes. Port names stay in hover tooltips so dense
+ * CPU schematics remain readable.
+ */
 @Mixin(value = CircuitCanvasWidget.class, priority = 1250)
 public abstract class CircuitCanvasCustomChipTextMixin {
     @Shadow private double zoom;
@@ -42,9 +49,72 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         graphics.fill(x, y, x + w, y + h, 0xF0191F26);
         graphics.outline(x, y, w, h, border);
         if (w > 4 && h > 4) graphics.outline(x + 1, y + 1, w - 2, h - 2, 0xFF252E37);
-        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(2, (int)Math.round(4 * zoom)), accent);
-        logic$text(graphics, node.displayName(), x + w / 2, y + Math.max(3, (int)Math.round(9 * zoom)), Math.max(6, w - 10), 1.0f, 0xFFF2F5F8);
 
+        int strip = Math.max(2, (int)Math.round(4.0 * zoom));
+        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.min(h - 1, strip + 1), accent);
+
+        int padX = Math.max(4, (int)Math.round(8.0 * zoom));
+        int padY = Math.max(3, (int)Math.round(7.0 * zoom));
+        logic$textInRect(
+                graphics,
+                node.displayName(),
+                x + padX,
+                y + strip + padY,
+                x + w - padX,
+                y + h - padY,
+                1.55f,
+                0xFFF2F5F8
+        );
+
+        logic$ports(graphics, node, inputs, outputs);
+        ci.cancel();
+    }
+
+    @Unique
+    private void logic$drawScreenOutput(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs,
+                                        int x, int y, int w, int h) {
+        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : 0xFF4A9CAD;
+        graphics.fill(x, y, x + w, y + h, 0xF010171B);
+        graphics.outline(x, y, w, h, border);
+        if (w > 4 && h > 4) graphics.outline(x + 1, y + 1, w - 2, h - 2, 0xFF233238);
+
+        int strip = Math.max(2, (int)Math.round(4.0 * zoom));
+        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.min(h - 1, strip + 1), BuiltinDevices.DISPLAY_COLOR);
+
+        int px = Math.max(5, (int)Math.round(9.0 * zoom));
+        int py = Math.max(4, (int)Math.round(8.0 * zoom));
+        int innerLeft = x + px;
+        int innerRight = x + w - px;
+        int innerTop = y + strip + py;
+        int innerBottom = y + h - py;
+
+        // Simple monitor glyph instead of the old wall of fixed-size labels.
+        int monitorTop = innerTop + Math.max(10, (innerBottom - innerTop) / 4);
+        int monitorBottom = innerBottom - Math.max(8, (innerBottom - innerTop) / 5);
+        if (innerRight - innerLeft > 18 && monitorBottom - monitorTop > 12) {
+            graphics.fill(innerLeft, monitorTop, innerRight, monitorBottom, 0xFF071014);
+            graphics.outline(innerLeft, monitorTop, innerRight - innerLeft, monitorBottom - monitorTop, 0xFF357987);
+            int glowInset = Math.max(2, (int)Math.round(2.0 * zoom));
+            if (innerRight - innerLeft > glowInset * 2 + 4 && monitorBottom - monitorTop > glowInset * 2 + 4) {
+                graphics.outline(innerLeft + glowInset, monitorTop + glowInset,
+                        innerRight - innerLeft - glowInset * 2,
+                        monitorBottom - monitorTop - glowInset * 2,
+                        0xFF1D4A53);
+            }
+        }
+
+        logic$textInRect(graphics, BuiltinDevices.DISPLAY_LABEL,
+                innerLeft, innerTop, innerRight, monitorTop - 1,
+                1.35f, 0xFFF0FAFC);
+        logic$textInRect(graphics, "PIXEL  ->  DATA64",
+                innerLeft, monitorBottom + 1, innerRight, innerBottom,
+                0.95f, 0xFF86C7D3);
+
+        logic$ports(graphics, node, inputs, outputs);
+    }
+
+    @Unique
+    private void logic$ports(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs) {
         for (int port = 0; port < inputs.size(); port++) {
             double py = centeredPortY(node, port, inputs.size());
             logic$port(graphics, node.x, py, portDisplayColor(node, port, inputs.get(port), true), validTarget(true));
@@ -53,64 +123,30 @@ public abstract class CircuitCanvasCustomChipTextMixin {
             double py = centeredPortY(node, port, outputs.size());
             logic$port(graphics, node.x + nodeWidth(node), py, portDisplayColor(node, port, outputs.get(port), false), validTarget(false));
         }
-        ci.cancel();
     }
 
     @Unique
-    private void logic$drawScreenOutput(GuiGraphicsExtractor graphics, EditorNode node, List<PortSpec> inputs, List<PortSpec> outputs,
-                                        int x, int y, int w, int h) {
-        int border = isNodeSelected(node.id) ? 0xFFFFFFFF : 0xFF4A9CAD;
-        graphics.fill(x, y, x + w, y + h, 0xF0121A1E);
-        graphics.outline(x, y, w, h, border);
-        if (w > 4 && h > 4) graphics.outline(x + 1, y + 1, w - 2, h - 2, 0xFF24343A);
-        graphics.fill(x + 1, y + 1, x + w - 1, y + Math.max(3, (int)Math.round(5 * zoom)), BuiltinDevices.DISPLAY_COLOR);
-
-        logic$text(graphics, BuiltinDevices.DISPLAY_LABEL, x + w / 2, y + Math.max(4, (int)Math.round(8 * zoom)), Math.max(8, w - 12), 1.0f, 0xFFF0FAFC);
-        logic$text(graphics, "PIXEL INPUTS -> BUS[64] -> SCREEN", x + w / 2, y + Math.max(15, (int)Math.round(22 * zoom)), Math.max(8, w - 16), 0.76f, 0xFF86C7D3);
-
-        for (int port = 0; port < inputs.size(); port++) {
-            PortSpec spec = inputs.get(port);
-            double py = centeredPortY(node, port, inputs.size());
-            int sy = screenY(py);
-            logic$port(graphics, node.x, py, portDisplayColor(node, port, spec, true), validTarget(true));
-            String label = logic$friendlyInputLabel(spec);
-            graphics.text(font(), label, x + Math.max(8, (int)Math.round(9 * zoom)), sy - 4, 0xFFD3E3E7, false);
-        }
-
-        for (int port = 0; port < outputs.size(); port++) {
-            PortSpec spec = outputs.get(port);
-            double py = centeredPortY(node, port, outputs.size());
-            int sy = screenY(py);
-            logic$port(graphics, node.x + nodeWidth(node), py, portDisplayColor(node, port, spec, false), validTarget(false));
-            String label = "SCREEN DATA [" + spec.width() + "]";
-            int labelX = x + w - Math.max(8, (int)Math.round(9 * zoom)) - font().width(label);
-            graphics.text(font(), label, labelX, sy - 4, 0xFF9ADDE8, false);
-        }
-    }
-
-    @Unique
-    private static String logic$friendlyInputLabel(PortSpec spec) {
-        String name = spec.name() == null ? "" : spec.name().trim().toUpperCase();
-        return switch (name) {
-            case "X" -> "X PIXEL [16]";
-            case "Y" -> "Y PIXEL [16]";
-            case "COLOR" -> "COLOR RGB565 [16]";
-            case "DRAW" -> "DRAW PULSE [1]";
-            case "CLEAR" -> "CLEAR PULSE [1]";
-            default -> name + " [" + spec.width() + "]";
-        };
-    }
-
-    @Unique
-    private void logic$text(GuiGraphicsExtractor graphics, String text, int centerX, int y, int maxPixels, float cap, int color) {
-        if (text == null || text.isEmpty()) return;
+    private void logic$textInRect(GuiGraphicsExtractor graphics, String text,
+                                  int left, int top, int right, int bottom,
+                                  float scaleCap, int color) {
+        if (text == null || text.isBlank()) return;
+        int availableWidth = Math.max(1, right - left);
+        int availableHeight = Math.max(1, bottom - top);
         int rawWidth = Math.max(1, font().width(text));
-        float zoomScale = (float)Math.max(0.30, Math.min(1.0, zoom));
-        float fitScale = (float)Math.min(1.0, Math.max(1, maxPixels) / (double)rawWidth);
-        float scale = Math.max(0.22f, Math.min(cap, Math.min(zoomScale, fitScale)));
+        double rawHeight = 9.0;
+
+        float zoomCap = (float)Math.max(0.24, Math.min(1.65, zoom));
+        float widthFit = (float)(availableWidth / (double)rawWidth);
+        float heightFit = (float)(availableHeight / rawHeight);
+        float scale = Math.max(0.20f, Math.min(scaleCap, Math.min(zoomCap, Math.min(widthFit, heightFit))));
+
+        float centerX = (left + right) * 0.5f;
+        float centerY = (top + bottom) * 0.5f;
         graphics.pose().pushMatrix();
         graphics.pose().scale(scale);
-        graphics.text(font(), text, Math.round(centerX / scale - rawWidth / 2.0f), Math.round(y / scale), color, false);
+        int tx = Math.round(centerX / scale - rawWidth / 2.0f);
+        int ty = Math.round(centerY / scale - (float)rawHeight / 2.0f);
+        graphics.text(font(), text, tx, ty, color, false);
         graphics.pose().popMatrix();
     }
 

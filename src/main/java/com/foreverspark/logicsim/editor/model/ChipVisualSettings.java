@@ -2,9 +2,9 @@ package com.foreverspark.logicsim.editor.model;
 
 /** Saved presentation settings for a reusable custom chip instance. */
 public final class ChipVisualSettings {
-    public static final double DEFAULT_WIDTH = 108.0;
+    public static final double DEFAULT_WIDTH = 90.0;
     public static final double DEFAULT_MIN_HEIGHT = 48.0;
-    public static final double DEFAULT_PORT_SPACING = 15.0;
+    public static final double DEFAULT_PORT_SPACING = 18.0;
 
     public double width = DEFAULT_WIDTH;
     public double minHeight = DEFAULT_MIN_HEIGHT;

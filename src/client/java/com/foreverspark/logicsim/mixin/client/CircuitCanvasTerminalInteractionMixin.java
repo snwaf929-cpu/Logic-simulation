@@ -49,9 +49,10 @@ public abstract class CircuitCanvasTerminalInteractionMixin {
     }
 
     @Inject(method = "toggleInput", at = @At("RETURN"))
-    private void logic$explainPersistentInput(EditorNode node, CallbackInfo ci) {
+    private void logic$explainRuntimeInput(EditorNode node, CallbackInfo ci) {
         long value = inputStates.getOrDefault(node.id, 0L);
-        status.accept(node.displayName() + " = " + (value == 0L ? "OFF" : "ON") + " — saved as this board's default input");
+        status.accept(node.displayName() + " = " + (value == 0L ? "OFF" : "ON")
+                + " — live runtime input; saved board default is unchanged");
         EditorClockRuntime.processRandomSources((CircuitCanvasWidget)(Object)this);
     }
 
