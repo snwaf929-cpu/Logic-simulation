@@ -137,6 +137,14 @@ tasks.register('deferredColorRandomDisplaySelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.client.render.DeferredColorRandomDisplaySelfTest'
 }
 
+tasks.register('singleWordRgbMaskSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates the cache-sized one-word 32-bit arbitrary RGB565 mask sampler.'
+    dependsOn clientClasses
+    classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.client.render.SingleWordRgbMaskSelfTest'
+}
+
 tasks.register('displayBatch32SelfTest', JavaExec) {
     group = 'verification'
     description = 'Validates the allocation-free 32px/tile realtime DISPLAY batch writer.'
@@ -154,6 +162,7 @@ tasks.named('check') {
     dependsOn tasks.named('randomSourceSelfTest')
     dependsOn tasks.named('randomDisplayNetworkSelfTest')
     dependsOn tasks.named('deferredColorRandomDisplaySelfTest')
+    dependsOn tasks.named('singleWordRgbMaskSelfTest')
     dependsOn tasks.named('displayBatch32SelfTest')
 }
 
