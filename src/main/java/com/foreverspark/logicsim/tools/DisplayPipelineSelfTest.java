@@ -13,6 +13,7 @@ import com.foreverspark.logicsim.editor.runtime.CircuitCompiler;
 import com.foreverspark.logicsim.interconnect.CircuitProgram;
 import com.foreverspark.logicsim.interconnect.CircuitProgramRuntime;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -22,9 +23,10 @@ public final class DisplayPipelineSelfTest {
 
     public static void main(String[] args) {
         testSplitDisplayPinsCompileAndBind();
+        testPackedPhysicalDisplayClockPath();
         testPhysicalData64CodecStillWorks();
         testPhysicalInputDefaultsPersist();
-        System.out.println("Display V2.1A split-pin + DATA64 physical pipeline self-test: PASS");
+        System.out.println("Display V2.1A split-pin + packed physical pipeline self-test: PASS");
     }
 
     private static void testSplitDisplayPinsCompileAndBind() {
@@ -81,6 +83,81 @@ public final class DisplayPipelineSelfTest {
         check(!runtime.externalDeviceInputsDirty(runtime.consumeDirtyOutputMask()), "unchanged DEVICE pins do not force repeated MHz callbacks");
     }
 
+    private static void testPackedPhysicalDisplayClockPath() {
+        CircuitDocument board = new CircuitDocument();
+
+        EditorNode clock = board.addNode(NodeKind.CONSTANT, -120, 0);
+        clock.width = 1;
+        clock.clockSource = true;
+        clock.randomSource = false;
+        clock.clockFrequencyHz = 50_000_000L;
+
+        EditorNode x = merger16(board, 80, 0);
+        EditorNode y = merger16(board, 80, 160);
+        EditorNode color = merger16(board, 80, 320);
+        EditorNode[] mergers = {x, y, color};
+
+        int randomCount = 0;
+        for (int bank = 0; bank < 3; bank++) {
+            for (int bit = 0; bit < 16; bit++) {
+                EditorNode random = board.addNode(NodeKind.CONSTANT, -20, bank * 160 + bit * 8);
+                random.width = 1;
+                random.constantValue = 0L;
+                random.clockSource = false;
+                random.randomSource = true;
+                random.randomChancePercent = switch (bit % 3) {
+                    case 0 -> 25;
+                    case 1 -> 50;
+                    default -> 75;
+                };
+                board.connect(clock.id, 0, random.id, 0);
+                board.connect(random.id, 0, mergers[bank].id, bit);
+                randomCount++;
+            }
+        }
+        check(randomCount == 48, "stress board must contain 48 RANDOM lanes");
+
+        EditorNode display = board.addNode(NodeKind.EXTERNAL_DEVICE, 300, 180);
+        display.configureExternalDevice(
+                ExternalDeviceType.DISPLAY,
+                "display-packed-test",
+                ExternalDeviceState.CONNECTED,
+                "test",
+                0,
+                0,
+                0
+        );
+        board.connect(x.id, 0, display.id, 0);
+        board.connect(y.id, 0, display.id, 1);
+        board.connect(color.id, 0, display.id, 2);
+        board.connect(clock.id, 0, display.id, 3);
+        // RESET intentionally stays unwired: this is the exact safe bulk-write shape.
+
+        CircuitProgramRuntime runtime = new CircuitProgramRuntime(
+                new CircuitProgram(new ChipDefinition("DISPLAY_BULK_TEST", board), Map.of())
+        );
+        check(runtime.outputPortCount() == 0, "typed physical DISPLAY stress board needs no legacy DATA64 output");
+        check(runtime.externalDeviceCount() == 1, "typed physical DISPLAY stress board indexes one device");
+        check(runtime.directRandomDeviceDisplayBatchEligible(0),
+                "physical DISPLAY must retain the packed direct-RANDOM bulk plan");
+        check(runtime.directRandomDeviceDisplayRandomLanes(0) == 48,
+                "physical DISPLAY packed plan must contain all 48 X/Y/COLOR RANDOM lanes");
+
+        List<Long> commands = new ArrayList<>();
+        long emitted = runtime.advanceDirectRandomDeviceDisplayNanos(
+                100_000L,
+                20_000L,
+                0,
+                (values, count) -> {
+                    for (int index = 0; index < count; index++) commands.add(values[index]);
+                }
+        );
+        check(emitted > 0L, "50 MHz physical DISPLAY bulk path must consume queued virtual edges");
+        check(!commands.isEmpty(), "50 MHz physical DISPLAY bulk path must publish rising-edge pixel commands");
+        DisplayCommandCodec.Command first = DisplayCommandCodec.decode(commands.getFirst());
+        check(first.isPixel(), "packed typed DISPLAY boundary must restore the internal PIXEL opcode");
+    }
+
     private static void testPhysicalData64CodecStillWorks() {
         long command = DisplayCommandCodec.pixel(1, 1, 0xFFFF);
         DisplayCommandCodec.Command decoded = DisplayCommandCodec.decode(command);
@@ -115,6 +192,13 @@ public final class DisplayPipelineSelfTest {
     private static void checkPort(PortSpec actual, String name, int width) {
         check(actual.name().equals(name) && actual.width() == width,
                 "DISPLAY port must be " + name + "[" + width + "] but was " + actual.name() + "[" + actual.width() + "]");
+    }
+
+    private static EditorNode merger16(CircuitDocument board, double x, double y) {
+        EditorNode node = board.addNode(NodeKind.MERGER, x, y);
+        node.width = 16;
+        node.laneWidth = 1;
+        return node;
     }
 
     private static EditorNode constant(CircuitDocument board, int width, long value, double y) {
