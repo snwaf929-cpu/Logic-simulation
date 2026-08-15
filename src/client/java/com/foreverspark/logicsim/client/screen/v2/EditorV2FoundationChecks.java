@@ -14,6 +14,7 @@ public final class EditorV2FoundationChecks {
         snapshotChecks();
         historyChecks();
         EditorV2Phase2Checks.run();
+        EditorV2Phase3Checks.run();
     }
 
     private static void gridChecks() {

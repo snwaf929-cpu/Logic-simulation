@@ -9,6 +9,7 @@ import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.RoutePoint;
 import com.foreverspark.logicsim.editor.model.WireConnection;
+import com.foreverspark.logicsim.editor.model.WireLayer;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -120,7 +121,9 @@ public abstract class CircuitCanvasDuplicateMixin {
             for (RoutePoint point : wire.routePoints()) route.add(new RoutePoint(point.x() - minX, point.y() - minY));
             RoutePoint branch = wire.branchStart();
             RoutePoint relativeBranch = branch == null ? null : new RoutePoint(branch.x() - minX, branch.y() - minY);
-            wires.add(new WireSnapshot(wire.sourceNodeId(), wire.sourcePort(), wire.targetNodeId(), wire.targetPort(), List.copyOf(route), relativeBranch));
+            wires.add(new WireSnapshot(
+                    wire.sourceNodeId(), wire.sourcePort(), wire.targetNodeId(), wire.targetPort(),
+                    List.copyOf(route), relativeBranch, wire.layer(), List.copyOf(wire.viaRouteIndices())));
         }
         return new LogicClipboard(minX, minY, Math.max(0.0, maxY - minY), List.copyOf(nodes), List.copyOf(wires));
     }
@@ -152,6 +155,8 @@ public abstract class CircuitCanvasDuplicateMixin {
             }
             RoutePoint branch = wireSnapshot.branchStart();
             if (branch != null) pastedWire.setBranchStart(new RoutePoint(EditorGrid.snap(originX + branch.x()), EditorGrid.snap(originY + branch.y())));
+            pastedWire.setLayer(wireSnapshot.layer());
+            pastedWire.setViaRouteIndices(wireSnapshot.viaRouteIndices());
         }
 
         setSelectedNodes(pastedIds);
@@ -223,5 +228,15 @@ public abstract class CircuitCanvasDuplicateMixin {
         }
     }
 
-    @Unique private record WireSnapshot(int sourceNodeId, int sourcePort, int targetNodeId, int targetPort, List<RoutePoint> routePoints, RoutePoint branchStart) {}
+    @Unique
+    private record WireSnapshot(
+            int sourceNodeId,
+            int sourcePort,
+            int targetNodeId,
+            int targetPort,
+            List<RoutePoint> routePoints,
+            RoutePoint branchStart,
+            WireLayer layer,
+            List<Integer> viaRouteIndices
+    ) {}
 }
