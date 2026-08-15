@@ -22,25 +22,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Compiled fast path for the physical DISPLAY stress shape when RANDOM sources form more than one trigger group.
+ * Compiled fast path for physical DISPLAY stress boards with a zero-NAND RANDOM trigger network.
  *
- * <p>The original packed display engine is intentionally limited to one CLOCK -> RANDOM trigger group. Real editor
- * boards can instead form a zero-NAND RANDOM trigger DAG: one CLOCK-triggered group updates RANDOM lanes, whose rising
- * outputs trigger additional RANDOM groups. The ordinary simulator scans every trigger group after every HIGH and LOW
- * clock edge, which becomes the dominant cost at MHz rates even though no NAND needs settling.</p>
- *
- * <p>This compiler proves a much narrower closed world before optimizing it: one root CLOCK, one physical DISPLAY,
- * no root outputs, WRITE driven by that CLOCK, RESET unwired, exactly 48 RANDOM lanes covering X/Y/COLOR, no NAND
- * consumers of those RANDOM outputs, and every RANDOM trigger driven by either the CLOCK or another RANDOM lane. The
- * RANDOM trigger graph must be acyclic. Once proven, every CLOCK rising edge is evaluated entirely in packed primitive
- * state and only groups whose trigger actually rises are sampled. The final RANDOM state is committed to the ordinary
- * simulator once per worker chunk, while every DISPLAY WRITE remains visible to the realtime framebuffer.</p>
+ * <p>The MHz clock is handled in large pulse batches. RANDOM groups driven by the clock or another RANDOM lane are
+ * evaluated as a primitive event DAG. A third class of trigger is also supported: an independent root INPUT, ordinary
+ * CONSTANT, or floating-low net. Those signals are polled once per worker slice and retain normal LOW->HIGH semantics;
+ * they are never scanned once per virtual MHz edge. NAND/device-produced triggers remain ineligible because polling
+ * those only once per slice could hide simulator-internal pulses.</p>
  */
 public final class RandomDisplayNetworkFastPath {
     private static final long RNG_NONZERO_FALLBACK = 0x9E3779B97F4A7C15L;
     private static final long RNG_SEED_GAMMA = 0x9E3779B97F4A7C15L;
     private static final long PIXEL_OPCODE = (long) DisplayCommandCodec.OP_PIXEL << 48;
     private static final int DISPLAY_RANDOM_LANES = 48;
+    private static final int TRIGGER_CLOCK = -1;
+    private static final int TRIGGER_EXTERNAL = -2;
     private static final Field CLOCKS_FIELD = findClocksField();
 
     private RandomDisplayNetworkFastPath() {}
@@ -115,12 +111,14 @@ public final class RandomDisplayNetworkFastPath {
         }
 
         LinkedHashMap<Integer, List<LaneSpec>> grouped = new LinkedHashMap<>();
+        Map<Integer, Signal> triggerSignals = new HashMap<>();
         for (int lane = 0; lane < randomNodes.size(); lane++) {
             EditorNode random = randomNodes.get(lane);
             Signal trigger = compiled.inputSignal(CompiledCircuit.ROOT_SCOPE, random.id, 0, 0);
             if (trigger == null) return fail("random-trigger-unresolved-" + random.id);
             grouped.computeIfAbsent(trigger.id(), ignored -> new ArrayList<>())
                     .add(new LaneSpec(lane, chances[lane]));
+            triggerSignals.putIfAbsent(trigger.id(), trigger);
         }
 
         GroupPlan[] groups = new GroupPlan[grouped.size()];
@@ -128,21 +126,34 @@ public final class RandomDisplayNetworkFastPath {
         Arrays.fill(ownerGroupByLane, -1);
         int groupOut = 0;
         int clockGroup = -1;
+        int externalGroupCount = 0;
         for (Map.Entry<Integer, List<LaneSpec>> entry : grouped.entrySet()) {
             int triggerSignalId = entry.getKey();
             int triggerLane;
+            int externalSignalId = -1;
             if (triggerSignalId == clock.signalId()) {
-                triggerLane = -1;
+                triggerLane = TRIGGER_CLOCK;
                 if (clockGroup >= 0) return fail("multiple-clock-trigger-groups");
                 clockGroup = groupOut;
             } else {
                 Integer sourceLane = laneBySignal.get(triggerSignalId);
-                if (sourceLane == null) return fail("trigger-outside-clock-random-network-" + triggerSignalId);
-                triggerLane = sourceLane;
+                if (sourceLane != null) {
+                    triggerLane = sourceLane;
+                } else {
+                    Signal trigger = triggerSignals.get(triggerSignalId);
+                    ExternalTriggerProof proof = proveIndependentExternalTrigger(compiled, board, trigger);
+                    if (!proof.safe()) {
+                        return fail("trigger-outside-clock-random-network-" + triggerSignalId + ":" + proof.detail());
+                    }
+                    triggerLane = TRIGGER_EXTERNAL;
+                    externalSignalId = triggerSignalId;
+                    externalGroupCount++;
+                }
             }
 
             GroupPlan group = new GroupPlan(
                     triggerLane,
+                    externalSignalId,
                     entry.getValue(),
                     mix64(System.nanoTime() ^ ((long) triggerSignalId << 32) ^ groupOut)
             );
@@ -172,8 +183,21 @@ public final class RandomDisplayNetworkFastPath {
         }
         if (hasTriggerCycle(parentGroup)) return fail("random-trigger-cycle");
 
+        int[] externalGroupIndices = new int[externalGroupCount];
+        int[] externalSignalIds = new int[externalGroupCount];
+        int externalOut = 0;
+        for (int groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+            GroupPlan group = groups[groupIndex];
+            if (group.triggerLane != TRIGGER_EXTERNAL) continue;
+            externalGroupIndices[externalOut] = groupIndex;
+            externalSignalIds[externalOut] = group.externalTriggerSignalId;
+            externalOut++;
+        }
+
         long[] laneBoundaryMasks = new long[DISPLAY_RANDOM_LANES];
-        for (int bit = 0; bit < boundaryLane.length; bit++) laneBoundaryMasks[boundaryLane[bit]] |= 1L << bit;
+        for (int bit = 0; bit < boundaryLane.length; bit++) {
+            laneBoundaryMasks[boundaryLane[bit]] |= 1L << bit;
+        }
         long[][] boundaryScatter = scatterTables(laneBoundaryMasks);
 
         long initialState = 0L;
@@ -194,15 +218,17 @@ public final class RandomDisplayNetworkFastPath {
                 dependentGroupByLane,
                 triggerConsumerMask,
                 boundaryScatter,
+                externalGroupIndices,
+                externalSignalIds,
                 initialState
-        ), "active");
+        ), externalGroupCount == 0 ? "active" : "active-external-triggers=" + externalGroupCount);
     }
 
     private static CompileResult fail(String reason) {
         return new CompileResult(null, reason);
     }
 
-    /** One immutable compiled network plus mutable clock/RNG/state owned by the single simulation worker. */
+    /** One immutable compiled network plus mutable clock/RNG/state owned by one simulation worker. */
     public static final class Plan {
         private final CircuitProgramRuntime runtime;
         private final int deviceIndex;
@@ -217,8 +243,12 @@ public final class RandomDisplayNetworkFastPath {
         private final long triggerConsumerMask;
         private final long[][] boundaryScatter;
         private final int[] eventQueue;
+        private final int[] externalGroupIndices;
+        private final int[] externalSignalIds;
+        private final boolean[] externalLastHigh;
         private long[] scratch = new long[32_768];
         private long stateMask;
+        private long externalTriggerFires;
 
         private Plan(
                 CircuitProgramRuntime runtime,
@@ -233,6 +263,8 @@ public final class RandomDisplayNetworkFastPath {
                 int[] dependentGroupByLane,
                 long triggerConsumerMask,
                 long[][] boundaryScatter,
+                int[] externalGroupIndices,
+                int[] externalSignalIds,
                 long initialState
         ) {
             this.runtime = runtime;
@@ -248,11 +280,19 @@ public final class RandomDisplayNetworkFastPath {
             this.triggerConsumerMask = triggerConsumerMask;
             this.boundaryScatter = boundaryScatter;
             this.eventQueue = new int[Math.max(1, groups.length)];
+            this.externalGroupIndices = externalGroupIndices;
+            this.externalSignalIds = externalSignalIds;
+            this.externalLastHigh = new boolean[externalSignalIds.length];
+            for (int index = 0; index < externalSignalIds.length; index++) {
+                this.externalLastHigh[index] = simulator.isHighFast(externalSignalIds[index]);
+            }
             this.stateMask = initialState;
         }
 
         public int randomLaneCount() { return outputSignalIds.length; }
         public int triggerGroupCount() { return groups.length; }
+        public int externalTriggerGroupCount() { return externalSignalIds.length; }
+        public long externalTriggerFireCount() { return externalTriggerFires; }
         public int deviceIndex() { return deviceIndex; }
         public int displayWidth() { return displayWidth; }
         public int displayHeight() { return displayHeight; }
@@ -265,59 +305,87 @@ public final class RandomDisplayNetworkFastPath {
         }
 
         /**
-         * Queue elapsed virtual time or consume a bulk edge chunk. Returns -1 only when the owning runtime changed.
+         * Poll independent triggers once, then consume a bulk CLOCK edge chunk. External trigger changes update RANDOM
+         * state but do not publish a pixel by themselves; DISPLAY WRITE remains the CLOCK rising edge.
          */
         public long advance(long elapsedNanos, long edgeBudget, CircuitTimingController.LongBatchConsumer sink) {
             if (elapsedNanos < 0L || edgeBudget < 0L) throw new IllegalArgumentException("clock arguments must be >= 0");
-            if (!clock.timing().running()) return 0L;
+
+            long state = stateMask;
+            for (int index = 0; index < externalSignalIds.length; index++) {
+                boolean high = simulator.isHighFast(externalSignalIds[index]);
+                boolean rising = high && !externalLastHigh[index];
+                externalLastHigh[index] = high;
+                if (!rising) continue;
+                state = runCascade(state, externalGroupIndices[index]);
+                externalTriggerFires++;
+            }
+
+            if (!clock.timing().running()) {
+                commitState(state);
+                return 0L;
+            }
 
             long emitted = clock.advanceNanosPulseBatch(elapsedNanos, edgeBudget);
             long risingEdges = clock.lastPulseRisingEdges();
-            if (risingEdges <= 0L) return emitted;
-            if (risingEdges > Integer.MAX_VALUE) throw new IllegalStateException("RANDOM display batch is too large");
+            if (risingEdges <= 0L) {
+                commitState(state);
+                return emitted;
+            }
+            if (risingEdges > Integer.MAX_VALUE) {
+                throw new IllegalStateException("RANDOM display batch is too large: " + risingEdges);
+            }
 
             int cycles = (int) risingEdges;
             ensureScratch(cycles);
-            long state = stateMask;
             int outputCount = 0;
-
             for (int cycle = 0; cycle < cycles; cycle++) {
-                int head = 0;
-                int tail = 0;
-                eventQueue[tail++] = clockGroup;
-
-                while (head < tail) {
-                    int groupIndex = eventQueue[head++];
-                    GroupPlan group = groups[groupIndex];
-                    long sampledLocal = group.sample();
-                    long sampledGlobal = group.scatter(sampledLocal);
-                    long nextState = (state & ~group.globalOutputMask) | sampledGlobal;
-                    long changed = state ^ nextState;
-                    state = nextState;
-                    long rising = changed & state & triggerConsumerMask;
-                    while (rising != 0L) {
-                        int lane = Long.numberOfTrailingZeros(rising);
-                        int dependent = dependentGroupByLane[lane];
-                        if (dependent >= 0) {
-                            if (tail >= eventQueue.length) {
-                                throw new IllegalStateException("Acyclic RANDOM trigger graph fired a group twice in one cycle");
-                            }
-                            eventQueue[tail++] = dependent;
-                        }
-                        rising &= rising - 1L;
-                    }
-                }
-
+                state = runCascade(state, clockGroup);
                 long raw = PIXEL_OPCODE | scatter(boundaryScatter, state);
                 int x = (int) ((raw >>> 16) & 0xFFFFL);
                 int y = (int) ((raw >>> 32) & 0xFFFFL);
                 if (x < displayWidth && y < displayHeight) scratch[outputCount++] = raw;
             }
 
-            stateMask = state;
-            simulator.driveBitVectorFast(outputSignalIds, 0, outputSignalIds.length, state);
+            commitState(state);
             if (sink != null && outputCount > 0) sink.accept(scratch, outputCount);
             return emitted;
+        }
+
+        /** Run one trigger and all RANDOM-output rising-edge dependents in the proven acyclic graph. */
+        private long runCascade(long state, int initialGroup) {
+            int head = 0;
+            int tail = 0;
+            eventQueue[tail++] = initialGroup;
+            while (head < tail) {
+                int groupIndex = eventQueue[head++];
+                GroupPlan group = groups[groupIndex];
+                long sampledLocal = group.sample();
+                long sampledGlobal = group.scatter(sampledLocal);
+                long nextState = (state & ~group.globalOutputMask) | sampledGlobal;
+                long changed = state ^ nextState;
+                state = nextState;
+
+                long rising = changed & state & triggerConsumerMask;
+                while (rising != 0L) {
+                    int lane = Long.numberOfTrailingZeros(rising);
+                    int dependent = dependentGroupByLane[lane];
+                    if (dependent >= 0) {
+                        if (tail >= eventQueue.length) {
+                            throw new IllegalStateException("Acyclic RANDOM trigger graph fired a group twice in one cascade");
+                        }
+                        eventQueue[tail++] = dependent;
+                    }
+                    rising &= rising - 1L;
+                }
+            }
+            return state;
+        }
+
+        private void commitState(long state) {
+            if (state == stateMask) return;
+            stateMask = state;
+            simulator.driveBitVectorFast(outputSignalIds, 0, outputSignalIds.length, state);
         }
 
         /** Re-arm the ordinary RANDOM edge detector before a fallback from this compiled network. */
@@ -335,6 +403,7 @@ public final class RandomDisplayNetworkFastPath {
 
     private static final class GroupPlan {
         private final int triggerLane;
+        private final int externalTriggerSignalId;
         private final int[] globalLanes;
         private final long globalOutputMask;
         private final long[][] globalScatter;
@@ -349,8 +418,9 @@ public final class RandomDisplayNetworkFastPath {
         private long rng0;
         private long rng1;
 
-        private GroupPlan(int triggerLane, List<LaneSpec> lanes, long seed) {
+        private GroupPlan(int triggerLane, int externalTriggerSignalId, List<LaneSpec> lanes, long seed) {
             this.triggerLane = triggerLane;
+            this.externalTriggerSignalId = externalTriggerSignalId;
             this.globalLanes = new int[lanes.size()];
             long outputMask = 0L;
             long chance25 = 0L;
@@ -459,6 +529,46 @@ public final class RandomDisplayNetworkFastPath {
     }
 
     private record LaneSpec(int globalLane, int chancePercent) {}
+    private record ExternalTriggerProof(boolean safe, String detail) {}
+
+    /**
+     * Passive editor routing aliases the original compiled Signal, so checking root INPUT/ordinary CONSTANT identities
+     * also accepts BUS/SPLITTER/MERGER/BUS_SLICE/NET_LABEL routes from those sources. A compiler-created FLOAT is
+     * immutable LOW unless another source is structurally attached later, which requires recompiling the BOARD.
+     */
+    private static ExternalTriggerProof proveIndependentExternalTrigger(
+            CompiledCircuit compiled,
+            CircuitDocument board,
+            Signal trigger
+    ) {
+        if (trigger == null) return new ExternalTriggerProof(false, "signal-missing");
+        int signalId = trigger.id();
+
+        for (EditorNode node : board.nodes) {
+            if (node == null) continue;
+            boolean eligibleSource = node.kind == NodeKind.INPUT
+                    || (node.kind == NodeKind.CONSTANT && !node.clockSource && !node.randomSource);
+            if (!eligibleSource) continue;
+            Signal[] outputs = compiled.outputSignals(CompiledCircuit.ROOT_SCOPE, node.id, 0);
+            if (containsSignal(outputs, signalId)) {
+                return new ExternalTriggerProof(true, node.kind + "-node-" + node.id + ":signal=" + signalId);
+            }
+        }
+
+        String path = trigger.path() == null ? "" : trigger.path();
+        if (path.contains("/FLOAT")) {
+            return new ExternalTriggerProof(true, "floating-low:signal=" + signalId + ":path=" + path);
+        }
+        return new ExternalTriggerProof(false, "signal=" + signalId + ":path=" + path);
+    }
+
+    private static boolean containsSignal(Signal[] signals, int signalId) {
+        if (signals == null) return false;
+        for (Signal signal : signals) {
+            if (signal != null && signal.id() == signalId) return true;
+        }
+        return false;
+    }
 
     private static EditorNode findDisplayNode(CircuitProgramRuntime runtime, CircuitDocument board, int deviceIndex) {
         String id = runtime.externalDeviceId(deviceIndex);
@@ -519,7 +629,7 @@ public final class RandomDisplayNetworkFastPath {
         }
     }
 
-    /** A group has at most one parent because it has one trigger signal. Following parent links is enough for cycles. */
+    /** A RANDOM-triggered group has one parent; external/CLOCK groups are roots. */
     private static boolean hasTriggerCycle(int[] parentGroup) {
         int[] marks = new int[parentGroup.length];
         int generation = 1;
