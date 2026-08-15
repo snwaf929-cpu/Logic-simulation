@@ -7,6 +7,7 @@ import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
 import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
 import com.foreverspark.logicsim.client.screen.EditorWorkspaceRuntime;
 import com.foreverspark.logicsim.client.screen.WorldBoardContextAccess;
+import com.foreverspark.logicsim.client.screen.v2.EditorWorkspaceAccess;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.KeyEvent;
@@ -31,7 +32,7 @@ import java.util.List;
  * Back button / Alt+Left returns to the exact document being edited before the switch.
  */
 @Mixin(value = CircuitEditorScreen.class, priority = 1500)
-public abstract class CircuitEditorWorkspaceMixin {
+public abstract class CircuitEditorWorkspaceMixin implements EditorWorkspaceAccess {
     @Shadow private CircuitCanvasWidget canvas;
     @Shadow private ComponentLibraryWidget componentLibrary;
     @Shadow private String currentChipName;
@@ -43,6 +44,17 @@ public abstract class CircuitEditorWorkspaceMixin {
     @Unique private String logic$currentBoardName;
     @Unique private String logic$rootChipName;
     @Unique private boolean logic$forceChipSave;
+
+    @Override
+    public boolean logic$isBoardWorkspace() {
+        return canvas != null && !canvas.isNestedView() && logic$rootChipName == null;
+    }
+
+    @Override
+    public CircuitDocument logic$boardRootDocument() {
+        if (!logic$isBoardWorkspace()) throw new IllegalStateException("Current workspace is not a root BOARD");
+        return logic$rootDocument();
+    }
 
     @Inject(method = "init", at = @At("RETURN"))
     private void logic$installWorkspaceHooks(CallbackInfo ci) {
