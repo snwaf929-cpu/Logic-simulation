@@ -52,8 +52,8 @@ public abstract class CircuitEditorPhase5DevicesMixin {
         BlockPos active = ClientEditorBridge.activeCircuitPos();
         if (active == null) {
             logic$deviceBoardPos = null;
-            ((ExternalDeviceLibraryAccess) componentLibrary).logic$setDeviceLibraryEnabled(false);
-            ((ExternalDeviceLibraryAccess) componentLibrary).logic$setAvailableDevices(List.of());
+            ((ExternalDeviceLibraryAccess) (Object) componentLibrary).logic$setDeviceLibraryEnabled(false);
+            ((ExternalDeviceLibraryAccess) (Object) componentLibrary).logic$setAvailableDevices(List.of());
             return;
         }
         if (!active.equals(logic$deviceBoardPos)) {
@@ -76,7 +76,8 @@ public abstract class CircuitEditorPhase5DevicesMixin {
     private void logic$updateDeviceLibraryMode() {
         if (componentLibrary == null) return;
         boolean boardWorkspace = ((EditorWorkspaceAccess) (Object) this).logic$isBoardWorkspace();
-        ((ExternalDeviceLibraryAccess) componentLibrary).logic$setDeviceLibraryEnabled(boardWorkspace && logic$deviceBoardPos != null);
+        ((ExternalDeviceLibraryAccess) (Object) componentLibrary)
+                .logic$setDeviceLibraryEnabled(boardWorkspace && logic$deviceBoardPos != null);
     }
 
     @Unique
@@ -87,14 +88,14 @@ public abstract class CircuitEditorPhase5DevicesMixin {
         logic$appliedDeviceRevision = revision;
 
         List<ExternalDeviceDescriptor> devices = ClientBoardNetworking.latestDevices(logic$deviceBoardPos);
-        ((ExternalDeviceLibraryAccess) componentLibrary).logic$setAvailableDevices(devices);
+        ((ExternalDeviceLibraryAccess) (Object) componentLibrary).logic$setAvailableDevices(devices);
 
         CircuitDocument board = ((EditorWorkspaceAccess) (Object) this).logic$boardRootDocument();
-        if (board == null) board = ((CanvasAccess) canvas).logic$getRuntimeRootDocument();
+        if (board == null) board = ((CanvasAccess) (Object) canvas).logic$getRuntimeRootDocument();
         if (board == null) board = canvas.document();
 
         ExternalDeviceSync.Result result = ExternalDeviceSync.reconcile(board, devices);
-        if (result.changed()) ((CanvasAccess) canvas).logic$recompile();
+        if (result.changed()) ((CanvasAccess) (Object) canvas).logic$recompile();
 
         if (announce) {
             setStatus("DEVICES: " + result.connected() + " placed+connected, " + devices.size() + " available"
