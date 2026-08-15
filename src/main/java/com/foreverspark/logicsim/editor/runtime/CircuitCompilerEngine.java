@@ -14,7 +14,6 @@ import com.foreverspark.logicsim.editor.model.NodePorts;
 import com.foreverspark.logicsim.editor.model.PortSpec;
 import com.foreverspark.logicsim.editor.model.WireConnection;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -26,9 +25,7 @@ final class CircuitCompilerEngine {
     private CircuitCompilerEngine() {}
 
     @FunctionalInterface
-    private interface SignalBinding {
-        Signal[] resolve();
-    }
+    private interface SignalBinding { Signal[] resolve(); }
 
     static CompiledCircuit compile(CircuitDocument document, ChipLookup chips) {
         if (document == null) throw new CircuitCompileException("Circuit document is null");
@@ -37,17 +34,8 @@ final class CircuitCompilerEngine {
         Map<Integer, Signal[]> rootInputs = new HashMap<>();
         Map<String, Map<NodePortKey, Signal[]>> scopedInputs = new HashMap<>();
         Map<String, Map<NodePortKey, Signal[]>> scopedOutputs = new HashMap<>();
-        BuildContext root = new BuildContext(
-                document,
-                chips == null ? ChipLookup.empty() : chips,
-                circuit,
-                CompiledCircuit.ROOT_SCOPE,
-                Map.of(),
-                rootInputs,
-                Set.of(),
-                scopedInputs,
-                scopedOutputs
-        );
+        BuildContext root = new BuildContext(document, chips == null ? ChipLookup.empty() : chips, circuit,
+                CompiledCircuit.ROOT_SCOPE, Map.of(), rootInputs, Set.of(), scopedInputs, scopedOutputs);
         try {
             root.instantiateHierarchy();
             root.preallocateNandsRecursive();
@@ -86,17 +74,10 @@ final class CircuitCompilerEngine {
         private final Map<String, Signal[]> floatingNets = new HashMap<>();
         private boolean resolvedAll;
 
-        private BuildContext(
-                CircuitDocument document,
-                ChipLookup chips,
-                LogicCircuit circuit,
-                String path,
-                Map<Integer, SignalBinding> inputOverrides,
-                Map<Integer, Signal[]> rootInputs,
-                Set<String> chipStack,
-                Map<String, Map<NodePortKey, Signal[]>> scopedInputs,
-                Map<String, Map<NodePortKey, Signal[]>> scopedOutputs
-        ) {
+        private BuildContext(CircuitDocument document, ChipLookup chips, LogicCircuit circuit, String path,
+                             Map<Integer, SignalBinding> inputOverrides, Map<Integer, Signal[]> rootInputs,
+                             Set<String> chipStack, Map<String, Map<NodePortKey, Signal[]>> scopedInputs,
+                             Map<String, Map<NodePortKey, Signal[]>> scopedOutputs) {
             this.document = document;
             this.chips = chips;
             this.circuit = circuit;
@@ -111,9 +92,7 @@ final class CircuitCompilerEngine {
 
         private void indexDocument() {
             for (EditorNode node : document.nodes) {
-                if (nodesById.putIfAbsent(node.id, node) != null) {
-                    throw new CircuitCompileException("Duplicate node id " + node.id);
-                }
+                if (nodesById.putIfAbsent(node.id, node) != null) throw new CircuitCompileException("Duplicate node id " + node.id);
             }
             for (WireConnection wire : document.wires) {
                 NodePortKey target = new NodePortKey(wire.targetNodeId(), wire.targetPort());
@@ -124,15 +103,11 @@ final class CircuitCompilerEngine {
         }
 
         private void instantiateHierarchy() {
-            for (EditorNode node : document.nodes) {
-                if (node.kind == NodeKind.CUSTOM_CHIP) customInstance(node).child().instantiateHierarchy();
-            }
+            for (EditorNode node : document.nodes) if (node.kind == NodeKind.CUSTOM_CHIP) customInstance(node).child().instantiateHierarchy();
         }
 
         private void preallocateNandsRecursive() {
-            for (EditorNode node : document.nodes) {
-                if (node.kind == NodeKind.NAND) preallocateNand(node, new NodePortKey(node.id, 0));
-            }
+            for (EditorNode node : document.nodes) if (node.kind == NodeKind.NAND) preallocateNand(node, new NodePortKey(node.id, 0));
             for (CustomInstance instance : customInstances.values()) instance.child().preallocateNandsRecursive();
         }
 
@@ -142,9 +117,7 @@ final class CircuitCompilerEngine {
         }
 
         private void realizeNandsRecursive() {
-            for (EditorNode node : document.nodes) {
-                if (node.kind == NodeKind.NAND) resolveNand(node, new NodePortKey(node.id, 0));
-            }
+            for (EditorNode node : document.nodes) if (node.kind == NodeKind.NAND) resolveNand(node, new NodePortKey(node.id, 0));
             for (CustomInstance instance : customInstances.values()) instance.child().realizeNandsRecursive();
         }
 
@@ -170,9 +143,7 @@ final class CircuitCompilerEngine {
             Signal[] cached = inputCache.get(key);
             if (cached != null) return cached;
             List<PortSpec> inputPorts = NodePorts.inputs(node, chips);
-            if (port < 0 || port >= inputPorts.size()) {
-                throw new CircuitCompileException("Invalid input port " + port + " on node " + node.id);
-            }
+            if (port < 0 || port >= inputPorts.size()) throw new CircuitCompileException("Invalid input port " + port + " on node " + node.id);
             int width = inputPorts.get(port).width();
             WireConnection matching = incomingWires.get(key);
             Signal[] signals;
@@ -182,16 +153,9 @@ final class CircuitCompilerEngine {
                 EditorNode sourceNode = nodesById.get(matching.sourceNodeId());
                 if (sourceNode == null) throw new CircuitCompileException("Unknown source node " + matching.sourceNodeId());
                 List<PortSpec> sourcePorts = NodePorts.outputs(sourceNode, chips);
-                if (matching.sourcePort() < 0 || matching.sourcePort() >= sourcePorts.size()) {
-                    throw new CircuitCompileException("Invalid source port on node " + sourceNode.id);
-                }
+                if (matching.sourcePort() < 0 || matching.sourcePort() >= sourcePorts.size()) throw new CircuitCompileException("Invalid source port on node " + sourceNode.id);
                 int sourceWidth = sourcePorts.get(matching.sourcePort()).width();
-                if (sourceWidth != width) {
-                    throw new CircuitCompileException(
-                            "Width mismatch: node " + sourceNode.id + " output is " + sourceWidth
-                                    + "-bit but node " + node.id + " input is " + width + "-bit"
-                    );
-                }
+                if (sourceWidth != width) throw new CircuitCompileException("Width mismatch: node " + sourceNode.id + " output is " + sourceWidth + "-bit but node " + node.id + " input is " + width + "-bit");
                 signals = resolveOutput(sourceNode, matching.sourcePort());
             }
             inputCache.put(key, signals);
@@ -205,9 +169,7 @@ final class CircuitCompilerEngine {
             if (!resolvingOutputs.add(key)) throw structuralLoop(node, port);
             try {
                 List<PortSpec> outputPorts = NodePorts.outputs(node, chips);
-                if (port < 0 || port >= outputPorts.size()) {
-                    throw new CircuitCompileException("Invalid output port " + port + " on node " + node.id);
-                }
+                if (port < 0 || port >= outputPorts.size()) throw new CircuitCompileException("Invalid output port " + port + " on node " + node.id);
                 Signal[] result = switch (node.kind) {
                     case INPUT -> resolveRootOrOverriddenInput(node);
                     case NAND -> resolveNand(node, key);
@@ -218,6 +180,7 @@ final class CircuitCompilerEngine {
                     case BUS_SLICE -> resolveBusSlice(node, port);
                     case NET_LABEL -> resolveNetLabel(node);
                     case CUSTOM_CHIP -> resolveCustomOutput(node, port);
+                    case EXTERNAL_DEVICE -> resolveExternalDeviceOutput(node, port, outputPorts.get(port).width());
                     case OUTPUT, PROBE -> throw new CircuitCompileException(node.kind + " node " + node.id + " has no output ports");
                 };
                 outputCache.putIfAbsent(key, result);
@@ -225,6 +188,12 @@ final class CircuitCompilerEngine {
             } finally {
                 resolvingOutputs.remove(key);
             }
+        }
+
+        /** Physical-device output is not fabricated by the schematic compiler. World runtime may drive it later. */
+        private Signal[] resolveExternalDeviceOutput(EditorNode node, int port, int width) {
+            String id = node.externalDeviceId == null || node.externalDeviceId.isBlank() ? "UNBOUND" + node.id : sanitize(node.externalDeviceId.toUpperCase(Locale.ROOT));
+            return createSignals(path + "/DEVICE/" + id + "/OUT" + port, width, LogicValue.UNKNOWN);
         }
 
         private Signal[] resolveSplitter(EditorNode node, int port) {
@@ -249,16 +218,11 @@ final class CircuitCompilerEngine {
 
         private Signal[] resolveBusSlice(EditorNode node, int port) {
             List<BusSliceOutput> slices = node.normalizedSlices();
-            if (port < 0 || port >= slices.size()) {
-                throw new CircuitCompileException("Invalid BUS_SLICE output " + port + " on node " + node.id);
-            }
+            if (port < 0 || port >= slices.size()) throw new CircuitCompileException("Invalid BUS_SLICE output " + port + " on node " + node.id);
             BusSliceOutput slice = slices.get(port);
             Signal[] bus = resolveInput(node, 0);
             if (slice.startBit < 0 || slice.width <= 0 || slice.startBit + slice.width > bus.length) {
-                throw new CircuitCompileException(
-                        "Invalid BUS_SLICE range " + slice.name + " [" + (slice.startBit + slice.width - 1)
-                                + ":" + slice.startBit + "] for " + bus.length + "-bit input"
-                );
+                throw new CircuitCompileException("Invalid BUS_SLICE range " + slice.name + " [" + (slice.startBit + slice.width - 1) + ":" + slice.startBit + "] for " + bus.length + "-bit input");
             }
             Signal[] result = new Signal[slice.width];
             System.arraycopy(bus, slice.startBit, result, 0, slice.width);
@@ -271,24 +235,15 @@ final class CircuitCompilerEngine {
             EditorNode driverLabel = null;
             for (EditorNode candidate : document.nodes) {
                 if (candidate.kind != NodeKind.NET_LABEL || !normalizedNetName(candidate).equals(net)) continue;
-                if (candidate.width != node.width) {
-                    throw new CircuitCompileException(
-                            "NET_LABEL " + net + " width mismatch: node " + node.id + " is " + node.width
-                                    + "-bit but node " + candidate.id + " is " + candidate.width + "-bit"
-                    );
-                }
+                if (candidate.width != node.width) throw new CircuitCompileException("NET_LABEL " + net + " width mismatch: node " + node.id + " is " + node.width + "-bit but node " + candidate.id + " is " + candidate.width + "-bit");
                 WireConnection incoming = incomingWires.get(new NodePortKey(candidate.id, 0));
                 if (incoming == null) continue;
-                if (driver != null && (driver.sourceNodeId() != incoming.sourceNodeId() || driver.sourcePort() != incoming.sourcePort())) {
-                    throw new CircuitCompileException("NET_LABEL " + net + " has multiple drivers");
-                }
+                if (driver != null && (driver.sourceNodeId() != incoming.sourceNodeId() || driver.sourcePort() != incoming.sourcePort())) throw new CircuitCompileException("NET_LABEL " + net + " has multiple drivers");
                 driver = incoming;
                 driverLabel = candidate;
             }
-            if (driverLabel == null) {
-                return floatingNets.computeIfAbsent(net + "/" + node.width,
-                        ignored -> createSignals(path + "/NET/" + sanitize(net) + "/FLOAT", node.width, LogicValue.LOW));
-            }
+            if (driverLabel == null) return floatingNets.computeIfAbsent(net + "/" + node.width,
+                    ignored -> createSignals(path + "/NET/" + sanitize(net) + "/FLOAT", node.width, LogicValue.LOW));
             return resolveInput(driverLabel, 0);
         }
 
@@ -298,25 +253,17 @@ final class CircuitCompilerEngine {
             return value.toUpperCase(Locale.ROOT);
         }
 
-        private static String sanitize(String value) {
-            return value.replaceAll("[^A-Z0-9_\\-]", "_");
-        }
+        private static String sanitize(String value) { return value.replaceAll("[^A-Z0-9_\\-]", "_"); }
 
         private CircuitCompileException structuralLoop(EditorNode node, int port) {
-            return new CircuitCompileException(
-                    "Structural wiring loop detected at " + node.displayName() + " output " + port
-                            + ". BUS/SPLITTER/MERGER/BUS_SLICE/NET_LABEL routing cannot feed back into itself. "
-                            + "Feedback used for latches must pass through NAND logic."
-            );
+            return new CircuitCompileException("Structural wiring loop detected at " + node.displayName() + " output " + port
+                    + ". BUS/SPLITTER/MERGER/BUS_SLICE/NET_LABEL routing cannot feed back into itself. Feedback used for latches must pass through NAND logic.");
         }
 
         private Signal[] resolveRootOrOverriddenInput(EditorNode node) {
             SignalBinding override = inputOverrides.get(node.id);
             if (override != null) return override.resolve();
-            Signal[] signals = outputCache.computeIfAbsent(
-                    new NodePortKey(node.id, 0),
-                    ignored -> createSignals(path + "/INPUT" + node.id, node.width)
-            );
+            Signal[] signals = outputCache.computeIfAbsent(new NodePortKey(node.id, 0), ignored -> createSignals(path + "/INPUT" + node.id, node.width));
             rootInputs.putIfAbsent(node.id, signals);
             return signals;
         }
@@ -327,9 +274,7 @@ final class CircuitCompilerEngine {
 
         private Signal[] resolveNand(EditorNode node, NodePortKey key) {
             Signal[] out = preallocateNand(node, key);
-            if (realizedNands.add(node.id)) {
-                circuit.nand(path + "/NAND" + node.id, resolveInput(node, 0)[0], resolveInput(node, 1)[0], out[0]);
-            }
+            if (realizedNands.add(node.id)) circuit.nand(path + "/NAND" + node.id, resolveInput(node, 0)[0], resolveInput(node, 1)[0], out[0]);
             return out;
         }
 
@@ -337,11 +282,8 @@ final class CircuitCompilerEngine {
             Signal[] signals = new Signal[node.width];
             long value = node.constantValue;
             for (int bit = 0; bit < node.width; bit++) {
-                signals[bit] = circuit.signal(
-                        path + "/CONST" + node.id + "[" + bit + "]",
-                        LogicValue.fromBoolean((value & 1L) != 0L)
-                );
-                value = value >>> 1;
+                signals[bit] = circuit.signal(path + "/CONST" + node.id + "[" + bit + "]", LogicValue.fromBoolean((value & 1L) != 0L));
+                value >>>= 1;
             }
             outputCache.put(key, signals);
             return signals;
@@ -349,72 +291,45 @@ final class CircuitCompilerEngine {
 
         private Signal[] resolveCustomOutput(EditorNode node, int port) {
             CustomInstance instance = customInstance(node);
-            if (port < 0 || port >= instance.outputs().size()) {
-                throw new CircuitCompileException("Invalid custom chip output port " + port + " on node " + node.id);
-            }
+            if (port < 0 || port >= instance.outputs().size()) throw new CircuitCompileException("Invalid custom chip output port " + port + " on node " + node.id);
             return instance.child().resolveInput(instance.outputs().get(port), 0);
         }
 
         private CustomInstance customInstance(EditorNode node) {
             CustomInstance cached = customInstances.get(node.id);
             if (cached != null) return cached;
-
             String chipName = node.chipName == null ? "" : node.chipName.trim();
             if (chipName.isEmpty()) throw new CircuitCompileException("Custom chip node " + node.id + " has no chip name");
             if (chipStack.contains(chipName)) throw new CircuitCompileException("Recursive custom chip reference: " + chipName);
-
             ChipDefinition definition = chips.find(chipName);
-            if (definition == null || definition.circuit == null) {
-                throw new CircuitCompileException("Missing custom chip: " + chipName);
-            }
+            if (definition == null || definition.circuit == null) throw new CircuitCompileException("Missing custom chip: " + chipName);
             definition.circuit.normalize();
-
             List<EditorNode> childInputs = definition.circuit.inputNodes();
             List<PortSpec> parentInputs = NodePorts.inputs(node, chips);
-            if (childInputs.size() != parentInputs.size()) {
-                throw new CircuitCompileException("Custom chip input metadata mismatch: " + chipName);
-            }
-
+            if (childInputs.size() != parentInputs.size()) throw new CircuitCompileException("Custom chip input metadata mismatch: " + chipName);
             Map<Integer, SignalBinding> overrides = new HashMap<>();
             for (int i = 0; i < childInputs.size(); i++) {
                 int inputPort = i;
                 overrides.put(childInputs.get(i).id, () -> resolveInput(node, inputPort));
             }
-
             Set<String> nestedStack = new HashSet<>(chipStack);
             nestedStack.add(chipName);
-            BuildContext child = new BuildContext(
-                    definition.circuit,
-                    chips,
-                    circuit,
-                    CompiledCircuit.childScopePath(path, node.id, chipName),
-                    Map.copyOf(overrides),
-                    rootInputs,
-                    Set.copyOf(nestedStack),
-                    scopedInputs,
-                    scopedOutputs
-            );
-
+            BuildContext child = new BuildContext(definition.circuit, chips, circuit,
+                    CompiledCircuit.childScopePath(path, node.id, chipName), Map.copyOf(overrides), rootInputs,
+                    Set.copyOf(nestedStack), scopedInputs, scopedOutputs);
             List<EditorNode> childOutputs = List.copyOf(definition.circuit.outputNodes());
             List<PortSpec> parentOutputs = NodePorts.outputs(node, chips);
-            if (childOutputs.size() != parentOutputs.size()) {
-                throw new CircuitCompileException("Custom chip output metadata mismatch: " + chipName);
-            }
-
+            if (childOutputs.size() != parentOutputs.size()) throw new CircuitCompileException("Custom chip output metadata mismatch: " + chipName);
             CustomInstance created = new CustomInstance(child, childOutputs);
             customInstances.put(node.id, created);
             return created;
         }
 
-        private Signal[] createSignals(String basePath, int width) {
-            return createSignals(basePath, width, LogicValue.UNKNOWN);
-        }
+        private Signal[] createSignals(String basePath, int width) { return createSignals(basePath, width, LogicValue.UNKNOWN); }
 
         private Signal[] createSignals(String basePath, int width, LogicValue initialValue) {
             Signal[] signals = new Signal[width];
-            for (int bit = 0; bit < width; bit++) {
-                signals[bit] = circuit.signal(basePath + "[" + bit + "]", initialValue);
-            }
+            for (int bit = 0; bit < width; bit++) signals[bit] = circuit.signal(basePath + "[" + bit + "]", initialValue);
             return signals;
         }
 
