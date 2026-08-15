@@ -2,6 +2,7 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.v2.EditorGrid;
 import com.foreverspark.logicsim.editor.model.ChipVisualSettings;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.NodeKind;
@@ -30,7 +31,7 @@ public abstract class CircuitCanvasCustomChipGeometryMixin {
     private void logic$compactCustomWidth(EditorNode node, CallbackInfoReturnable<Double> cir) {
         if (node.kind != NodeKind.CUSTOM_CHIP) return;
         ChipVisualSettings visual = chips.chipVisual(node.chipName);
-        cir.setReturnValue(logic$snapUp(Math.max(66.0, visual.width), 6.0));
+        cir.setReturnValue(EditorGrid.snapUp(Math.max(66.0, visual.width)));
     }
 
     @Inject(method = "nodeHeight", at = @At("HEAD"), cancellable = true)
@@ -40,10 +41,6 @@ public abstract class CircuitCanvasCustomChipGeometryMixin {
         int count = Math.max(safeInputs(node).size(), safeOutputs(node).size());
         double step = portStep(node);
         double required = count <= 1 ? 48.0 : 30.0 + (count - 1) * step;
-        cir.setReturnValue(logic$snapUp(Math.max(visual.minHeight, required), 6.0));
-    }
-
-    private static double logic$snapUp(double value, double grid) {
-        return Math.ceil(value / grid) * grid;
+        cir.setReturnValue(EditorGrid.snapUp(Math.max(visual.minHeight, required)));
     }
 }
