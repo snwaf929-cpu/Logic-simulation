@@ -8,6 +8,12 @@ public final class EditorNode {
     public NodeKind kind;
     public double x;
     public double y;
+    /**
+     * V2.1C presentation-only instance body size. 0 keeps the automatic geometry for backward compatibility.
+     * These fields never change signal width, port width, circuit semantics, or compiled logic.
+     */
+    public double editorBodyWidth = 0.0;
+    public double editorBodyHeight = 0.0;
     public int width = 1;
     /**
      * SPLITTER/MERGER lane width. Example: width=64, laneWidth=32 means two 32-bit lanes.
