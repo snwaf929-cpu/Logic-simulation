@@ -1,5 +1,6 @@
 package com.foreverspark.logicsim.client.render;
 
+import com.foreverspark.logicsim.block.CircuitWorkerPolicy;
 import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.editor.model.ChipDefinition;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
@@ -21,6 +22,7 @@ public final class DeferredColorRandomDisplaySelfTest {
 
     public static void main(String[] args) {
         verifyPackedUnsignedByteCompare();
+        verifyWorkerPolicy();
 
         CircuitDocument board = new CircuitDocument();
 
@@ -121,6 +123,11 @@ public final class DeferredColorRandomDisplaySelfTest {
         check("field-shift".equals(plan.boundaryPackMode()),
                 "three contiguous 16-bit buses must retain field-shift packing");
 
+        ParallelDeferredColorDisplayFastPath.CompileResult parallel = ParallelDeferredColorDisplayFastPath.compile(plan);
+        check(parallel.active(), "v10 parallel compiler rejected the proven v9 stress plan: " + parallel.reason());
+        check(parallel.plan().minimumCyclesPerWorker() == 8_192,
+                "v10 parallel plan must amortize synchronization over large cycle ranges");
+
         final int[] commands = {0};
         final boolean[] sawNonBinaryColor = {false};
         long emitted = plan.advance(100_000L, 20_000L, (values, count) -> {
@@ -145,14 +152,26 @@ public final class DeferredColorRandomDisplaySelfTest {
                 "10% RGB sampler must not run on every virtual clock cycle");
         check(sawNonBinaryColor[0], "10% RGB stress path must produce colors beyond pure black/white");
 
-        System.out.println("Deferred arbitrary-RGB DISPLAY hotloop-v5 self-test: PASS"
+        System.out.println("Deferred arbitrary-RGB DISPLAY hotloop-v5 + parallel-v10 compile self-test: PASS"
                 + " | emittedEdges=" + emitted
                 + " clockCycles=" + plan.lastClockCycles()
                 + " displayWrites=" + plan.lastDisplayWrites()
                 + " colorSamples=" + plan.lastColorSamples()
                 + " arbitraryColorLanes=" + plan.arbitraryColorLaneCount()
                 + " colorChunks=" + plan.arbitraryColorChunkCount()
-                + " boundaryPack=" + plan.boundaryPackMode());
+                + " boundaryPack=" + plan.boundaryPackMode()
+                + " parallelCompile=true");
+    }
+
+    private static void verifyWorkerPolicy() {
+        check(CircuitWorkerPolicy.systemMaximum(32) == 8, "32 logical CPUs must expose max 8 simulation workers");
+        check(CircuitWorkerPolicy.systemMaximum(24) == 6, "24 logical CPUs must expose max 6 simulation workers");
+        check(CircuitWorkerPolicy.systemMaximum(16) == 4, "16 logical CPUs must expose max 4 simulation workers");
+        check(CircuitWorkerPolicy.systemMaximum(8) == 2, "8 logical CPUs must expose max 2 simulation workers");
+        check(CircuitWorkerPolicy.systemMaximum(4) == 1, "4 logical CPUs must expose max 1 simulation worker");
+        check(CircuitWorkerPolicy.resolve(CircuitWorkerPolicy.AUTO, 8) == 8, "AUTO must resolve to the machine simulation cap");
+        check(CircuitWorkerPolicy.resolve(3, 8) == 3, "explicit worker request must be preserved inside the machine cap");
+        check(CircuitWorkerPolicy.resolve(20, 8) == 8, "explicit worker request must clamp to the machine cap");
     }
 
     private static void verifyPackedUnsignedByteCompare() {
