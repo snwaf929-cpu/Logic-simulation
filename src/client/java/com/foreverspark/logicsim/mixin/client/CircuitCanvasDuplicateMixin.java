@@ -202,6 +202,8 @@ public abstract class CircuitCanvasDuplicateMixin {
     private record NodeSnapshot(
             int originalId,
             NodeKind kind,
+            double editorBodyWidth,
+            double editorBodyHeight,
             int width,
             int laneWidth,
             String label,
@@ -226,7 +228,7 @@ public abstract class CircuitCanvasDuplicateMixin {
             List<BusSliceOutput> sliceCopy = new ArrayList<>();
             if (node.slices != null) for (BusSliceOutput slice : node.slices) if (slice != null) sliceCopy.add(slice.copy());
             return new NodeSnapshot(
-                    node.id, node.kind, node.width, node.laneWidth,
+                    node.id, node.kind, node.editorBodyWidth, node.editorBodyHeight, node.width, node.laneWidth,
                     node.label == null ? "" : node.label,
                     node.chipName == null ? "" : node.chipName,
                     node.constantValue, node.inputDefaultValue,
@@ -242,6 +244,8 @@ public abstract class CircuitCanvasDuplicateMixin {
         }
 
         void apply(EditorNode node) {
+            node.editorBodyWidth = editorBodyWidth;
+            node.editorBodyHeight = editorBodyHeight;
             node.width = width;
             node.laneWidth = laneWidth;
             node.label = label;
