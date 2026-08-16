@@ -24,6 +24,7 @@ public final class CircuitDocument {
 
     public EditorNode addNode(NodeKind kind, double x, double y) {
         EditorNode node = new EditorNode(nextNodeId++, kind, x, y);
+        if (kind == NodeKind.INPUT || kind == NodeKind.OUTPUT) node.chipPortOrder = nextChipPortOrder(kind);
         nodes.add(node);
         return node;
     }
@@ -175,5 +176,14 @@ public final class CircuitDocument {
                         .thenComparingInt(node -> node.id))
                 .toList();
         for (int index = 0; index < ordered.size(); index++) ordered.get(index).chipPortOrder = index;
+    }
+
+    /** New terminals receive a durable order immediately; only legacy deserialization uses -1 migration. */
+    private int nextChipPortOrder(NodeKind kind) {
+        int max = -1;
+        for (EditorNode node : nodes) {
+            if (node.kind == kind && node.chipPortOrder >= 0) max = Math.max(max, node.chipPortOrder);
+        }
+        return max + 1;
     }
 }
