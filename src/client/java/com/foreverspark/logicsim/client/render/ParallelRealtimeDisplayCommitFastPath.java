@@ -42,7 +42,8 @@ public final class ParallelRealtimeDisplayCommitFastPath {
         if (circuit == null || surface == null) throw new IllegalArgumentException("circuit and surface are required");
         if (ownerCount <= 0 || generationRanges <= 0) return 0;
 
-        FramebufferView view = framebufferView(surface);
+        char[] framebuffer = pixels(surface);
+        long[] tileRevisions = tileRevisions(surface);
         prepareCounters(nonZeroDeltas, writesPerOwner, ownerCount);
 
         int workers = CircuitSimulationWorker.runParallelRanges(
@@ -56,7 +57,7 @@ public final class ParallelRealtimeDisplayCommitFastPath {
                                 generationRanges,
                                 writesByGenerationAndOwner,
                                 countsByGenerationAndOwner,
-                                view.pixels,
+                                framebuffer,
                                 nonZeroDeltas,
                                 writesPerOwner
                         );
@@ -64,7 +65,7 @@ public final class ParallelRealtimeDisplayCommitFastPath {
                 }
         );
 
-        finish(surface, view, nonZeroDeltas, writesPerOwner, ownerCount);
+        finish(surface, tileRevisions, nonZeroDeltas, writesPerOwner, ownerCount);
         return workers;
     }
 
@@ -78,7 +79,8 @@ public final class ParallelRealtimeDisplayCommitFastPath {
             int[] nonZeroDeltas,
             long[] writesPerOwner
     ) {
-        FramebufferView view = framebufferView(surface);
+        char[] framebuffer = pixels(surface);
+        long[] tileRevisions = tileRevisions(surface);
         prepareCounters(nonZeroDeltas, writesPerOwner, ownerCount);
         for (int owner = 0; owner < ownerCount; owner++) {
             commitOwner(
@@ -86,12 +88,12 @@ public final class ParallelRealtimeDisplayCommitFastPath {
                     generationRanges,
                     writesByGenerationAndOwner,
                     countsByGenerationAndOwner,
-                    view.pixels,
+                    framebuffer,
                     nonZeroDeltas,
                     writesPerOwner
             );
         }
-        return finish(surface, view, nonZeroDeltas, writesPerOwner, ownerCount);
+        return finish(surface, tileRevisions, nonZeroDeltas, writesPerOwner, ownerCount);
     }
 
     private static void prepareCounters(int[] nonZeroDeltas, long[] writesPerOwner, int ownerCount) {
@@ -142,7 +144,7 @@ public final class ParallelRealtimeDisplayCommitFastPath {
     /** One small serial publication after all framebuffer owners have joined. */
     private static long finish(
             RealtimeDisplaySurface.Surface surface,
-            FramebufferView view,
+            long[] tileRevisions,
             int[] nonZeroDeltas,
             long[] writesPerOwner,
             int ownerCount
@@ -163,7 +165,7 @@ public final class ParallelRealtimeDisplayCommitFastPath {
             SURFACE_REVISION.setLong(surface, nextRevision);
             // Full-2K random batches touch the wall densely. Over-invalidating metadata is cheaper than per-pixel bits
             // and does not change framebuffer or simulator semantics.
-            Arrays.fill(view.tileRevisions, nextRevision);
+            Arrays.fill(tileRevisions, nextRevision);
             SURFACE_PUBLISHED_REVISION.setLong(surface, nextRevision);
         } catch (IllegalAccessException exception) {
             throw new IllegalStateException("Could not publish parallel realtime DISPLAY framebuffer", exception);
@@ -171,14 +173,19 @@ public final class ParallelRealtimeDisplayCommitFastPath {
         return totalWrites;
     }
 
-    private static FramebufferView framebufferView(RealtimeDisplaySurface.Surface surface) {
+    private static char[] pixels(RealtimeDisplaySurface.Surface surface) {
         try {
-            return new FramebufferView(
-                    (char[]) SURFACE_PIXELS.get(surface),
-                    (long[]) SURFACE_TILE_REVISIONS.get(surface)
-            );
+            return (char[]) SURFACE_PIXELS.get(surface);
         } catch (IllegalAccessException exception) {
-            throw new IllegalStateException("Could not access realtime DISPLAY framebuffer", exception);
+            throw new IllegalStateException("Could not access realtime DISPLAY pixels", exception);
+        }
+    }
+
+    private static long[] tileRevisions(RealtimeDisplaySurface.Surface surface) {
+        try {
+            return (long[]) SURFACE_TILE_REVISIONS.get(surface);
+        } catch (IllegalAccessException exception) {
+            throw new IllegalStateException("Could not access realtime DISPLAY tile revisions", exception);
         }
     }
 
@@ -195,6 +202,4 @@ public final class ParallelRealtimeDisplayCommitFastPath {
             throw new ExceptionInInitializerError(exception);
         }
     }
-
-    private record FramebufferView(char[] pixels, long[] tileRevisions) {}
 }
