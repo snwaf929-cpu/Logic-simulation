@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinGeometry;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -18,10 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.List;
 
-/**
- * RANDOM is a flat one-row source. Its electrical terminals deliberately use the exact same
- * square pin geometry as every other 1-bit port in the circuit editor; only the body is wider.
- */
+/** RANDOM source renderer with screen-space invariant text and ordinary shared pin geometry. */
 @Mixin(value = CircuitCanvasWidget.class, priority = 2500)
 public abstract class CircuitCanvasRandomHorizontalMixin {
     @Unique private static final int BODY = 0xF0191F26;
@@ -51,8 +49,6 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
         int w = Math.max(34, (int)Math.round(nodeWidth(node) * zoom));
         int h = Math.max(8, (int)Math.round(nodeHeight(node) * zoom));
 
-        // Body uses the editor's normal dark component styling. The gold strip keeps RANDOM
-        // visually grouped with other source/infrastructure components without copying the mockup.
         graphics.fill(x, y, x + w, y + h, BODY);
         int strip = Math.max(1, Math.min(h / 3, (int)Math.round(2.0 * zoom)));
         graphics.fill(x, y, x + w, y + strip, TOP);
@@ -63,24 +59,19 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
         String state = logic$isHigh(values) ? "1" : "0";
         int stateColor = logic$stateColor(values);
 
-        int stateWidth = Math.max(10, (int)Math.round(12.0 * zoom));
-        logic$fitText(graphics, label,
-                x + Math.max(3, (int)Math.round(4.0 * zoom)),
-                Math.max(x + 8, x + w - stateWidth), y, y + h, TEXT);
-        logic$fitText(graphics, state,
-                Math.max(x + 4, x + w - stateWidth), x + w - 2, y, y + h, stateColor);
+        int stateWidth = 12;
+        logic$fitText(graphics, label, x + 4, Math.max(x + 8, x + w - stateWidth), y, y + h, TEXT);
+        logic$fitText(graphics, state, Math.max(x + 4, x + w - stateWidth), x + w - 2, y, y + h, stateColor);
 
-        // These are not decorative side blocks. They are the same bit pins used by NAND,
-        // merger/splitter and ordinary I/O ports, centered on the one-row RANDOM body.
         List<PortSpec> inputs = safeInputs(node);
         if (!inputs.isEmpty()) {
             logic$standardPin(graphics, node.x, node.y + nodeHeight(node) * 0.5,
-                    portDisplayColor(node, 0, inputs.getFirst(), true), validTarget(true));
+                    inputs.getFirst().width(), portDisplayColor(node, 0, inputs.getFirst(), true));
         }
         List<PortSpec> outputs = safeOutputs(node);
         if (!outputs.isEmpty()) {
             logic$standardPin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * 0.5,
-                    portDisplayColor(node, 0, outputs.getFirst(), false), validTarget(false));
+                    outputs.getFirst().width(), portDisplayColor(node, 0, outputs.getFirst(), false));
         }
 
         ci.cancel();
@@ -124,35 +115,35 @@ public abstract class CircuitCanvasRandomHorizontalMixin {
         return null;
     }
 
-    /** Mirrors CircuitCanvasWidget.drawPort's ordinary non-compact 1-bit pin size. */
     @Unique private void logic$standardPin(GuiGraphicsExtractor graphics, double worldX, double worldY,
-                                           int color, boolean wiringTarget) {
+                                           int width, int color) {
         double snappedX = Math.round(worldX / 6.0) * 6.0;
         double snappedY = Math.round(worldY / 6.0) * 6.0;
-        int x = screenX(snappedX);
-        int y = screenY(snappedY);
-        double base = wiringTarget ? 4.2 : 3.5;
-        int r = Math.max(2, (int)Math.round(base * zoom));
-        graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
-        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
+        EditorPinGeometry.draw(graphics, screenX(snappedX), screenY(snappedY), width, color);
     }
 
+    /** Fixed-size font; narrow regions truncate rather than scale. */
     @Unique private void logic$fitText(GuiGraphicsExtractor graphics, String text,
                                        int left, int right, int top, int bottom, int color) {
         Font font = Minecraft.getInstance().font;
-        int rawW = Math.max(1, font.width(text));
-        int regionW = Math.max(3, right - left);
-        int regionH = Math.max(5, bottom - top);
-        float scale = (float)Math.max(0.28, Math.min(1.0,
-                Math.min((regionW - 2.0) / rawW, (regionH - 1.0) / 9.0)));
-        float cx = (left + right) * 0.5f;
-        float cy = (top + bottom) * 0.5f;
-        graphics.pose().pushMatrix();
-        graphics.pose().scale(scale);
-        int tx = Math.round(cx / scale - rawW / 2f);
-        int ty = Math.round(cy / scale - 4.5f);
-        graphics.text(font, text, tx, ty, color, false);
-        graphics.pose().popMatrix();
+        int regionW = Math.max(0, right - left - 2);
+        int regionH = Math.max(0, bottom - top);
+        if (regionW <= 0 || regionH <= 2) return;
+        String shown = logic$fit(font, text, regionW);
+        if (shown.isEmpty()) return;
+        int tx = left + 1 + Math.max(0, (regionW - font.width(shown)) / 2);
+        int ty = top + Math.max(0, (regionH - 8) / 2);
+        graphics.text(font, shown, tx, ty, color, false);
+    }
+
+    @Unique private static String logic$fit(Font font, String text, int maxWidth) {
+        if (text == null || maxWidth <= 0) return "";
+        if (font.width(text) <= maxWidth) return text;
+        String suffix = "…";
+        if (font.width(suffix) > maxWidth) return "";
+        int end = text.length();
+        while (end > 0 && font.width(text.substring(0, end) + suffix) > maxWidth) end--;
+        return text.substring(0, end) + suffix;
     }
 
     @Unique private static boolean logic$isRandom(EditorNode node) {
