@@ -61,6 +61,7 @@
     "CircuitBlockDeferredColorRandomDisplayMixin",
     "DeferredCommonSamplerXorShiftMixin",
     "DeferredColorSamplerSingleWordMixin",
+    "CircuitBlockParallelIndependentRandomDisplayMixin",
     "CircuitBlockIndependentRandomDisplayMixin",
     "CircuitBlockStaticResetRandomDisplayMixin",
     "CircuitBlockRandomDisplayNetworkMixin",
