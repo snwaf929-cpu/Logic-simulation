@@ -1,0 +1,28 @@
+/time set minecraft:day
+/tick rate 2000
+/tick freeze
+/tick step
+/tick unfreeze
+/tick rate 20
+/tick freeze
+/tick rate 20
+/tick rate 10000
+/tick unfreeze
+/tick rate 20
+/fill -20 82 2 -20 73 17 logicsimulation:display_block
+/fill -20 82 2 -20 73 17 logicsimulation:display_block[facing= east
+/fill -20 82 2 -20 73 17 logicsimulation:display_block[facing= east]
+/fill -20 82 2 -20 88 2 logicsimulation:display_block[facing=east]
+/fill -20 82 2 -20 88 17 logicsimulation:display_block[facing= east]
+/fill -20 104 -14 -20 73 17 logicsimulation:display_block[facing=east]
+/tick rate 100
+/tick rate 100000
+/tick rate 10000
+/tick rate 20
+/gamemode creative
+/gamemode spectator
+/fill ~-40 ~-3 ~-40 ~40 ~1 ~40 air replace minecraft:short_grass
+/fill ~-40 ~-3 ~-40 ~40 ~1 ~39 air replace minecraft:short_grass
+/fill ~-40 ~-3 ~-40 ~40 ~1 ~39 air replace minecraft:tall_grass
+/fill ~-40 ~-3 ~-40 ~40 ~1 ~39 air replace bush
+/fill 158 105 312 127 74 312 logicsimulation:display_block[facing=south]

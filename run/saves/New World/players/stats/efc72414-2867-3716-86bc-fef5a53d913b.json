@@ -1,0 +1,22 @@
+{
+  "stats": {
+    "minecraft:used": {
+      "logicsimulation:bus_cable_64": 3,
+      "minecraft:lever": 1,
+      "minecraft:redstone": 1
+    },
+    "minecraft:custom": {
+      "minecraft:time_since_rest": 2151,
+      "minecraft:walk_one_cm": 1350,
+      "minecraft:total_world_time": 3627,
+      "minecraft:leave_game": 1,
+      "minecraft:fly_one_cm": 5280,
+      "minecraft:crouch_one_cm": 39,
+      "minecraft:sneak_time": 268,
+      "minecraft:play_time": 2151,
+      "minecraft:jump": 7,
+      "minecraft:time_since_death": 2151
+    }
+  },
+  "DataVersion": 4903
+}

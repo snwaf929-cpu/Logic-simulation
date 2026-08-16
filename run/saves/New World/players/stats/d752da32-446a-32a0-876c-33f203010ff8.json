@@ -1,0 +1,21 @@
+{
+  "stats": {
+    "minecraft:used": {
+      "logicsimulation:display_block": 24
+    },
+    "minecraft:custom": {
+      "minecraft:sprint_one_cm": 184,
+      "minecraft:time_since_rest": 6520,
+      "minecraft:walk_one_cm": 20544,
+      "minecraft:total_world_time": 22481,
+      "minecraft:leave_game": 1,
+      "minecraft:fly_one_cm": 16445,
+      "minecraft:crouch_one_cm": 245,
+      "minecraft:sneak_time": 874,
+      "minecraft:play_time": 6520,
+      "minecraft:jump": 10,
+      "minecraft:time_since_death": 6520
+    }
+  },
+  "DataVersion": 4903
+}

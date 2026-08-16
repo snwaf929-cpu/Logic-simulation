@@ -1,0 +1,24 @@
+{
+  "stats": {
+    "minecraft:killed": {
+      "minecraft:creeper": 2
+    },
+    "minecraft:custom": {
+      "minecraft:sprint_one_cm": 4181,
+      "minecraft:time_since_rest": 1689,
+      "minecraft:walk_one_cm": 3812,
+      "minecraft:total_world_time": 2858,
+      "minecraft:leave_game": 1,
+      "minecraft:fly_one_cm": 5424,
+      "minecraft:mob_kills": 2,
+      "minecraft:play_time": 1689,
+      "minecraft:damage_dealt": 420,
+      "minecraft:jump": 36,
+      "minecraft:time_since_death": 1689
+    },
+    "minecraft:used": {
+      "minecraft:creeper_spawn_egg": 2
+    }
+  },
+  "DataVersion": 4903
+}

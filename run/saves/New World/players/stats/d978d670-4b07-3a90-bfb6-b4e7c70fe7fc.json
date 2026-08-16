@@ -1,0 +1,23 @@
+{
+  "stats": {
+    "minecraft:used": {
+      "logicsimulation:bus_cable_64": 1,
+      "minecraft:creeper_spawn_egg": 1
+    },
+    "minecraft:custom": {
+      "minecraft:sprint_one_cm": 2344,
+      "minecraft:time_since_rest": 1534,
+      "minecraft:walk_one_cm": 5568,
+      "minecraft:total_world_time": 3148,
+      "minecraft:leave_game": 1,
+      "minecraft:fly_one_cm": 10318,
+      "minecraft:crouch_one_cm": 141,
+      "minecraft:sneak_time": 47,
+      "minecraft:play_time": 1534,
+      "minecraft:damage_dealt": 143,
+      "minecraft:jump": 15,
+      "minecraft:time_since_death": 1534
+    }
+  },
+  "DataVersion": 4903
+}

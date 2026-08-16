@@ -1,0 +1,23 @@
+{
+  "stats": {
+    "minecraft:custom": {
+      "minecraft:sprint_one_cm": 483,
+      "minecraft:time_since_rest": 3271,
+      "minecraft:walk_one_cm": 9098,
+      "minecraft:total_world_time": 9606,
+      "minecraft:fly_one_cm": 3396,
+      "minecraft:crouch_one_cm": 1007,
+      "minecraft:sneak_time": 810,
+      "minecraft:play_time": 3271,
+      "minecraft:jump": 16,
+      "minecraft:time_since_death": 3271
+    },
+    "minecraft:used": {
+      "logicsimulation:bus_cable_64": 1,
+      "logicsimulation:display_block": 4,
+      "logicsimulation:io_connector": 3,
+      "logicsimulation:circuit_block": 2
+    }
+  },
+  "DataVersion": 4903
+}
