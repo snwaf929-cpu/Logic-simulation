@@ -63,17 +63,13 @@ public abstract class CircuitCanvasTerminalRenderMixin {
 
         int indicator = Math.max(4, Math.min(h - 2, (int)Math.round(7.0 * zoom)));
         int inset = Math.max(1, (int)Math.round(3.0 * zoom));
-        int sx = node.kind == NodeKind.INPUT
-                ? x + inset
-                : x + w - inset - indicator;
+        int sx = node.kind == NodeKind.INPUT ? x + inset : x + w - inset - indicator;
         int sy = y + (h - indicator) / 2;
         int stateColor = logic$valueColor(values);
 
         graphics.fill(sx, sy, sx + indicator, sy + indicator, logic$darken(stateColor, 0.42));
         graphics.outline(sx, sy, indicator, indicator, stateColor);
-        if (logic$isHigh(values) && indicator >= 5) {
-            graphics.fill(sx + 2, sy + 2, sx + indicator - 1, sy + indicator - 1, stateColor);
-        }
+        if (logic$isHigh(values) && indicator >= 5) graphics.fill(sx + 2, sy + 2, sx + indicator - 1, sy + indicator - 1, stateColor);
 
         logic$drawPorts(graphics, node);
         ci.cancel();
@@ -94,7 +90,6 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         logic$drawPorts(graphics, node);
     }
 
-    /** RANDOM is a one-bit source, so it uses the same 18x12 footprint as INPUT/OUTPUT. */
     @Unique private void logic$random(GuiGraphicsExtractor graphics, EditorNode node) {
         int x = screenX(node.x), y = screenY(node.y);
         int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
@@ -106,29 +101,26 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         graphics.fill(x, y, x + w, y + h, 0xF010151B);
         graphics.outline(x, y, w, h, border);
 
-        if (zoom >= 0.72 && w >= 12 && h >= 9) {
+        if (w >= 12 && h >= 9) {
             String mark = "R";
             graphics.text(font(), mark, x + Math.max(2, (w - font().width(mark)) / 2 - 2), y + Math.max(1, (h - 8) / 2), accent, false);
         } else {
-            int core = Math.max(2, Math.min(h - 2, (int)Math.round(4 * zoom)));
+            int core = Math.max(2, Math.min(h - 2, 4));
             int cx = x + Math.max(1, (w - core) / 2 - 1);
             int cy = y + Math.max(1, (h - core) / 2);
             graphics.fill(cx, cy, cx + core, cy + core, accent);
         }
 
-        int lamp = Math.max(3, Math.min(h - 2, (int)Math.round(5 * zoom)));
-        int lx = x + w - lamp - Math.max(1, (int)Math.round(2 * zoom));
+        int lamp = Math.max(3, Math.min(h - 2, 5));
+        int lx = x + w - lamp - 2;
         int ly = y + (h - lamp) / 2;
         graphics.fill(lx, ly, lx + lamp, ly + lamp, logic$darken(stateColor, 0.42));
         graphics.outline(lx, ly, lamp, lamp, stateColor);
-        if (logic$isHigh(valueForNode(node)) && lamp >= 4) {
-            graphics.fill(lx + 1, ly + 1, lx + lamp, ly + lamp, stateColor);
-        }
+        if (logic$isHigh(valueForNode(node)) && lamp >= 4) graphics.fill(lx + 1, ly + 1, lx + lamp, ly + lamp, stateColor);
 
         logic$drawPorts(graphics, node);
     }
 
-    /** The compact body cannot carry a percentage label, so expose the full RANDOM state on hover. */
     @Inject(method = "drawPortHoverTooltip", at = @At("HEAD"), cancellable = true)
     private void logic$randomTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY, CallbackInfo ci) {
         EditorNode random = null;
@@ -138,10 +130,7 @@ public abstract class CircuitCanvasTerminalRenderMixin {
             int x = screenX(node.x), y = screenY(node.y);
             int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
             int h = Math.max(6, (int)Math.round(nodeHeight(node) * zoom));
-            if (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h) {
-                random = node;
-                break;
-            }
+            if (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h) { random = node; break; }
         }
         if (random == null) return;
 
@@ -167,28 +156,33 @@ public abstract class CircuitCanvasTerminalRenderMixin {
         List<PortSpec> inputs = safeInputs(node);
         List<PortSpec> outputs = safeOutputs(node);
         for (int i = 0; i < inputs.size(); i++) {
-            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5, inputs.get(i).width(),
-                    portDisplayColor(node, i, inputs.get(i), true));
+            logic$pin(graphics, node.x, node.y + nodeHeight(node) * .5, inputs.get(i).width(), portDisplayColor(node, i, inputs.get(i), true));
         }
         for (int i = 0; i < outputs.size(); i++) {
-            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5, outputs.get(i).width(),
-                    portDisplayColor(node, i, outputs.get(i), false));
+            logic$pin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * .5, outputs.get(i).width(), portDisplayColor(node, i, outputs.get(i), false));
         }
     }
 
+    /** Fixed screen-space font size; only the string is shortened when the body is narrow. */
     @Unique private void logic$smallText(GuiGraphicsExtractor graphics, String text, int cx, int y, int maxW, int color) {
-        int raw = Math.max(1, font().width(text));
-        float scale = (float)Math.max(.28, Math.min(1.0, Math.min(zoom, maxW / (double)raw)));
-        graphics.pose().pushMatrix();
-        graphics.pose().scale(scale);
-        graphics.text(font(), text, Math.round(cx / scale - raw / 2f), Math.round(y / scale), color, false);
-        graphics.pose().popMatrix();
+        String shown = logic$fit(text, Math.max(1, maxW));
+        if (shown.isEmpty()) return;
+        int raw = font().width(shown);
+        graphics.text(font(), shown, cx - raw / 2, y, color, false);
+    }
+
+    @Unique private String logic$fit(String text, int maxW) {
+        if (text == null || maxW <= 0) return "";
+        if (font().width(text) <= maxW) return text;
+        String suffix = "…";
+        if (font().width(suffix) > maxW) return "";
+        int end = text.length();
+        while (end > 0 && font().width(text.substring(0, end) + suffix) > maxW) end--;
+        return text.substring(0, end) + suffix;
     }
 
     @Unique private void logic$pin(GuiGraphicsExtractor graphics, double wx, double wy, int width, int color) {
-        int x = screenX(EditorGrid.snap(wx));
-        int y = screenY(EditorGrid.snap(wy));
-        EditorPinGeometry.draw(graphics, x, y, width, color);
+        EditorPinGeometry.draw(graphics, screenX(EditorGrid.snap(wx)), screenY(EditorGrid.snap(wy)), width, color);
     }
 
     @Unique private static boolean logic$isHigh(LogicValue[] values) {
@@ -199,9 +193,7 @@ public abstract class CircuitCanvasTerminalRenderMixin {
 
     @Unique private static int logic$valueColor(LogicValue[] values) {
         if (values == null || values.length == 0) return 0xFF777777;
-        boolean unknown = false;
-        boolean high = false;
-        boolean low = false;
+        boolean unknown = false, high = false, low = false;
         for (LogicValue value : values) {
             if (value == LogicValue.UNKNOWN) unknown = true;
             if (value == LogicValue.HIGH) high = true;
