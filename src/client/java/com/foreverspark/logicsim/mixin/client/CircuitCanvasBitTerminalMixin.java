@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.v2.EditorPinGeometry;
 import com.foreverspark.logicsim.core.LogicValue;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
 import com.foreverspark.logicsim.editor.model.EditorNode;
@@ -18,8 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.List;
 
 /**
- * I/O nodes are board terminals, not logic chips. They intentionally occupy exactly one 12-unit bit row so
- * sixteen of them can line up cleanly with a 16-bit merger/splitter. Names move to hover tooltips.
+ * I/O nodes are board terminals, not logic chips. Their pins use the exact shared screen-space pin geometry.
  */
 @Mixin(value = CircuitCanvasWidget.class, priority = 900)
 public abstract class CircuitCanvasBitTerminalMixin {
@@ -59,22 +59,19 @@ public abstract class CircuitCanvasBitTerminalMixin {
         int sx = node.kind == NodeKind.INPUT ? x + inset : x + w - inset - square;
         int sy = y + (h - square) / 2;
 
-        // INPUT square = clickable saved switch. OUTPUT square = live read-only state lamp.
         graphics.fill(sx, sy, sx + square, sy + square, logic$darken(valueColor, 0.40));
         graphics.outline(sx, sy, square, square, valueColor);
-        if (logic$isHigh(values) && square >= 5) {
-            graphics.fill(sx + 2, sy + 2, sx + square - 1, sy + square - 1, valueColor);
-        }
+        if (logic$isHigh(values) && square >= 5) graphics.fill(sx + 2, sy + 2, sx + square - 1, sy + square - 1, valueColor);
 
         List<PortSpec> inputs = safeInputs(node);
         for (int i = 0; i < inputs.size(); i++) {
-            logic$drawPin(graphics, node.x, node.y + nodeHeight(node) * 0.5,
-                    portDisplayColor(node, i, inputs.get(i), true), validTarget(true));
+            logic$drawPin(graphics, node.x, node.y + nodeHeight(node) * 0.5, inputs.get(i).width(),
+                    portDisplayColor(node, i, inputs.get(i), true));
         }
         List<PortSpec> outputs = safeOutputs(node);
         for (int i = 0; i < outputs.size(); i++) {
-            logic$drawPin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * 0.5,
-                    portDisplayColor(node, i, outputs.get(i), false), validTarget(false));
+            logic$drawPin(graphics, node.x + nodeWidth(node), node.y + nodeHeight(node) * 0.5, outputs.get(i).width(),
+                    portDisplayColor(node, i, outputs.get(i), false));
         }
         ci.cancel();
     }
@@ -112,25 +109,21 @@ public abstract class CircuitCanvasBitTerminalMixin {
             int y = screenY(node.y);
             int w = Math.max(7, (int)Math.round(nodeWidth(node) * zoom));
             int h = Math.max(6, (int)Math.round(nodeHeight(node) * zoom));
-            if (mouseX >= x - 2 && mouseX <= x + w + 2 && mouseY >= y - 2 && mouseY <= y + h + 2) {
-                return new TerminalHit(node);
-            }
+            if (mouseX >= x - 2 && mouseX <= x + w + 2 && mouseY >= y - 2 && mouseY <= y + h + 2) return new TerminalHit(node);
 
+            List<PortSpec> specs = node.kind == NodeKind.INPUT ? safeOutputs(node) : safeInputs(node);
+            int width = specs.isEmpty() ? 1 : specs.getFirst().width();
             double portX = node.kind == NodeKind.INPUT ? node.x + nodeWidth(node) : node.x;
             double portY = node.y + nodeHeight(node) * 0.5;
             double dx = mouseX - screenX(logic$snap(portX));
             double dy = mouseY - screenY(logic$snap(portY));
-            if (dx * dx + dy * dy <= 81.0) return new TerminalHit(node);
+            if (EditorPinGeometry.contains(dx, dy, width)) return new TerminalHit(node);
         }
         return null;
     }
 
-    @Unique private void logic$drawPin(GuiGraphicsExtractor graphics, double wx, double wy, int color, boolean target) {
-        int x = screenX(logic$snap(wx));
-        int y = screenY(logic$snap(wy));
-        int r = Math.max(1, (int)Math.round((target ? 4.0 : 3.0) * zoom));
-        graphics.fill(x - r, y - r, x + r + 1, y + r + 1, color);
-        graphics.outline(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3, 0xFF090B0D);
+    @Unique private void logic$drawPin(GuiGraphicsExtractor graphics, double wx, double wy, int width, int color) {
+        EditorPinGeometry.draw(graphics, screenX(logic$snap(wx)), screenY(logic$snap(wy)), width, color);
     }
 
     @Unique private static boolean logic$isTerminal(EditorNode node) {
