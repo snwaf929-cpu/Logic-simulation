@@ -20,11 +20,11 @@ public final class InfrastructureSelfTest {
         testGroupedSplitMerge64();
         testSixteenIndividualBitsIntoBusAndBack();
         testFloatingInputsDefaultLow();
-        testClockNormalizationKeeps100MHz();
+        testClockNormalizationKeeps500MHz();
         testStructuralBusLoopRejectedWithoutStackOverflow();
         testNandFeedbackStillCompiles();
         testNestedCustomChipNandFeedbackCompiles();
-        System.out.println("CPU editor infrastructure + grouped bus lanes + floating-low + 100 MHz CLOCK normalization + cycle safety self-test: PASS");
+        System.out.println("CPU editor infrastructure + grouped bus lanes + floating-low + 500 MHz CLOCK normalization + cycle safety self-test: PASS");
     }
 
     private static void testBusPassThrough() {
@@ -177,17 +177,17 @@ public final class InfrastructureSelfTest {
         check(compiled.inputUnsigned(floatingBusOutput.id, 0) == 0L, "unconnected 16-bit input defaults to 0x0000");
     }
 
-    private static void testClockNormalizationKeeps100MHz() {
+    private static void testClockNormalizationKeeps500MHz() {
         CircuitDocument document = new CircuitDocument();
         EditorNode clock = document.addNode(NodeKind.CONSTANT, 0, 0);
         clock.clockSource = true;
-        clock.clockFrequencyHz = 100_000_000L;
+        clock.clockFrequencyHz = 500_000_000L;
         document.normalize();
-        check(clock.clockFrequencyHz == 100_000_000L, "100 MHz CLOCK must survive document normalization");
+        check(clock.clockFrequencyHz == 500_000_000L, "500 MHz CLOCK must survive document normalization");
 
-        clock.clockFrequencyHz = 100_000_001L;
+        clock.clockFrequencyHz = 500_000_001L;
         document.normalize();
-        check(clock.clockFrequencyHz == 100_000_000L, "CLOCK normalization must cap above-range values at 100 MHz");
+        check(clock.clockFrequencyHz == 500_000_000L, "CLOCK normalization must cap above-range values at 500 MHz");
     }
 
     private static void testStructuralBusLoopRejectedWithoutStackOverflow() {
