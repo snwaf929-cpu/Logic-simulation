@@ -1,6 +1,7 @@
 package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.client.chip.ClientChipLibrary;
+import com.foreverspark.logicsim.client.device.BuiltinDevices;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
 import com.foreverspark.logicsim.client.screen.ClockPlacementState;
 import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
@@ -36,7 +37,6 @@ public abstract class ComponentLibraryRecentsV21EMixin {
     @Shadow private String selectedChip;
     @Shadow private String selectedFolder;
     @Shadow private String selectedBoard;
-    @Shadow private boolean visibleChip(String chipName) { throw new AssertionError(); }
 
     @Unique private final List<LogicRecentChipRow> logic$recentChipRows = new ArrayList<>();
     @Unique private final List<LogicRecentComponentRow> logic$recentComponentRows = new ArrayList<>();
@@ -120,7 +120,7 @@ public abstract class ComponentLibraryRecentsV21EMixin {
 
         for (LogicRecentChipRow row : logic$recentChipRows) {
             if (event.y() < row.y() || event.y() >= row.y() + 18) continue;
-            if (!library.exists(row.name()) || !visibleChip(row.name())) return;
+            if (!library.exists(row.name()) || !logic$visibleChip(row.name())) return;
             selectedChip = row.name();
             selectedFolder = null;
             selectedBoard = null;
@@ -139,7 +139,7 @@ public abstract class ComponentLibraryRecentsV21EMixin {
     @Unique private List<String> logic$recentChips() {
         ArrayList<String> result = new ArrayList<>();
         for (String chip : preferences.recentChipNames()) {
-            if (chip != null && !chip.isBlank() && library.exists(chip) && visibleChip(chip)) result.add(chip);
+            if (chip != null && !chip.isBlank() && library.exists(chip) && logic$visibleChip(chip)) result.add(chip);
         }
         return List.copyOf(result);
     }
@@ -201,6 +201,10 @@ public abstract class ComponentLibraryRecentsV21EMixin {
             case NET_LABEL -> "NET_LABEL";
             default -> kind.name();
         };
+    }
+
+    @Unique private static boolean logic$visibleChip(String chipName) {
+        return !BuiltinDevices.isRemovedFake(chipName) && !BuiltinDevices.isDisplay(chipName);
     }
 
     @Unique private static boolean logic$validComponentId(String id) {
