@@ -8,8 +8,8 @@ import com.foreverspark.logicsim.client.screen.CircuitEditorScreen;
 import com.foreverspark.logicsim.client.screen.EditorClockRuntime;
 import com.foreverspark.logicsim.client.screen.WorldBoardContextAccess;
 import com.foreverspark.logicsim.editor.model.CircuitDocument;
+import com.foreverspark.logicsim.editor.model.CircuitHardwareSignature;
 import com.foreverspark.logicsim.editor.model.EditorNode;
-import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 import com.foreverspark.logicsim.platform.ClientEditorBridge;
 import net.minecraft.core.BlockPos;
@@ -21,10 +21,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 @Mixin(value = CircuitEditorScreen.class, priority = 1400)
@@ -78,7 +75,7 @@ public abstract class CircuitEditorBoardPersistenceMixin implements WorldBoardCo
             setStatus("BOARD restored with its previous live inspector state. Closing it will NOT restart unchanged hardware.");
         } else {
             setStatus("BOARD restored: " + restored.nodes.size() + " components, " + restored.wires.size()
-                    + " wires. Closing only reinstalls the runtime if hardware was actually edited.");
+                    + " wires. Closing only reinstalls the runtime if electrical hardware or device binding actually changed.");
         }
     }
 
@@ -94,9 +91,7 @@ public abstract class CircuitEditorBoardPersistenceMixin implements WorldBoardCo
         logic$worldBoardRoot = root;
         // Keep the signature of the hardware currently running in the block. The newly loaded board will therefore
         // be recognized as a hardware change and installed when the editor closes or explicitly checkpoints it.
-        if (logic$openedHardwareSignature == null && root != null) {
-            logic$openedHardwareSignature = "";
-        }
+        if (logic$openedHardwareSignature == null) logic$openedHardwareSignature = "";
     }
 
     @Inject(method = "applySave", at = @At("RETURN"))
@@ -132,7 +127,7 @@ public abstract class CircuitEditorBoardPersistenceMixin implements WorldBoardCo
         try {
             ClientProgramUploader.uploadBoard(logic$worldBoardPos, logic$worldBoardRoot, library);
             logic$openedHardwareSignature = currentSignature;
-            if (showStatus) setStatus("BOARD hardware changed and was reinstalled into this Circuit Block.");
+            if (showStatus) setStatus("BOARD electrical hardware/device binding changed and was reinstalled into this Circuit Block.");
         } catch (java.io.IOException | RuntimeException error) {
             String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             if (showStatus) setStatus("BOARD saved, but cannot run yet: " + message);
@@ -186,40 +181,7 @@ public abstract class CircuitEditorBoardPersistenceMixin implements WorldBoardCo
 
     @Unique
     private static String logic$hardwareSignature(CircuitDocument board) {
-        if (board == null) return "";
-        board.normalize();
-        StringBuilder out = new StringBuilder(Math.max(64, board.nodes.size() * 52 + board.wires.size() * 20));
-
-        List<EditorNode> nodes = new ArrayList<>(board.nodes);
-        nodes.sort(Comparator.comparingInt(node -> node.id));
-        for (EditorNode node : nodes) {
-            out.append('N').append(node.id).append('|').append(node.kind).append('|')
-                    .append(node.width).append('|').append(node.laneWidth).append('|');
-            logic$appendString(out, node.label);
-            logic$appendString(out, node.chipName);
-            out.append(node.constantValue).append('|')
-                    .append(node.inputDefaultValue).append('|')
-                    .append(node.clockSource).append('|').append(node.clockFrequencyHz).append('|')
-                    .append(node.randomSource).append('|').append(node.randomChancePercent).append(';');
-        }
-
-        List<WireConnection> wires = new ArrayList<>(board.wires);
-        wires.sort(Comparator
-                .comparingInt(WireConnection::sourceNodeId)
-                .thenComparingInt(WireConnection::sourcePort)
-                .thenComparingInt(WireConnection::targetNodeId)
-                .thenComparingInt(WireConnection::targetPort));
-        for (WireConnection wire : wires) {
-            out.append('W').append(wire.sourceNodeId()).append(':').append(wire.sourcePort())
-                    .append('>').append(wire.targetNodeId()).append(':').append(wire.targetPort()).append(';');
-        }
-        return out.toString();
-    }
-
-    @Unique
-    private static void logic$appendString(StringBuilder out, String value) {
-        String safe = value == null ? "" : value;
-        out.append(safe.length()).append(':').append(safe).append('|');
+        return CircuitHardwareSignature.of(board);
     }
 
     @Unique
