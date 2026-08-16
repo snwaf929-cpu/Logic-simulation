@@ -8,7 +8,7 @@ import java.util.List;
 
 public final class CircuitDocument {
     /** Optional Gson fields keep older BOARD/CHIP documents readable without a gated decoder. */
-    public int formatVersion = 2;
+    public int formatVersion = 3;
     public int nextNodeId = 1;
     /** Stable monotonically increasing id for cloned BOARD template groups. */
     public int nextTemplateInstanceId = 1;
@@ -58,12 +58,18 @@ public final class CircuitDocument {
         return count;
     }
 
+    /** Stable public custom-CHIP input order, independent of node creation order after migration. */
     public List<EditorNode> inputNodes() {
-        return nodes.stream().filter(node -> node.kind == NodeKind.INPUT).sorted(Comparator.comparingInt(node -> node.id)).toList();
+        return nodes.stream().filter(node -> node.kind == NodeKind.INPUT)
+                .sorted(Comparator.comparingInt((EditorNode node) -> node.chipPortOrder).thenComparingInt(node -> node.id))
+                .toList();
     }
 
+    /** Stable public custom-CHIP output order, independent of node creation order after migration. */
     public List<EditorNode> outputNodes() {
-        return nodes.stream().filter(node -> node.kind == NodeKind.OUTPUT).sorted(Comparator.comparingInt(node -> node.id)).toList();
+        return nodes.stream().filter(node -> node.kind == NodeKind.OUTPUT)
+                .sorted(Comparator.comparingInt((EditorNode node) -> node.chipPortOrder).thenComparingInt(node -> node.id))
+                .toList();
     }
 
     public List<EditorNode> externalDeviceNodes() {
@@ -148,6 +154,26 @@ public final class CircuitDocument {
                 node.constantValue = 0L;
                 node.clockFrequencyHz = Math.max(1L, Math.min(500_000_000L, node.clockFrequencyHz));
             }
+
+            if (node.kind != NodeKind.INPUT && node.kind != NodeKind.OUTPUT) node.chipPortOrder = -1;
         }
+
+        normalizeChipPortOrder(NodeKind.INPUT);
+        normalizeChipPortOrder(NodeKind.OUTPUT);
+        formatVersion = Math.max(formatVersion, 3);
+    }
+
+    /**
+     * Legacy files had no explicit order. Unassigned ports sort after authored orders by id, then the full list is
+     * compacted to 0..N-1 so future edits are stable and duplicate order values cannot corrupt a CHIP interface.
+     */
+    private void normalizeChipPortOrder(NodeKind kind) {
+        List<EditorNode> ordered = nodes.stream()
+                .filter(node -> node.kind == kind)
+                .sorted(Comparator
+                        .comparingInt((EditorNode node) -> node.chipPortOrder < 0 ? Integer.MAX_VALUE : node.chipPortOrder)
+                        .thenComparingInt(node -> node.id))
+                .toList();
+        for (int index = 0; index < ordered.size(); index++) ordered.get(index).chipPortOrder = index;
     }
 }
