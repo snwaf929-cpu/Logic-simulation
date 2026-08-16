@@ -48,6 +48,10 @@ public final class LibraryPersistenceSelfTest {
         ChipDefinition firstDefinition = first.load("ALU_PART");
         check(firstDefinition.color == chipColor, "chip file stores selected color");
         check(firstDefinition.folder.equals("Arithmetic"), "chip file stores folder membership");
+        check(firstDefinition.inputPorts().size() == 2
+                        && firstDefinition.inputPorts().get(0).name().equals("B")
+                        && firstDefinition.inputPorts().get(1).name().equals("A"),
+                "explicit reusable-CHIP input order is written to the chip file");
 
         // The critical regression: construct a completely fresh library instance. The old bug
         // normalized before loading the chip cache and recreated this entry as gray/OTHER.
@@ -55,6 +59,11 @@ public final class LibraryPersistenceSelfTest {
         check(reopened.chipColor("ALU_PART") == chipColor, "chip color survives fresh reopen");
         check(reopened.folderOf("ALU_PART").equals("Arithmetic"), "folder membership survives fresh reopen");
         check(reopened.folderColor("Arithmetic") == folderColor, "folder color survives fresh reopen");
+        ChipDefinition reopenedDefinition = reopened.load("ALU_PART");
+        check(reopenedDefinition.inputPorts().size() == 2
+                        && reopenedDefinition.inputPorts().get(0).name().equals("B")
+                        && reopenedDefinition.inputPorts().get(1).name().equals("A"),
+                "explicit reusable-CHIP input order survives a fresh library reopen");
 
         reopened.createFolder("Logic", 0xFF5A7FC2);
         reopened.moveChipToFolder("ALU_PART", "Logic");
@@ -66,6 +75,9 @@ public final class LibraryPersistenceSelfTest {
         ChipDefinition movedDefinition = moved.load("ALU_PART");
         check(movedDefinition.color == 0xFF000000, "updated color synced into chip file");
         check(movedDefinition.folder.equals("Logic"), "updated folder synced into chip file");
+        check(movedDefinition.inputPorts().get(0).name().equals("B")
+                        && movedDefinition.inputPorts().get(1).name().equals("A"),
+                "library metadata edits do not disturb reusable-CHIP port order");
 
         // A missing library index should still recover chip color + folder membership from the
         // redundant metadata in the .logicchip.json. Folder color falls back to the default.
@@ -129,9 +141,15 @@ public final class LibraryPersistenceSelfTest {
 
     private static CircuitDocument sampleCircuit() {
         CircuitDocument document = new CircuitDocument();
-        EditorNode input = document.addNode(NodeKind.INPUT, 0, 0);
-        input.label = "A";
-        input.width = 16;
+        EditorNode inputA = document.addNode(NodeKind.INPUT, 0, 0);
+        inputA.label = "A";
+        inputA.width = 16;
+        EditorNode inputB = document.addNode(NodeKind.INPUT, 0, 30);
+        inputB.label = "B";
+        inputB.width = 8;
+        int swap = inputA.chipPortOrder;
+        inputA.chipPortOrder = inputB.chipPortOrder;
+        inputB.chipPortOrder = swap;
         EditorNode output = document.addNode(NodeKind.OUTPUT, 140, 0);
         output.label = "RESULT";
         output.width = 16;
