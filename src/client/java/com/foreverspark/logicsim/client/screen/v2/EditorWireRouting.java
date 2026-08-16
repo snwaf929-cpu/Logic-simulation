@@ -17,6 +17,11 @@ public final class EditorWireRouting {
     private static final double EPSILON = 0.001;
     /** UI-thread residuals let one-pixel mouse events accumulate instead of disappearing into grid rounding. */
     private static final WeakHashMap<WireConnection, SegmentDragResidual> SEGMENT_DRAG_RESIDUALS = new WeakHashMap<>();
+    /**
+     * Old route-point indexes become stale when a hidden diagonal L is expanded. Keep the one-time legacy mapping so
+     * a drag that began on the pre-normalized route continues to manipulate the same visible corner after materialize.
+     */
+    private static final WeakHashMap<WireConnection, int[]> LEGACY_ROUTE_ALIASES = new WeakHashMap<>();
 
     private EditorWireRouting() {}
 
@@ -38,6 +43,7 @@ public final class EditorWireRouting {
     public static void materialize(WireConnection wire, Point start, Point end) {
         if (wire == null) return;
         if (wire.routePoints().isEmpty()) {
+            LEGACY_ROUTE_ALIASES.remove(wire);
             wire.setRoutePoints(autoRoute(start, end));
             return;
         }
@@ -115,6 +121,7 @@ public final class EditorWireRouting {
         if (wire == null) return false;
         materialize(wire, start, end);
         List<RoutePoint> route = wire.routePoints();
+        routeIndex = resolveLegacyRoutePointIndex(wire, routeIndex, worldX, worldY);
         if (routeIndex < 0 || routeIndex >= route.size()) return false;
 
         List<Point> full = fullPoints(wire, start, end, false);
@@ -167,7 +174,9 @@ public final class EditorWireRouting {
     /** Only interior segments can move directly; endpoint segments are converted to a small draggable span first. */
     public static int prepareSegmentDrag(WireConnection wire, Point start, Point end, int segmentIndex, double worldX, double worldY) {
         if (wire == null) return -1;
+        boolean legacy = hasLegacyDiagonal(wire, start, end);
         materialize(wire, start, end);
+        if (legacy) segmentIndex = nearestCanonicalSegmentIndex(wire, start, end, worldX, worldY, segmentIndex);
         int routeCount = wire.routePoints().size();
         if (segmentIndex >= 1 && segmentIndex < routeCount) {
             beginSegmentDrag(wire, segmentIndex);
@@ -258,7 +267,9 @@ public final class EditorWireRouting {
     /** Double-click creates two persistent handles on that segment; the new middle span can then be dragged. */
     public static int addSegmentHandles(WireConnection wire, Point start, Point end, int segmentIndex, double worldX, double worldY) {
         if (wire == null) return -1;
+        boolean legacy = hasLegacyDiagonal(wire, start, end);
         materialize(wire, start, end);
+        if (legacy) segmentIndex = nearestCanonicalSegmentIndex(wire, start, end, worldX, worldY, segmentIndex);
         List<Point> full = fullPoints(wire, start, end, false);
         if (segmentIndex < 0 || segmentIndex + 1 >= full.size()) return -1;
         Point[] anchors = anchorsAround(full.get(segmentIndex), full.get(segmentIndex + 1), worldX, worldY);
@@ -300,6 +311,7 @@ public final class EditorWireRouting {
         for (int via : wire.viaRouteIndices()) shiftedVias.add(via >= insertion ? via + count : via);
         wire.routePoints().addAll(insertion, points);
         wire.setViaRouteIndices(shiftedVias);
+        LEGACY_ROUTE_ALIASES.remove(wire);
     }
 
     /** Explicitly expand only legacy hidden diagonal legs. Already-canonical routes are untouched. */
@@ -342,6 +354,62 @@ public final class EditorWireRouting {
         }
         wire.setRoutePoints(canonical);
         wire.setViaRouteIndices(remappedVias);
+        LEGACY_ROUTE_ALIASES.put(wire, oldRouteToNewRoute);
+    }
+
+    private static int resolveLegacyRoutePointIndex(WireConnection wire, int requested, double worldX, double worldY) {
+        List<RoutePoint> route = wire.routePoints();
+        int direct = requested >= 0 && requested < route.size() ? requested : -1;
+        int[] aliases = LEGACY_ROUTE_ALIASES.get(wire);
+        int mapped = aliases != null && requested >= 0 && requested < aliases.length ? aliases[requested] : -1;
+        if (mapped < 0 || mapped >= route.size()) return direct;
+        if (direct < 0 || direct == mapped) return mapped;
+        double x = EditorGrid.snap(worldX), y = EditorGrid.snap(worldY);
+        double directDistance = distanceSquared(route.get(direct).x(), route.get(direct).y(), x, y);
+        double mappedDistance = distanceSquared(route.get(mapped).x(), route.get(mapped).y(), x, y);
+        return mappedDistance < directDistance ? mapped : direct;
+    }
+
+    /** A legacy diagonal renders as two visible legs with one old direct index; pick the canonical leg under the cursor. */
+    private static int nearestCanonicalSegmentIndex(WireConnection wire, Point start, Point end, double worldX, double worldY, int fallback) {
+        List<Point> full = fullPoints(wire, start, end, false);
+        int best = -1;
+        double bestDistance = Double.POSITIVE_INFINITY;
+        for (int index = 0; index + 1 < full.size(); index++) {
+            Point a = full.get(index), b = full.get(index + 1);
+            if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) continue;
+            double distance = distanceToSegment(worldX, worldY, a, b);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = index;
+            }
+        }
+        return best >= 0 ? best : fallback;
+    }
+
+    private static boolean hasLegacyDiagonal(WireConnection wire, Point start, Point end) {
+        if (wire == null || wire.routePoints().isEmpty()) return false;
+        List<Point> full = fullPoints(wire, start, end, false);
+        for (int index = 0; index + 1 < full.size(); index++) {
+            Point a = full.get(index), b = full.get(index + 1);
+            if (!aligned(a.x, b.x) && !aligned(a.y, b.y)) return true;
+        }
+        return false;
+    }
+
+    private static double distanceToSegment(double x, double y, Point a, Point b) {
+        double dx = b.x - a.x;
+        double dy = b.y - a.y;
+        double length2 = dx * dx + dy * dy;
+        if (length2 <= EPSILON) return Math.hypot(x - a.x, y - a.y);
+        double t = ((x - a.x) * dx + (y - a.y) * dy) / length2;
+        t = clamp(t, 0.0, 1.0);
+        return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+    }
+
+    private static double distanceSquared(double ax, double ay, double bx, double by) {
+        double dx = ax - bx, dy = ay - by;
+        return dx * dx + dy * dy;
     }
 
     private static void beginSegmentDrag(WireConnection wire, int segmentIndex) {
