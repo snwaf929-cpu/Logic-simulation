@@ -48,6 +48,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
     @Unique private volatile int logic$deviceIndex = -1;
     @Unique private String logic$lastSignature = "";
     @Unique private String logic$lastParallelSignature = "";
+    @Unique private int logic$lastParallelExecutionWorkers = -1;
 
     @Inject(method = "refreshExternalDeviceTargets", at = @At("TAIL"))
     private void logic$refreshDeferredColorRandomDisplay(CallbackInfo ci) {
@@ -161,10 +162,13 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             int requested = CircuitSimulationWorker.configuredWorkerBudget(self);
             if (parallelPlan != null && workers > 1) {
                 logic$logParallel(self, requested, workers, true, parallelPlan);
-                return parallelPlan.advance(self, elapsedNanos, bulkBudget, surface::recordBatch);
+                long emitted = parallelPlan.advance(self, elapsedNanos, bulkBudget, surface::recordBatch);
+                logic$logParallelExecution(self, parallelPlan);
+                return emitted;
             }
 
             logic$logParallel(self, requested, workers, false, parallelPlan);
+            logic$lastParallelExecutionWorkers = -1;
             return plan.advance(elapsedNanos, bulkBudget, surface::recordBatch);
         }
 
@@ -177,6 +181,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
         logic$clear(false);
         logic$lastSignature = "";
         logic$lastParallelSignature = "";
+        logic$lastParallelExecutionWorkers = -1;
     }
 
     @Unique
@@ -187,6 +192,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
         logic$surface = null;
         logic$resetTracker = null;
         logic$deviceIndex = -1;
+        logic$lastParallelExecutionWorkers = -1;
         if (synchronizeFallback && old != null) old.synchronizeFallback();
     }
 
@@ -284,6 +290,21 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
                     plan == null ? "parallel-plan-unavailable" : "worker-budget-one"
             );
         }
+    }
+
+    @Unique
+    private void logic$logParallelExecution(CircuitBlockEntity self, ParallelDeferredColorDisplayFastPath.Plan plan) {
+        int activeWorkers = plan.lastParallelWorkers();
+        if (activeWorkers == logic$lastParallelExecutionWorkers) return;
+        logic$lastParallelExecutionWorkers = activeWorkers;
+        LogicSimulationMod.LOGGER.info(
+                "[CLOCK PARALLEL EXEC] circuit={} mode=counter-ranged-rgb-v10 activeWorkers={} clockCycles={} displayWrites={} configuredCeiling={}",
+                self.getBlockPos(),
+                activeWorkers,
+                plan.lastClockCycles(),
+                plan.lastDisplayWrites(),
+                CircuitSimulationWorker.resolvedWorkerBudget(self)
+        );
     }
 
     @Unique
