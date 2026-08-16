@@ -153,6 +153,14 @@ tasks.register('displayBatch32SelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.client.render.RealtimeDisplayBatch32SelfTest'
 }
 
+tasks.register('parallelDisplayCommitSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates deterministic v11 partitioned multi-worker realtime framebuffer commits.'
+    dependsOn clientClasses
+    classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.client.render.ParallelRealtimeDisplayCommitSelfTest'
+}
+
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
     dependsOn tasks.named('displayPipelineSelfTest')
@@ -164,6 +172,7 @@ tasks.named('check') {
     dependsOn tasks.named('deferredColorRandomDisplaySelfTest')
     dependsOn tasks.named('singleWordRgbMaskSelfTest')
     dependsOn tasks.named('displayBatch32SelfTest')
+    dependsOn tasks.named('parallelDisplayCommitSelfTest')
 }
 
 tasks.register('clientSelfTest', JavaExec) {
