@@ -6,7 +6,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 
 public final class ClockPlacementState {
     public static final long DEFAULT_FREQUENCY_HZ = 1_000_000L;
-    public static final long MAX_FREQUENCY_HZ = 100_000_000L;
+    public static final long MAX_FREQUENCY_HZ = 500_000_000L;
     private static boolean armed;
     private static long frequencyHz = DEFAULT_FREQUENCY_HZ;
     private static CircuitCanvasWidget canvas;
