@@ -53,6 +53,11 @@ public final class CircuitExchange {
         return EXPORT_DIR;
     }
 
+    public static Path suggestedExportPath(String chipName) {
+        String name = chipName == null || chipName.isBlank() ? "circuit" : chipName.trim();
+        return EXPORT_DIR.resolve(safeFileName(name) + ".logicbundle.json");
+    }
+
     public static void ensureDirectories() throws IOException {
         Files.createDirectories(IMPORT_DIR);
         Files.createDirectories(EXPORT_DIR);
@@ -60,22 +65,30 @@ public final class CircuitExchange {
         if (!Files.exists(README)) {
             Files.writeString(README,
                     "Logic Simulation circuit exchange\n\n"
-                            + "IMPORT:\n"
+                            + "NATIVE FILE PICKER:\n"
+                            + "  IMPORT FILE opens a normal system Open dialog. EXPORT SELECTED opens\n"
+                            + "  a normal system Save dialog. The folders below remain as a fallback.\n\n"
+                            + "IMPORT FALLBACK:\n"
                             + "  Put .logicbundle.json or .logicchip.json files in the import folder,\n"
-                            + "  then click IMPORT FILES in the circuit editor. Successfully imported\n"
-                            + "  files are moved to processed.\n\n"
-                            + "EXPORT:\n"
-                            + "  Select a saved chip in MY CHIPS and click EXPORT SELECTED. The editor\n"
-                            + "  writes a readable .logicbundle.json containing that chip and all custom\n"
-                            + "  chip dependencies into the export folder.\n\n"
+                            + "  then use the inbox fallback. Successfully imported inbox files are\n"
+                            + "  moved to processed.\n\n"
+                            + "EXPORT FALLBACK:\n"
+                            + "  Fixed-folder export writes a readable .logicbundle.json containing the\n"
+                            + "  selected chip and all custom chip dependencies into the export folder.\n\n"
                             + "The JSON is intentionally portable and readable by humans and tools.\n",
                     StandardCharsets.UTF_8);
         }
     }
 
     public static ExportResult exportChip(ClientChipLibrary library, String chipName) throws IOException {
+        return exportChipTo(library, chipName, suggestedExportPath(chipName));
+    }
+
+    /** Write a selected CHIP bundle to an explicit path chosen by the user/system file picker. */
+    public static ExportResult exportChipTo(ClientChipLibrary library, String chipName, Path requestedTarget) throws IOException {
         if (library == null) throw new IllegalArgumentException("Chip library is required");
         if (chipName == null || chipName.isBlank()) throw new IllegalArgumentException("Select a saved chip first");
+        if (requestedTarget == null) throw new IllegalArgumentException("Export path is required");
         ensureDirectories();
 
         LinkedHashMap<String, ChipDefinition> collected = new LinkedHashMap<>();
@@ -89,13 +102,49 @@ public final class CircuitExchange {
         bundle.root = root.name;
         bundle.chips = new ArrayList<>(collected.values());
 
-        Path target = EXPORT_DIR.resolve(safeFileName(root.name) + ".logicbundle.json");
+        Path target = normalizeExportTarget(requestedTarget);
+        Path parent = target.toAbsolutePath().getParent();
+        if (parent != null) Files.createDirectories(parent);
         try (Writer writer = Files.newBufferedWriter(target, StandardCharsets.UTF_8)) {
             GSON.toJson(bundle, writer);
         }
         return new ExportResult(target, bundle.root, bundle.chips.size());
     }
 
+    /** Import one or more explicit files selected by a native Open dialog. Selected originals are never moved. */
+    public static ImportResult importFiles(ClientChipLibrary library, List<Path> selectedFiles) throws IOException {
+        if (library == null) throw new IllegalArgumentException("Chip library is required");
+        ensureDirectories();
+
+        int filesImported = 0;
+        int chipsImported = 0;
+        List<String> roots = new ArrayList<>();
+        List<String> failures = new ArrayList<>();
+        List<Path> files = selectedFiles == null ? List.of() : selectedFiles;
+
+        for (Path file : files) {
+            if (file == null) continue;
+            if (!Files.isRegularFile(file) || !isImportFile(file)) {
+                failures.add(file.getFileName() + ": expected .logicbundle.json or .logicchip.json");
+                continue;
+            }
+            try {
+                ParsedImport parsed = readImport(file);
+                int written = install(library, parsed.chips());
+                filesImported++;
+                chipsImported += written;
+                if (parsed.root() != null && !parsed.root().isBlank()) roots.add(parsed.root());
+            } catch (Exception exception) {
+                failures.add(file.getFileName() + ": " + message(exception));
+            }
+        }
+        library.reload();
+        Path source = files.stream().filter(path -> path != null).findFirst()
+                .map(Path::toAbsolutePath).map(Path::getParent).orElse(IMPORT_DIR);
+        return new ImportResult(filesImported, chipsImported, List.copyOf(roots), List.copyOf(failures), source);
+    }
+
+    /** Legacy/fallback inbox import retained for headless systems and direct folder workflows. */
     public static ImportResult importInbox(ClientChipLibrary library) throws IOException {
         if (library == null) throw new IllegalArgumentException("Chip library is required");
         ensureDirectories();
@@ -224,6 +273,15 @@ public final class CircuitExchange {
     private static boolean isImportFile(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         return name.endsWith(".logicbundle.json") || name.endsWith(".logicchip.json");
+    }
+
+    private static Path normalizeExportTarget(Path requestedTarget) {
+        Path absolute = requestedTarget.toAbsolutePath().normalize();
+        String name = absolute.getFileName() == null ? "circuit" : absolute.getFileName().toString();
+        if (name.toLowerCase(Locale.ROOT).endsWith(".logicbundle.json")) return absolute;
+        Path parent = absolute.getParent();
+        String normalizedName = name + ".logicbundle.json";
+        return parent == null ? Path.of(normalizedName) : parent.resolve(normalizedName);
     }
 
     private static void moveProcessed(Path source) throws IOException {
