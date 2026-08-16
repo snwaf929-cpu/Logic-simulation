@@ -25,7 +25,8 @@ public final class DisplayRendererSelfTest {
         double z = DisplayBlockEntityRenderer.screenFaceZ();
         check(z > 0.0 && z < 0.75 / 16.0, "texture plane sits just outside the local NORTH model screen face");
         checkNative64Batch();
-        System.out.println("Display renderer face/full-surface/GPU-texture/native64-batch self-test: PASS");
+        checkFusedPixelMath();
+        System.out.println("Display renderer face/full-surface/GPU-texture/native64-batch/fused-RGB self-test: PASS");
     }
 
     private static void checkNative64Batch() {
@@ -106,6 +107,26 @@ public final class DisplayRendererSelfTest {
         check(state.changed(), "small native-64 batch must change framebuffer");
         check(!state.wholeWallInvalidated(), "small native-64 batch should keep precise dirty metadata");
         check(!state.variableColorStreaming(), "small native-64 batch must not select streaming mode");
+    }
+
+    private static void checkFusedPixelMath() {
+        char[] pixel = new char[1];
+        int nonZero = 0;
+
+        nonZero = FusedNative64PixelMath.write(pixel, 0, 0xF800, nonZero);
+        check(pixel[0] == (char) 0xF800, "fused writer stores exact RGB565 red");
+        check(nonZero == 1, "fused writer increments zero->nonzero exactly");
+
+        nonZero = FusedNative64PixelMath.write(pixel, 0, 0x07E0, nonZero);
+        check(pixel[0] == (char) 0x07E0, "fused writer replaces nonzero RGB565 exactly");
+        check(nonZero == 1, "fused writer preserves count on nonzero->nonzero");
+
+        nonZero = FusedNative64PixelMath.write(pixel, 0, 0, nonZero);
+        check(pixel[0] == 0, "fused writer stores black exactly");
+        check(nonZero == 0, "fused writer decrements nonzero->zero exactly");
+
+        nonZero = FusedNative64PixelMath.write(pixel, 0, 0, nonZero);
+        check(nonZero == 0, "fused writer preserves count on zero->zero");
     }
 
     private static void checkFaces(Direction expectedFacing, float expectedYnYaw, float expectedSignedDegrees) {
