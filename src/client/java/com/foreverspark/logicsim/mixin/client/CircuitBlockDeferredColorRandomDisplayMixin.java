@@ -2,10 +2,12 @@ package com.foreverspark.logicsim.mixin.client;
 
 import com.foreverspark.logicsim.LogicSimulationMod;
 import com.foreverspark.logicsim.block.CircuitBlockEntity;
+import com.foreverspark.logicsim.block.CircuitSimulationWorker;
 import com.foreverspark.logicsim.block.DisplayBlock;
 import com.foreverspark.logicsim.block.DisplayBlockEntity;
 import com.foreverspark.logicsim.client.render.DeferredColorRandomDisplayFastPath;
 import com.foreverspark.logicsim.client.render.DisplayResetEdgeTracker;
+import com.foreverspark.logicsim.client.render.ParallelDeferredColorDisplayFastPath;
 import com.foreverspark.logicsim.client.render.RandomDisplayNetworkResetCompat;
 import com.foreverspark.logicsim.client.render.RealtimeDisplaySurface;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceDescriptor;
@@ -40,10 +42,12 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
     @Unique private static final Method logic$configureRealtimeWallMethod = logic$findConfigureRealtimeWallMethod();
 
     @Unique private volatile DeferredColorRandomDisplayFastPath.Plan logic$plan;
+    @Unique private volatile ParallelDeferredColorDisplayFastPath.Plan logic$parallelPlan;
     @Unique private volatile RealtimeDisplaySurface.Surface logic$surface;
     @Unique private volatile DisplayResetEdgeTracker logic$resetTracker;
     @Unique private volatile int logic$deviceIndex = -1;
     @Unique private String logic$lastSignature = "";
+    @Unique private String logic$lastParallelSignature = "";
 
     @Inject(method = "refreshExternalDeviceTargets", at = @At("TAIL"))
     private void logic$refreshDeferredColorRandomDisplay(CallbackInfo ci) {
@@ -79,7 +83,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
                     && existing.matches(current, index, surface.logicalWidth(), surface.logicalHeight())) {
                 logic$surface = surface;
                 logic$deviceIndex = index;
-                logic$log(self, logic$activeSignature(index, existing, existingTracker, surface));
+                logic$log(self, logic$activeSignature(self, index, existing, existingTracker, surface));
                 return;
             }
 
@@ -102,7 +106,15 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             logic$surface = surface;
             logic$deviceIndex = index;
             logic$resetTracker = new DisplayResetEdgeTracker(current, resetSignalId);
-            logic$log(self, logic$activeSignature(index, result.plan(), logic$resetTracker, surface));
+            ParallelDeferredColorDisplayFastPath.CompileResult parallel = ParallelDeferredColorDisplayFastPath.compile(result.plan());
+            logic$parallelPlan = parallel.plan();
+            if (!parallel.active()) {
+                LogicSimulationMod.LOGGER.info(
+                        "[CLOCK PARALLEL] circuit={} active=false reason={} fallback=pipelined-rgb-hotloop-v9",
+                        self.getBlockPos(), parallel.reason()
+                );
+            }
+            logic$log(self, logic$activeSignature(self, index, result.plan(), logic$resetTracker, surface));
             return;
         }
 
@@ -124,7 +136,9 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             Runnable afterSettledEdge,
             Operation<Long> original
     ) {
+        CircuitBlockEntity self = (CircuitBlockEntity)(Object)this;
         DeferredColorRandomDisplayFastPath.Plan plan = logic$plan;
+        ParallelDeferredColorDisplayFastPath.Plan parallelPlan = logic$parallelPlan;
         RealtimeDisplaySurface.Surface surface = logic$surface;
         DisplayResetEdgeTracker tracker = logic$resetTracker;
         int deviceIndex = logic$deviceIndex;
@@ -142,6 +156,15 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             if (edgeBudget >= LOGIC_GENERIC_EDGE_CHUNK) {
                 bulkBudget = Math.min(LOGIC_RGB_EDGE_CHUNK, edgeBudget << 6);
             }
+
+            int workers = CircuitSimulationWorker.resolvedWorkerBudget(self);
+            int requested = CircuitSimulationWorker.configuredWorkerBudget(self);
+            if (parallelPlan != null && workers > 1) {
+                logic$logParallel(self, requested, workers, true, parallelPlan);
+                return parallelPlan.advance(self, elapsedNanos, bulkBudget, surface::recordBatch);
+            }
+
+            logic$logParallel(self, requested, workers, false, parallelPlan);
             return plan.advance(elapsedNanos, bulkBudget, surface::recordBatch);
         }
 
@@ -153,12 +176,14 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
     private void logic$removeDeferredColorRandomDisplay(CallbackInfo ci) {
         logic$clear(false);
         logic$lastSignature = "";
+        logic$lastParallelSignature = "";
     }
 
     @Unique
     private void logic$clear(boolean synchronizeFallback) {
         DeferredColorRandomDisplayFastPath.Plan old = logic$plan;
         logic$plan = null;
+        logic$parallelPlan = null;
         logic$surface = null;
         logic$resetTracker = null;
         logic$deviceIndex = -1;
@@ -167,6 +192,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
 
     @Unique
     private static String logic$activeSignature(
+            CircuitBlockEntity self,
             int deviceIndex,
             DeferredColorRandomDisplayFastPath.Plan plan,
             DisplayResetEdgeTracker tracker,
@@ -182,7 +208,8 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
                 + ":external=" + plan.externalTriggerGroupCount()
                 + ":prefilter=" + plan.coordinatePrefilterLaneCount()
                 + ":pack=" + plan.boundaryPackMode()
-                + ":reset=" + tracker.signalId();
+                + ":reset=" + tracker.signalId()
+                + ":workers=" + CircuitSimulationWorker.resolvedWorkerBudget(self);
     }
 
     @Unique
@@ -195,7 +222,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             RealtimeDisplaySurface.Surface surface = logic$surface;
             DisplayResetEdgeTracker tracker = logic$resetTracker;
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BULK DEVICE RGB] circuit={} active=true resetSignalId={} deviceIndex={} randomLanes={} clockRandomLanes={} hotNonColorLanes={} deferredColorLanes={} arbitraryColorLanes={} arbitraryColorChunks={} externalTriggerGroups={} mode=pipelined-rgb-hotloop-v9 maxEdgeChunk={} logical={}x{} backing={}x{} coordinateRejectLanes={} boundaryPack={} batchPublication=true scratchPipeline=true",
+                    "[CLOCK BULK DEVICE RGB] circuit={} active=true resetSignalId={} deviceIndex={} randomLanes={} clockRandomLanes={} hotNonColorLanes={} deferredColorLanes={} arbitraryColorLanes={} arbitraryColorChunks={} externalTriggerGroups={} mode=pipelined-rgb-hotloop-v9 maxEdgeChunk={} logical={}x{} backing={}x{} coordinateRejectLanes={} boundaryPack={} batchPublication=true scratchPipeline=true configuredWorkers={} resolvedWorkers={}",
                     self.getBlockPos(),
                     tracker == null ? -1 : tracker.signalId(),
                     logic$deviceIndex,
@@ -212,13 +239,49 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
                     surface == null ? 0 : surface.backingWidth(),
                     surface == null ? 0 : surface.backingHeight(),
                     plan == null ? 0 : plan.coordinatePrefilterLaneCount(),
-                    plan == null ? "none" : plan.boundaryPackMode()
+                    plan == null ? "none" : plan.boundaryPackMode(),
+                    CircuitSimulationWorker.configuredWorkerBudget(self),
+                    CircuitSimulationWorker.resolvedWorkerBudget(self)
             );
         } else {
             String reason = signature.startsWith("inactive:") ? signature.substring("inactive:".length()) : signature;
             LogicSimulationMod.LOGGER.info(
                     "[CLOCK BULK DEVICE RGB] circuit={} active=false reason={}",
                     self.getBlockPos(), reason
+            );
+        }
+    }
+
+    @Unique
+    private void logic$logParallel(
+            CircuitBlockEntity self,
+            int requested,
+            int resolved,
+            boolean active,
+            ParallelDeferredColorDisplayFastPath.Plan plan
+    ) {
+        String signature = active
+                ? "active:" + requested + ":" + resolved
+                : "inactive:" + requested + ":" + resolved + ":" + (plan == null ? "compile-unavailable" : "single-worker");
+        if (signature.equals(logic$lastParallelSignature)) return;
+        logic$lastParallelSignature = signature;
+
+        if (active) {
+            LogicSimulationMod.LOGGER.info(
+                    "[CLOCK PARALLEL] circuit={} active=true mode=counter-ranged-rgb-v10 configuredWorkers={} resolvedWorkers={} globalWorkers={} minCyclesPerWorker={} deterministicCommit=single-barrier sharedPool=true",
+                    self.getBlockPos(),
+                    requested,
+                    resolved,
+                    CircuitSimulationWorker.workerCount(),
+                    plan.minimumCyclesPerWorker()
+            );
+        } else {
+            LogicSimulationMod.LOGGER.info(
+                    "[CLOCK PARALLEL] circuit={} active=false configuredWorkers={} resolvedWorkers={} reason={} fallback=pipelined-rgb-hotloop-v9",
+                    self.getBlockPos(),
+                    requested,
+                    resolved,
+                    plan == null ? "parallel-plan-unavailable" : "worker-budget-one"
             );
         }
     }
