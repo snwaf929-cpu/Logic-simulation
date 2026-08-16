@@ -93,6 +93,8 @@ public final class CircuitDocument {
         for (EditorNode node : nodes) {
             if (node.kind == null) node.kind = NodeKind.NAND;
             node.width = Math.max(1, Math.min(64, node.width));
+            node.editorBodyWidth = normalizeEditorBodyDimension(node.editorBodyWidth);
+            node.editorBodyHeight = normalizeEditorBodyDimension(node.editorBodyHeight);
             if (node.label == null) node.label = "";
             if (node.chipName == null) node.chipName = "";
             if (node.interfaceId == null) node.interfaceId = "";
@@ -162,6 +164,12 @@ public final class CircuitDocument {
         normalizeChipPortOrder(NodeKind.INPUT);
         normalizeChipPortOrder(NodeKind.OUTPUT);
         formatVersion = Math.max(formatVersion, 3);
+    }
+
+    private static double normalizeEditorBodyDimension(double value) {
+        if (!Double.isFinite(value) || value <= 0.0) return 0.0;
+        // Corrupt/imported layout metadata must never create effectively infinite canvas geometry.
+        return Math.min(4_096.0, value);
     }
 
     /**
