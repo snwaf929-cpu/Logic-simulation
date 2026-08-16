@@ -12,20 +12,25 @@ import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.RoutePoint;
 import com.foreverspark.logicsim.editor.model.WireLayer;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 
 /** Consolidated regression for the final editor/persistence cleanup pass. */
 public final class EditorCompletionSelfTest {
     private EditorCompletionSelfTest() {}
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         chipPortOrderMigratesAndPersists();
         snapshotPreservesRuntimeMetadata();
         editorBodySizeIsCadOnlyAndSnapshotSafe();
+        pinHitboxMatchesVisibleLod();
+        recentItemsPersistNewestFirst();
         wireHashRemainsStableDuringCadEdits();
         hardwareSignatureIgnoresCadOnlyChanges();
         hardwareSignatureTracksElectricalChanges();
-        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved bodyResize=cad-only wireKeys=stable cadRestart=false electricalRestart=true");
+        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved bodyResize=cad-only pinHitbox=exact recents=persistent wireKeys=stable cadRestart=false electricalRestart=true");
     }
 
     private static void chipPortOrderMigratesAndPersists() {
@@ -39,7 +44,6 @@ public final class EditorCompletionSelfTest {
         check(outX.chipPortOrder == 0 && outY.chipPortOrder == 1,
                 "new OUTPUT terminals receive durable order immediately");
 
-        // Simulate a V2 file where the field did not exist. V3 normalization must recover the exact old node-id order.
         inA.chipPortOrder = -1;
         inB.chipPortOrder = -1;
         outX.chipPortOrder = -1;
@@ -105,6 +109,52 @@ public final class EditorCompletionSelfTest {
         board.normalize();
         check(nand.editorBodyWidth == 0.0 && nand.editorBodyHeight == 0.0,
                 "invalid imported editor body dimensions normalize back to automatic sizing");
+    }
+
+    private static void pinHitboxMatchesVisibleLod() {
+        EditorPinGeometry.setCanvasZoom(0.30);
+        int signalHalf = EditorPinGeometry.halfSize(1);
+        check(signalHalf == 2, "low-zoom 1-bit pin LOD should shrink visibly to half-size 2");
+        check(EditorPinGeometry.contains(signalHalf, 0, 1), "visible signal pin edge must be clickable");
+        check(!EditorPinGeometry.contains(signalHalf + 1, 0, 1),
+                "one pixel outside the visible signal body must not remain an invisible hit target");
+
+        int busHalf = EditorPinGeometry.halfSize(32);
+        check(EditorPinGeometry.contains(busHalf - 1, 0, 32), "visible bus connector face must be clickable");
+        check(!EditorPinGeometry.contains(busHalf, busHalf, 32),
+                "chamfered invisible bus corner must not be clickable");
+        EditorPinGeometry.setCanvasZoom(1.0);
+    }
+
+    private static void recentItemsPersistNewestFirst() throws Exception {
+        Path temp = Files.createTempDirectory("logic-editor-preferences-test");
+        try {
+            ClientEditorPreferences first = new ClientEditorPreferences(temp);
+            first.recordRecentComponent("NAND");
+            first.recordRecentComponent("BUS");
+            first.recordRecentComponent("CLOCK");
+            first.recordRecentChip("ALU");
+            first.recordRecentChip("REGISTER");
+            first.recordRecentChip("ALU");
+
+            ClientEditorPreferences reloaded = new ClientEditorPreferences(temp);
+            check(reloaded.recentComponentIds().equals(List.of("CLOCK", "BUS", "NAND")),
+                    "recent components must persist newest-first without duplicates");
+            check(reloaded.recentChipNames().equals(List.of("ALU", "REGISTER")),
+                    "recent chips must move reopened items to the front without duplicates");
+
+            reloaded.renameFavorite("chip:ALU", "chip:ALU_V2");
+            ClientEditorPreferences renamed = new ClientEditorPreferences(temp);
+            check(renamed.recentChipNames().getFirst().equals("ALU_V2"),
+                    "renaming a chip must update its persisted recent entry");
+        } finally {
+            try (var paths = Files.walk(temp)) {
+                paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try { Files.deleteIfExists(path); }
+                    catch (Exception ignored) { }
+                });
+            }
+        }
     }
 
     private static void wireHashRemainsStableDuringCadEdits() {
