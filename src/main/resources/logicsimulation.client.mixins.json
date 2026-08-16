@@ -54,7 +54,6 @@
     "ClientChipLibraryDeletionMixin",
     "CircuitBlockClockTelemetryMixin",
     "CircuitBlockDeferredColorRandomDisplayMixin",
-    "ParallelDisplayWorkerProofMixin",
     "DeferredCommonSamplerXorShiftMixin",
     "DeferredColorSamplerSingleWordMixin",
     "CircuitBlockIndependentRandomDisplayMixin",
