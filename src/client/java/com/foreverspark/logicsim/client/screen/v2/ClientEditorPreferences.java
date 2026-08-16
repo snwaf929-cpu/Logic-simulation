@@ -14,13 +14,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-/** Small, non-electrical editor preference store. Favorites never alter chip definitions or circuit behavior. */
+/** Small, non-electrical editor preference store. Favorites/recents never alter chip definitions or circuit behavior. */
 public final class ClientEditorPreferences {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final int MAX_RECENT_CHIPS = 8;
 
     private final Path rootDirectory;
     private final Path file;
     private final LinkedHashSet<String> favorites = new LinkedHashSet<>();
+    /** Newest-first stable chip keys ("chip:name"). */
+    private final LinkedHashSet<String> recentChips = new LinkedHashSet<>();
 
     public ClientEditorPreferences() {
         this(FabricLoader.getInstance().getConfigDir().resolve("logic-simulation"));
@@ -42,6 +45,30 @@ public final class ClientEditorPreferences {
         return List.copyOf(favorites);
     }
 
+    public List<String> recentChipNames() {
+        ArrayList<String> names = new ArrayList<>(recentChips.size());
+        for (String key : recentChips) {
+            if (key.startsWith("chip:") && key.length() > "chip:".length()) names.add(key.substring("chip:".length()));
+        }
+        return List.copyOf(names);
+    }
+
+    public void recordRecentChip(String chipName) throws IOException {
+        String name = chipName == null ? "" : chipName.trim();
+        if (name.isEmpty()) return;
+        String key = "chip:" + name;
+        LinkedHashSet<String> reordered = new LinkedHashSet<>();
+        reordered.add(key);
+        for (String existing : recentChips) {
+            if (existing.equalsIgnoreCase(key)) continue;
+            reordered.add(existing);
+            if (reordered.size() >= MAX_RECENT_CHIPS) break;
+        }
+        recentChips.clear();
+        recentChips.addAll(reordered);
+        save();
+    }
+
     public boolean toggleFavorite(String key) throws IOException {
         String normalized = normalizeKey(key);
         if (normalized.isEmpty()) throw new IllegalArgumentException("Favorite key is required");
@@ -59,23 +86,49 @@ public final class ClientEditorPreferences {
         String oldNormalized = normalizeKey(oldKey);
         String newNormalized = normalizeKey(newKey);
         if (oldNormalized.isEmpty() || newNormalized.isEmpty() || oldNormalized.equals(newNormalized)) return;
-        if (!favorites.remove(oldNormalized)) return;
-        favorites.add(newNormalized);
-        save();
+        boolean changed = false;
+        if (favorites.remove(oldNormalized)) {
+            favorites.add(newNormalized);
+            changed = true;
+        }
+        if (oldNormalized.startsWith("chip:") && newNormalized.startsWith("chip:")) {
+            LinkedHashSet<String> renamed = new LinkedHashSet<>();
+            for (String recent : recentChips) {
+                if (recent.equalsIgnoreCase(oldNormalized)) {
+                    renamed.add(newNormalized);
+                    changed = true;
+                } else renamed.add(recent);
+            }
+            recentChips.clear();
+            recentChips.addAll(renamed);
+        }
+        if (changed) save();
     }
 
     private void load() {
         favorites.clear();
+        recentChips.clear();
         if (!Files.isRegularFile(file)) return;
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             Layout layout = GSON.fromJson(reader, Layout.class);
-            if (layout == null || layout.favorites == null) return;
-            for (String key : layout.favorites) {
-                String normalized = normalizeKey(key);
-                if (!normalized.isEmpty()) favorites.add(normalized);
+            if (layout == null) return;
+            if (layout.favorites != null) {
+                for (String key : layout.favorites) {
+                    String normalized = normalizeKey(key);
+                    if (!normalized.isEmpty()) favorites.add(normalized);
+                }
+            }
+            if (layout.recentChips != null) {
+                for (String key : layout.recentChips) {
+                    String normalized = normalizeKey(key);
+                    if (!normalized.startsWith("chip:") || normalized.length() <= 5) continue;
+                    recentChips.add(normalized);
+                    if (recentChips.size() >= MAX_RECENT_CHIPS) break;
+                }
             }
         } catch (Exception ignored) {
             favorites.clear();
+            recentChips.clear();
         }
     }
 
@@ -83,6 +136,7 @@ public final class ClientEditorPreferences {
         Files.createDirectories(rootDirectory);
         Layout layout = new Layout();
         layout.favorites.addAll(favorites);
+        layout.recentChips.addAll(recentChips);
         try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
             GSON.toJson(layout, writer);
         }
@@ -93,7 +147,8 @@ public final class ClientEditorPreferences {
     }
 
     private static final class Layout {
-        int formatVersion = 1;
+        int formatVersion = 2;
         List<String> favorites = new ArrayList<>();
+        List<String> recentChips = new ArrayList<>();
     }
 }
