@@ -39,6 +39,7 @@
     "CircuitEditorPhase5DevicesMixin",
     "CircuitEditorDocumentTypeUiMixin",
     "CircuitEditorPhase4Mixin",
+    "CircuitEditorWorkerBudgetMixin",
     "CircuitEditorPhase3ShortcutsMixin",
     "CircuitEditorPhase2ShortcutsMixin",
     "CircuitEditorUndoRedoMixin",
