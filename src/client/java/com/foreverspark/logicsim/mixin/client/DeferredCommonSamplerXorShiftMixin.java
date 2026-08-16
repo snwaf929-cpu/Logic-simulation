@@ -80,11 +80,11 @@ public abstract class DeferredCommonSamplerXorShiftMixin {
 
     @Unique
     private long logic$nextWord() {
+        // xorshift64 is an invertible transform on non-zero state, so after the constructor guard this can never hit 0.
         long x = logic$xorshiftState;
         x ^= x << 13;
         x ^= x >>> 7;
         x ^= x << 17;
-        if (x == 0L) x = LOGIC_NONZERO_STATE;
         logic$xorshiftState = x;
         return x;
     }
