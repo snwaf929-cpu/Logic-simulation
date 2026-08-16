@@ -55,7 +55,6 @@
     "CircuitEditorScreenContextMixin",
     "CircuitEditorModalStateMixin",
     "CircuitEditorProgramMixin",
-    "CircuitEditorWorldBoardContextV21EMixin",
     "CircuitEditorBoardPersistenceMixin",
     "CircuitEditorWorkspaceMixin",
     "ComponentLibraryRecentsV21EMixin",
