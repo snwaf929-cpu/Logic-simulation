@@ -888,7 +888,7 @@ public final class CircuitTimingController {
             } else if (node.kind == NodeKind.CONSTANT && node.clockSource) {
                 node.width = 1;
                 node.constantValue = 0L;
-                long frequency = Math.max(1L, Math.min(100_000_000L, node.clockFrequencyHz));
+                long frequency = Math.max(1L, Math.min(500_000_000L, node.clockFrequencyHz));
                 node.clockFrequencyHz = frequency;
                 Signal signal = simulator.signalByPath(constantSignalPath(scope, node.id));
                 if (signal == null) throw new IllegalStateException("Compiled CLOCK signal not found: " + scope + "/" + node.id);
