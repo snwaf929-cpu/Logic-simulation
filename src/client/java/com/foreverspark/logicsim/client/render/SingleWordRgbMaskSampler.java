@@ -54,13 +54,20 @@ public final class SingleWordRgbMaskSampler {
         x ^= x << 5;
         // xorshift32 is invertible on non-zero state; the constructor guard means x can never become zero here.
         rngState = x;
+        return sampleMaskFromWord(x);
+    }
 
+    /**
+     * Pure lookup used by v10 parallel batches. The caller supplies a statistically suitable 32-bit word, allowing
+     * independent cycle ranges to be evaluated concurrently without sharing mutable PRNG state.
+     */
+    public long sampleMaskFromWord(int word) {
         if (compactLowTable != null) {
-            int low = compactLowTable[x & 0xFF] & 0xFF;
-            int high = compactHighTable[(x >>> 8) & 0xFF] & 0xFF;
+            int low = compactLowTable[word & 0xFF] & 0xFF;
+            int high = compactHighTable[(word >>> 8) & 0xFF] & 0xFF;
             return ((long) (low | (high << 8)) & 0xFFFFL) << compactShift;
         }
-        int index = x >>> (32 - WIDE_TABLE_BITS);
+        int index = word >>> (32 - WIDE_TABLE_BITS);
         return wideTable[index];
     }
 
