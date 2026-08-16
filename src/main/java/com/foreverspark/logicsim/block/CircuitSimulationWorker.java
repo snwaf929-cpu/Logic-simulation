@@ -157,7 +157,7 @@ public final class CircuitSimulationWorker {
         if (!STARTED.compareAndSet(false, true)) return;
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK WORKERS] processors={} workers={} cpuShareCap=25% priority={} scheduler=dynamic-forkjoin perCircuit=AUTO-or-1..{} minecraftTickIndependent=true unloadedWorkers=0 inactiveContinuousWorkers=0",
+                "[CLOCK WORKERS] processors={} workers={} cpuShareCap=25% priority={} scheduler=dynamic-forkjoin-cache-hot perCircuit=AUTO-or-1..{} minecraftTickIndependent=true unloadedWorkers=0 inactiveContinuousWorkers=0",
                 PROCESSORS,
                 WORKER_COUNT,
                 WORKER_PRIORITY,
@@ -204,6 +204,15 @@ public final class CircuitSimulationWorker {
         } finally {
             entry.busy = busy;
             entry.inFlight.set(false);
+
+            // A continuously busy computer should stay hot without waiting for the dispatcher between 2.5ms slices.
+            // Forking the successor from the current ForkJoin worker preferentially keeps it on the same local deque;
+            // another worker may still steal it when several computers need the shared pool.
+            if (busy
+                    && CIRCUITS.get(entry.circuit) == entry
+                    && entry.inFlight.compareAndSet(false, true)) {
+                ForkJoinTask.adapt(() -> runEntry(entry)).fork();
+            }
         }
     }
 
