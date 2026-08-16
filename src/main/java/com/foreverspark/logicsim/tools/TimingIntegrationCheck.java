@@ -18,8 +18,8 @@ public final class TimingIntegrationCheck {
         CompiledCircuit compiled = CircuitCompiler.compile(document, ChipLookup.empty());
         CircuitTimingController timing = new CircuitTimingController(compiled, document, ChipLookup.empty());
         TimingIntegrationAssertions.require(timing.hasClock(CompiledCircuit.ROOT_SCOPE, clock.id), "root clock discovered");
-        TimingIntegrationAssertions.require(timing.frequencyHz(CompiledCircuit.ROOT_SCOPE, clock.id) == 100_000_000L, "100 MHz preserved by runtime timing controller");
-        TimingIntegrationAssertions.require(clock.clockFrequencyHz == 100_000_000L, "runtime must not rewrite 100 MHz CLOCK to 50 MHz");
+        TimingIntegrationAssertions.require(timing.frequencyHz(CompiledCircuit.ROOT_SCOPE, clock.id) == 500_000_000L, "500 MHz preserved by runtime timing controller");
+        TimingIntegrationAssertions.require(clock.clockFrequencyHz == 500_000_000L, "runtime must not rewrite 500 MHz CLOCK to a lower ceiling");
         TimingIntegrationAssertions.require(compiled.inputUnsigned(output.id, 0) == 1L, "clock starts low");
         timing.stepEdges(CompiledCircuit.ROOT_SCOPE, clock.id, 1L);
         TimingIntegrationAssertions.require(compiled.inputUnsigned(output.id, 0) == 0L, "rising edge settles NAND");
@@ -30,7 +30,7 @@ public final class TimingIntegrationCheck {
         CircuitDocument document = new CircuitDocument();
         EditorNode clock = document.addNode(NodeKind.CONSTANT, 0, 0);
         clock.clockSource = true;
-        clock.clockFrequencyHz = 100_000_000L;
+        clock.clockFrequencyHz = 500_000_000L;
         clock.width = 1;
         clock.constantValue = 0L;
         EditorNode nand = document.addNode(NodeKind.NAND, 80, 0);
