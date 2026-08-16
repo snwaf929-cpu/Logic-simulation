@@ -11,6 +11,7 @@
     "CircuitCanvasPhase5DeviceRenderMixin",
     "CircuitCanvasExternalDevicePlacementMixin",
     "CircuitCanvasPhase4TemplateMixin",
+    "CircuitCanvasWireExtensionV21CMixin",
     "CircuitCanvasWiringV21Mixin",
     "CircuitCanvasPcbLayerMixin",
     "CircuitCanvasPhase4RenderMixin",
