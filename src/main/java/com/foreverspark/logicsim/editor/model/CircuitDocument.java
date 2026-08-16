@@ -138,7 +138,7 @@ public final class CircuitDocument {
                 node.randomSource = false;
                 node.width = 1;
                 node.constantValue = 0L;
-                node.clockFrequencyHz = Math.max(1L, Math.min(100_000_000L, node.clockFrequencyHz));
+                node.clockFrequencyHz = Math.max(1L, Math.min(500_000_000L, node.clockFrequencyHz));
             }
         }
     }
