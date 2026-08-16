@@ -93,7 +93,7 @@ public final class EditorCompletionSelfTest {
             slice.width = 16;
             slice.slices = new java.util.ArrayList<>(List.of(new BusSliceOutput("OP", 12, 4), new BusSliceOutput("ARG", 0, 12)));
         }, "BUS_SLICE ranges");
-        assertElectricalChange(board -> board.node(1).chipPortOrder = 7, "reusable CHIP port order");
+        reusablePortOrderChangesSignature();
         assertElectricalChange(board -> {
             EditorNode socket = board.addNode(NodeKind.BUS, 200, 20);
             socket.width = 32;
@@ -114,6 +114,21 @@ public final class EditorCompletionSelfTest {
         device.externalDeviceState = ExternalDeviceState.UNKNOWN;
         check(connected.equals(CircuitHardwareSignature.of(deviceStateOnly)),
                 "transient CONNECTED/UNKNOWN discovery state does not restart identical device binding");
+    }
+
+    private static void reusablePortOrderChangesSignature() {
+        CircuitDocument board = baseBoard();
+        EditorNode second = board.addNode(NodeKind.INPUT, 0, 30);
+        second.label = "ADDR";
+        second.width = 8;
+        board.normalize();
+        String before = CircuitHardwareSignature.of(board);
+        EditorNode first = board.node(1);
+        int swap = first.chipPortOrder;
+        first.chipPortOrder = second.chipPortOrder;
+        second.chipPortOrder = swap;
+        String after = CircuitHardwareSignature.of(board);
+        check(!before.equals(after), "reusable CHIP port order must trigger running BOARD reinstall");
     }
 
     private static CircuitDocument baseBoard() {
