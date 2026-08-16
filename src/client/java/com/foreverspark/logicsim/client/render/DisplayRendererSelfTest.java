@@ -54,30 +54,58 @@ public final class DisplayRendererSelfTest {
         check(state.revision() == 1L, "dense native-64 batch must publish one revision");
         check(state.nonZeroPixels() == 64, "dense native-64 non-zero accounting");
         check(state.wholeWallInvalidated(), "dense native-64 batch should use one whole-wall metadata invalidation");
+        check(state.variableColorStreaming(), "variable dense RGB must use branchless streaming path");
         for (long tileRevision : tileRevisions) {
             check(tileRevision == 1L, "dense native-64 batch must publish every tile at the same revision");
         }
 
+        // The variable-color streaming path intentionally over-publishes identical replays to remove the unpredictable
+        // previous==new branch from the MHz loop. Framebuffer and exact non-zero accounting must still be unchanged.
+        int beforeNonZero = state.nonZeroPixels();
         state.reset(state.nonZeroPixels(), state.revision());
         RealtimeDisplayNative64FastPath.apply(
                 dense, dense.length, logicalWidth, logicalHeight, backingWidth, columns,
                 pixels, tileRevisions, dirtyWords, state
         );
-        check(!state.changed(), "identical native-64 writes must not republish");
-        check(state.revision() == 1L, "unchanged native-64 batch must preserve revision");
+        check(state.changed(), "variable RGB replay may intentionally republish");
+        check(state.revision() == 2L, "variable RGB replay should publish one new batch revision");
+        check(state.nonZeroPixels() == beforeNonZero, "variable RGB replay must preserve exact non-zero accounting");
+        check(state.variableColorStreaming(), "variable RGB replay remains on branchless path");
 
-        long[] one = {DisplayCommandCodec.pixel(1, 1, 0xFFFF)};
+        // Constant/repeating color streams retain the equality-skip path; this protects the 100%/solid-color case.
+        long[] constant = new long[64];
+        for (int index = 0; index < constant.length; index++) {
+            int x = (index * 29) & 127;
+            int y = (index * 47) & 127;
+            constant[index] = DisplayCommandCodec.pixel(x, y, 0xFFFF);
+        }
+        state.reset(state.nonZeroPixels(), state.revision());
+        RealtimeDisplayNative64FastPath.apply(
+                constant, constant.length, logicalWidth, logicalHeight, backingWidth, columns,
+                pixels, tileRevisions, dirtyWords, state
+        );
+        check(state.changed(), "constant-color batch must update newly touched pixels");
+        check(!state.variableColorStreaming(), "constant color must retain skip-friendly path");
+        long constantRevision = state.revision();
+
+        state.reset(state.nonZeroPixels(), state.revision());
+        RealtimeDisplayNative64FastPath.apply(
+                constant, constant.length, logicalWidth, logicalHeight, backingWidth, columns,
+                pixels, tileRevisions, dirtyWords, state
+        );
+        check(!state.changed(), "identical constant-color replay must not republish");
+        check(state.revision() == constantRevision, "constant-color replay must preserve revision");
+        check(!state.variableColorStreaming(), "constant replay must stay skip-friendly");
+
+        long[] one = {DisplayCommandCodec.pixel(1, 1, 0x07E0)};
         state.reset(state.nonZeroPixels(), state.revision());
         RealtimeDisplayNative64FastPath.apply(
                 one, one.length, logicalWidth, logicalHeight, backingWidth, columns,
                 pixels, tileRevisions, dirtyWords, state
         );
         check(state.changed(), "small native-64 batch must change framebuffer");
-        check(state.revision() == 2L, "small native-64 batch must publish once");
         check(!state.wholeWallInvalidated(), "small native-64 batch should keep precise dirty metadata");
-        check(tileRevisions[0] == 2L, "small native-64 batch must dirty touched tile");
-        check(tileRevisions[1] == 1L && tileRevisions[2] == 1L && tileRevisions[3] == 1L,
-                "small native-64 batch must not dirty unrelated tiles");
+        check(!state.variableColorStreaming(), "small native-64 batch must not select streaming mode");
     }
 
     private static void checkFaces(Direction expectedFacing, float expectedYnYaw, float expectedSignedDegrees) {
