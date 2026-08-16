@@ -25,12 +25,12 @@ public final class EditorCompletionSelfTest {
         chipPortOrderMigratesAndPersists();
         snapshotPreservesRuntimeMetadata();
         editorBodySizeIsCadOnlyAndSnapshotSafe();
-        pinHitboxMatchesVisibleLod();
+        pinHitboxIsScreenSpaceInvariant();
         recentItemsPersistNewestFirst();
         wireHashRemainsStableDuringCadEdits();
         hardwareSignatureIgnoresCadOnlyChanges();
         hardwareSignatureTracksElectricalChanges();
-        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved bodyResize=cad-only pinHitbox=exact recents=persistent wireKeys=stable cadRestart=false electricalRestart=true");
+        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved bodyResize=cad-only pinHitbox=screen-space recents=persistent wireKeys=stable cadRestart=false electricalRestart=true");
     }
 
     private static void chipPortOrderMigratesAndPersists() {
@@ -111,19 +111,27 @@ public final class EditorCompletionSelfTest {
                 "invalid imported editor body dimensions normalize back to automatic sizing");
     }
 
-    private static void pinHitboxMatchesVisibleLod() {
+    private static void pinHitboxIsScreenSpaceInvariant() {
         EditorPinGeometry.setCanvasZoom(0.30);
-        int signalHalf = EditorPinGeometry.halfSize(1);
-        check(signalHalf == 2, "low-zoom 1-bit pin LOD should shrink visibly to half-size 2");
-        check(EditorPinGeometry.contains(signalHalf, 0, 1), "visible signal pin edge must be clickable");
-        check(!EditorPinGeometry.contains(signalHalf + 1, 0, 1),
-                "one pixel outside the visible signal body must not remain an invisible hit target");
+        int signalLow = EditorPinGeometry.halfSize(1);
+        int busLow = EditorPinGeometry.halfSize(32);
+        EditorPinGeometry.setCanvasZoom(1.00);
+        int signalNormal = EditorPinGeometry.halfSize(1);
+        int busNormal = EditorPinGeometry.halfSize(32);
+        EditorPinGeometry.setCanvasZoom(2.50);
+        int signalHigh = EditorPinGeometry.halfSize(1);
+        int busHigh = EditorPinGeometry.halfSize(32);
 
-        int busHalf = EditorPinGeometry.halfSize(32);
-        check(EditorPinGeometry.contains(busHalf - 1, 0, 32), "visible bus connector face must be clickable");
-        check(!EditorPinGeometry.contains(busHalf, busHalf, 32),
+        check(signalLow == 3 && signalLow == signalNormal && signalNormal == signalHigh,
+                "1-bit pin must stay exactly the same screen-pixel size at every canvas zoom");
+        check(busLow == 6 && busLow == busNormal && busNormal == busHigh,
+                "wide bus pin must stay exactly the same screen-pixel size at every canvas zoom");
+        check(EditorPinGeometry.contains(signalNormal, 0, 1), "visible signal pin edge must be clickable");
+        check(!EditorPinGeometry.contains(signalNormal + 1, 0, 1),
+                "one pixel outside the visible signal body must not be an invisible hit target");
+        check(EditorPinGeometry.contains(busNormal - 1, 0, 32), "visible bus connector face must be clickable");
+        check(!EditorPinGeometry.contains(busNormal, busNormal, 32),
                 "chamfered invisible bus corner must not be clickable");
-        EditorPinGeometry.setCanvasZoom(1.0);
     }
 
     private static void recentItemsPersistNewestFirst() throws Exception {
