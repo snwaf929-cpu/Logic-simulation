@@ -109,9 +109,14 @@ public final class EditorV21BWiringChecks {
     private static void segmentMovesPerpendicular() {
         WireConnection horizontal = new WireConnection(1, 0, 2, 0);
         horizontal.setRoutePoints(List.of(new RoutePoint(24, 0), new RoutePoint(48, 0)));
-        check(EditorWireRouting.moveSegment(horizontal, 1, 0, 12), "horizontal interior segment is draggable");
+        // First event crosses one grid cell and leaves a 1-unit residual. The route mutation must not invalidate the
+        // WireConnection-keyed residual map; the next 5-unit event should consume the carried residual as cell #2.
+        check(EditorWireRouting.moveSegment(horizontal, 1, 0, 7), "horizontal interior segment is draggable");
+        check(horizontal.routePoints().get(0).y() == 6 && horizontal.routePoints().get(1).y() == 6,
+                "horizontal segment consumes the first snapped drag cell");
+        check(EditorWireRouting.moveSegment(horizontal, 1, 0, 5), "horizontal drag residual survives route mutation");
         check(horizontal.routePoints().get(0).y() == 12 && horizontal.routePoints().get(1).y() == 12,
-                "horizontal segment moves only vertically");
+                "sub-grid drag residual carries across a WireConnection route mutation");
         check(horizontal.routePoints().get(0).x() == 24 && horizontal.routePoints().get(1).x() == 48,
                 "horizontal segment keeps its X span while moving");
         check(EditorWireRouting.moveSegmentTo(horizontal, 1, 999, 31), "absolute mouse drag updates horizontal segment");
