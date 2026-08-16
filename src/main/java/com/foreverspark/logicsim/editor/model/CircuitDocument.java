@@ -1,15 +1,22 @@
 package com.foreverspark.logicsim.editor.model;
 
+import com.foreverspark.logicsim.block.CircuitWorkerPolicy;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
 public final class CircuitDocument {
     /** Optional Gson fields keep older BOARD/CHIP documents readable without a gated decoder. */
-    public int formatVersion = 2;
+    public int formatVersion = 3;
     public int nextNodeId = 1;
     /** Stable monotonically increasing id for cloned BOARD template groups. */
     public int nextTemplateInstanceId = 1;
+    /**
+     * Per-physical-BOARD simulation parallelism request. 0=AUTO, 1=single-worker, N=at most N workers.
+     * The runtime always clamps this against CircuitWorkerPolicy.systemMaximum() on the host machine.
+     */
+    public int simulationWorkers = CircuitWorkerPolicy.DEFAULT;
     public List<EditorNode> nodes = new ArrayList<>();
     public List<WireConnection> wires = new ArrayList<>();
 
@@ -17,6 +24,7 @@ public final class CircuitDocument {
 
     public EditorNode addNode(NodeKind kind, double x, double y) {
         EditorNode node = new EditorNode(nextNodeId++, kind, x, y);
+        if (kind == NodeKind.INPUT || kind == NodeKind.OUTPUT) node.chipPortOrder = nextChipPortOrder(kind);
         nodes.add(node);
         return node;
     }
@@ -51,12 +59,18 @@ public final class CircuitDocument {
         return count;
     }
 
+    /** Stable public custom-CHIP input order, independent of node creation order after migration. */
     public List<EditorNode> inputNodes() {
-        return nodes.stream().filter(node -> node.kind == NodeKind.INPUT).sorted(Comparator.comparingInt(node -> node.id)).toList();
+        return nodes.stream().filter(node -> node.kind == NodeKind.INPUT)
+                .sorted(chipPortComparator())
+                .toList();
     }
 
+    /** Stable public custom-CHIP output order, independent of node creation order after migration. */
     public List<EditorNode> outputNodes() {
-        return nodes.stream().filter(node -> node.kind == NodeKind.OUTPUT).sorted(Comparator.comparingInt(node -> node.id)).toList();
+        return nodes.stream().filter(node -> node.kind == NodeKind.OUTPUT)
+                .sorted(chipPortComparator())
+                .toList();
     }
 
     public List<EditorNode> externalDeviceNodes() {
@@ -64,6 +78,7 @@ public final class CircuitDocument {
     }
 
     public void normalize() {
+        simulationWorkers = CircuitWorkerPolicy.normalizePersisted(simulationWorkers);
         if (nodes == null) nodes = new ArrayList<>();
         nodes.removeIf(node -> node == null);
         if (wires == null) wires = new ArrayList<>();
@@ -138,8 +153,41 @@ public final class CircuitDocument {
                 node.randomSource = false;
                 node.width = 1;
                 node.constantValue = 0L;
-                node.clockFrequencyHz = Math.max(1L, Math.min(50_000_000L, node.clockFrequencyHz));
+                node.clockFrequencyHz = Math.max(1L, Math.min(500_000_000L, node.clockFrequencyHz));
             }
+
+            if (node.kind != NodeKind.INPUT && node.kind != NodeKind.OUTPUT) node.chipPortOrder = -1;
         }
+
+        normalizeChipPortOrder(NodeKind.INPUT);
+        normalizeChipPortOrder(NodeKind.OUTPUT);
+        formatVersion = Math.max(formatVersion, 3);
+    }
+
+    /**
+     * Legacy files had no explicit order. Unassigned ports sort after authored orders by id, then the full list is
+     * compacted to 0..N-1 so future edits are stable and duplicate order values cannot corrupt a CHIP interface.
+     */
+    private void normalizeChipPortOrder(NodeKind kind) {
+        List<EditorNode> ordered = nodes.stream()
+                .filter(node -> node.kind == kind)
+                .sorted(chipPortComparator())
+                .toList();
+        for (int index = 0; index < ordered.size(); index++) ordered.get(index).chipPortOrder = index;
+    }
+
+    /** New terminals receive a durable order immediately; only legacy deserialization uses -1 migration. */
+    private int nextChipPortOrder(NodeKind kind) {
+        int max = -1;
+        for (EditorNode node : nodes) {
+            if (node.kind == kind && node.chipPortOrder >= 0) max = Math.max(max, node.chipPortOrder);
+        }
+        return max + 1;
+    }
+
+    private static Comparator<EditorNode> chipPortComparator() {
+        return Comparator
+                .comparingInt((EditorNode node) -> node.chipPortOrder < 0 ? Integer.MAX_VALUE : node.chipPortOrder)
+                .thenComparingInt(node -> node.id);
     }
 }

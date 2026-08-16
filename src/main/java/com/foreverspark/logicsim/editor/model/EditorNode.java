@@ -15,6 +15,11 @@ public final class EditorNode {
      */
     public int laneWidth = 1;
     public String label = "";
+    /**
+     * Stable public-port order for reusable CHIP INPUT/OUTPUT terminals. -1 means legacy/unassigned;
+     * CircuitDocument.normalize() migrates those terminals into their previous node-id order exactly once.
+     */
+    public int chipPortOrder = -1;
     public String chipName = "";
     public long constantValue = 0L;
     /** Saved manual/default value for root INPUT nodes in a physical Circuit Block. */

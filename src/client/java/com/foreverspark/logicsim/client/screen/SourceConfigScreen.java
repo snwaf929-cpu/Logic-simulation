@@ -121,7 +121,7 @@ public final class SourceConfigScreen extends Screen {
             }
             onClose();
         } catch (NumberFormatException exception) {
-            error = mode == Mode.CLOCK ? "Enter a number, for example 20, 5, or 1.5" : "Enter a whole number from 0 to 100";
+            error = mode == Mode.CLOCK ? "Enter a number, for example 20, 100, or 500" : "Enter a whole number from 0 to 100";
         } catch (RuntimeException exception) {
             error = exception.getMessage() == null ? "Invalid value" : exception.getMessage();
         }
@@ -134,7 +134,7 @@ public final class SourceConfigScreen extends Screen {
         if (!Double.isFinite(amount) || amount <= 0.0) throw new IllegalArgumentException("Frequency must be greater than 0");
         double exact = amount * unit.multiplier;
         if (exact < 1.0 || exact > ClockPlacementState.MAX_FREQUENCY_HZ) {
-            throw new IllegalArgumentException("Frequency must be from 1 Hz to 50 MHz");
+            throw new IllegalArgumentException("Frequency must be from 1 Hz to 500 MHz");
         }
         return Math.max(1L, Math.min(ClockPlacementState.MAX_FREQUENCY_HZ, Math.round(exact)));
     }
@@ -161,7 +161,7 @@ public final class SourceConfigScreen extends Screen {
             graphics.text(font, "Type an exact value, then choose Hz / kHz / MHz.", x + 22, y + 36, 0xFF96A3B1, false);
             String resolved;
             try { resolved = "Resolved: " + com.foreverspark.logicsim.editor.model.EditorNode.formatFrequency(parseFrequency()); }
-            catch (RuntimeException ignored) { resolved = "Range: 1 Hz .. 50 MHz"; }
+            catch (RuntimeException ignored) { resolved = "Range: 1 Hz .. 500 MHz"; }
             graphics.text(font, resolved, x + 22, y + 114, 0xFF8FBFEB, false);
         } else {
             graphics.text(font, "Chance that OUT becomes 1 on each TRIGGER 0 -> 1 edge.", x + 22, y + 36, 0xFF96A3B1, false);

@@ -1,10 +1,13 @@
 package com.foreverspark.logicsim.interconnect;
 
 import com.foreverspark.logicsim.core.Signal;
+import com.foreverspark.logicsim.display.DisplayCommandCodec;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import com.foreverspark.logicsim.editor.model.ExternalDeviceType;
+import com.foreverspark.logicsim.editor.model.NodeKind;
 import com.foreverspark.logicsim.editor.model.PortDirection;
 import com.foreverspark.logicsim.editor.model.PortSpec;
+import com.foreverspark.logicsim.editor.model.WireConnection;
 import com.foreverspark.logicsim.editor.runtime.CircuitTimingController;
 import com.foreverspark.logicsim.editor.runtime.CompiledCircuit;
 
@@ -24,6 +27,8 @@ public final class CircuitProgramRuntime {
     /** All physical-device sink pins share one callback-watch bit. Output #63 may share the same bit safely. */
     private static final int DEVICE_DIRTY_WATCH_BIT = 63;
     private static final long DEVICE_DIRTY_WATCH_MASK = 1L << DEVICE_DIRTY_WATCH_BIT;
+    private static final long DISPLAY_DATA_MASK = 0x0000FFFFFFFFFFFFL;
+    private static final long DISPLAY_PIXEL_OPCODE = (long) DisplayCommandCodec.OP_PIXEL << 48;
 
     private final CircuitProgram program;
     private final CompiledCircuit compiled;
@@ -38,6 +43,7 @@ public final class CircuitProgramRuntime {
     private final BoundaryPort[] outputRuntimePorts;
     private final DeviceBinding[] externalDevices;
     private final CircuitTimingController.DirectRandomBoundaryPlan[] directRandomBoundaryPlans;
+    private final DeviceDisplayBulkPlan[] directRandomDeviceDisplayPlans;
     private final boolean dirtyOutputTracking;
     private long forcedDirtyOutputMask;
 
@@ -88,13 +94,23 @@ public final class CircuitProgramRuntime {
         this.timing.configureLosslessBoundarySignals(losslessBoundarySignalIds());
         this.compiled.simulator().enableTurboMode();
 
-        // Compile a structural direct-RANDOM plan for every boundary once. Most ports produce null. The important
+        // Compile a structural direct-RANDOM plan for every legacy root boundary once. Most ports produce null. The
         // stress-test shape (one CLOCK -> <=64 RANDOM sources -> one 64-bit display bus, no NANDs) gets a packed plan
         // that can synthesize boundary words without touching every simulator signal on every virtual cycle.
         this.directRandomBoundaryPlans = new CircuitTimingController.DirectRandomBoundaryPlan[outputRuntimePorts.length];
         for (int index = 0; index < outputRuntimePorts.length; index++) {
             if (outputRuntimePorts[index].spec().width() > 64) continue;
             directRandomBoundaryPlans[index] = timing.compileDirectRandomBoundaryPlan(outputRuntimePorts[index].valueSignalIds());
+        }
+
+        // V2.1A moved DISPLAY from a visible DATA64 OUTPUT to typed DEVICE sink pins. Rebuild the exact same packed
+        // boundary internally as COLOR[15:0], X[31:16], Y[47:32]. WRITE remains a real 1-bit strobe and is required to
+        // be the one direct CLOCK. RESET may be unwired or provably tied LOW by an ordinary CONSTANT; dynamic RESET
+        // sources retain the exact ordinary DEVICE engine. The user-facing schematic therefore stays
+        // X/Y/COLOR/WRITE/RESET while the proven packed RANDOM engine remains available underneath it.
+        this.directRandomDeviceDisplayPlans = new DeviceDisplayBulkPlan[externalDevices.length];
+        for (int index = 0; index < externalDevices.length; index++) {
+            directRandomDeviceDisplayPlans[index] = compileDeviceDisplayBulkPlan(externalDevices[index]);
         }
     }
 
@@ -160,6 +176,51 @@ public final class CircuitProgramRuntime {
                 displayWidth,
                 displayHeight,
                 sink
+        );
+    }
+
+    public boolean directRandomDeviceDisplayBatchEligible(int deviceIndex) {
+        return deviceIndex >= 0
+                && deviceIndex < directRandomDeviceDisplayPlans.length
+                && directRandomDeviceDisplayPlans[deviceIndex] != null;
+    }
+
+    public int directRandomDeviceDisplayRandomLanes(int deviceIndex) {
+        if (!directRandomDeviceDisplayBatchEligible(deviceIndex)) return 0;
+        return directRandomDeviceDisplayPlans[deviceIndex].plan().randomLaneCount();
+    }
+
+    /**
+     * Packed V2.1A physical DISPLAY execution. The cached plan synthesizes only the 48 data bits; this method restores
+     * the internal PIXEL opcode before publishing to the realtime framebuffer. RESET is either unwired or structurally
+     * proven static LOW when the plan is compiled. A defensive runtime LOW check remains here in case loaded state is
+     * malformed; a raised RESET falls back before any virtual edge is consumed.
+     */
+    public long advanceDirectRandomDeviceDisplayNanos(
+            long elapsedNanos,
+            long edgeBudget,
+            int deviceIndex,
+            CircuitTimingController.LongBatchConsumer sink
+    ) {
+        if (!directRandomDeviceDisplayBatchEligible(deviceIndex)) return -1L;
+        DeviceDisplayBulkPlan displayPlan = directRandomDeviceDisplayPlans[deviceIndex];
+        try {
+            if ((externalDeviceInputValue(deviceIndex, 4) & 1L) != 0L) return -1L;
+        } catch (RuntimeException ignored) {
+            return -1L;
+        }
+
+        CircuitTimingController.LongBatchConsumer encodedSink = sink == null ? null : (values, count) -> {
+            for (int index = 0; index < count; index++) {
+                values[index] = (values[index] & DISPLAY_DATA_MASK) | DISPLAY_PIXEL_OPCODE;
+            }
+            sink.accept(values, count);
+        };
+        return timing.advanceDirectRandomBoundaryNanos(
+                displayPlan.plan(),
+                elapsedNanos,
+                edgeBudget,
+                encodedSink
         );
     }
 
@@ -262,9 +323,69 @@ public final class CircuitProgramRuntime {
                         compiled.simulator().signalIds(signals)
                 );
             }
-            bindings.add(new DeviceBinding(id, node.externalDeviceType, ports));
+            bindings.add(new DeviceBinding(node.id, id, node.externalDeviceType, ports));
         }
         return bindings.toArray(DeviceBinding[]::new);
+    }
+
+    private DeviceDisplayBulkPlan compileDeviceDisplayBulkPlan(DeviceBinding device) {
+        if (device == null || device.type() != ExternalDeviceType.DISPLAY || device.inputs().length != 5) return null;
+        if (outputRuntimePorts.length != 0 || externalDevices.length != 1 || timing.clocks().size() != 1) return null;
+        if (!displayWriteIsDirectClock(device.nodeId()) || !displayResetBulkSafe(device.nodeId())) return null;
+
+        int[] x = device.inputs()[0].valueSignalIds();
+        int[] y = device.inputs()[1].valueSignalIds();
+        int[] color = device.inputs()[2].valueSignalIds();
+        if (x.length != 16 || y.length != 16 || color.length != 16) return null;
+
+        int[] syntheticBoundary = new int[48];
+        System.arraycopy(color, 0, syntheticBoundary, 0, 16);
+        System.arraycopy(x, 0, syntheticBoundary, 16, 16);
+        System.arraycopy(y, 0, syntheticBoundary, 32, 16);
+        CircuitTimingController.DirectRandomBoundaryPlan plan = timing.compileDirectRandomBoundaryPlan(syntheticBoundary);
+        return plan == null ? null : new DeviceDisplayBulkPlan(plan);
+    }
+
+    private boolean displayWriteIsDirectClock(int deviceNodeId) {
+        for (WireConnection wire : program.root.circuit.wires) {
+            if (wire.targetNodeId() != deviceNodeId || wire.targetPort() != 3 || wire.sourcePort() != 0) continue;
+            EditorNode source = nodeById(wire.sourceNodeId());
+            return source != null
+                    && source.kind == NodeKind.CONSTANT
+                    && source.clockSource
+                    && !source.randomSource;
+        }
+        return false;
+    }
+
+    /**
+     * RESET is bulk-safe when floating LOW or tied directly to an ordinary one-bit CONSTANT 0. Dynamic sources must
+     * keep the exact edge engine because DISPLAY RESET is rising-edge triggered and can clear the framebuffer.
+     */
+    private boolean displayResetBulkSafe(int deviceNodeId) {
+        WireConnection resetWire = null;
+        for (WireConnection wire : program.root.circuit.wires) {
+            if (wire.targetNodeId() != deviceNodeId || wire.targetPort() != 4) continue;
+            if (resetWire != null) return false;
+            resetWire = wire;
+        }
+        if (resetWire == null) return true;
+        if (resetWire.sourcePort() != 0) return false;
+
+        EditorNode source = nodeById(resetWire.sourceNodeId());
+        return source != null
+                && source.kind == NodeKind.CONSTANT
+                && !source.clockSource
+                && !source.randomSource
+                && source.width == 1
+                && (source.constantValue & 1L) == 0L;
+    }
+
+    private EditorNode nodeById(int nodeId) {
+        for (EditorNode node : program.root.circuit.nodes) {
+            if (node != null && node.id == nodeId) return node;
+        }
+        return null;
     }
 
     private void initializeBoundaryInputDefaults() {
@@ -320,5 +441,6 @@ public final class CircuitProgramRuntime {
     private static long mask(long value, int width) { return width >= 64 ? value : value & ((1L << width) - 1L); }
     private record BoundaryPort(PortSpec spec, int nodeId, int[] valueSignalIds) {}
     private record DeviceInputPort(PortSpec spec, int[] valueSignalIds) {}
-    private record DeviceBinding(String deviceId, ExternalDeviceType type, DeviceInputPort[] inputs) {}
+    private record DeviceBinding(int nodeId, String deviceId, ExternalDeviceType type, DeviceInputPort[] inputs) {}
+    private record DeviceDisplayBulkPlan(CircuitTimingController.DirectRandomBoundaryPlan plan) {}
 }

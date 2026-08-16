@@ -18,6 +18,7 @@ public final class EditorV2FoundationChecks {
         EditorV2Phase4Checks.run();
         EditorV2Phase5Checks.run();
         EditorV2Phase6Checks.run();
+        EditorV21BWiringChecks.run();
     }
 
     private static void gridChecks() {

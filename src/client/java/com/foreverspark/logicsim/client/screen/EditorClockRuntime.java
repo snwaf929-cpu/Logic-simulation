@@ -13,9 +13,12 @@ import java.util.WeakHashMap;
 /**
  * Lightweight live timing preview for the one editor canvas that is actually on screen.
  *
- * Old versions ticked every CircuitCanvasWidget retained by old Screen instances/resizes. That meant closed editor
+ * <p>This is deliberately a client-side preview with a bounded per-client-tick edge budget. It is not the
+ * authoritative world Circuit Block runtime and its throughput must never be reported as the world's actual Hz.</p>
+ *
+ * <p>Old versions ticked every CircuitCanvasWidget retained by old Screen instances/resizes. That meant closed editor
  * previews could continue consuming the render thread forever. Only the most recently attached live canvas is now
- * eligible to run. CircuitEditorBoardPersistenceMixin calls clearAll() deterministically when the editor closes.
+ * eligible to run. CircuitEditorBoardPersistenceMixin calls clearAll() deterministically when the editor closes.</p>
  */
 public final class EditorClockRuntime {
     private static final long EDGE_BUDGET_PER_CLOCK_PER_FRAME = 5_000L;
@@ -163,16 +166,19 @@ public final class EditorClockRuntime {
             }
 
             double seconds = windowNanos / 1_000_000_000.0;
-            long actualEdgesPerSecond = seconds <= 0.0 ? 0L : Math.round(diagnosticEdges / seconds);
-            long actualCyclesPerSecond = actualEdgesPerSecond / 2L;
+            long previewEdgesPerSecond = seconds <= 0.0 ? 0L : Math.round(diagnosticEdges / seconds);
+            long previewCyclesPerSecond = previewEdgesPerSecond / 2L;
+            boolean budgetLimited = pendingEdges > 0L;
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BENCH/editor] activeClocks={} targetHz={} actualHz={} edgesPerSec={} pendingEdges={} clientTickCalls={}",
+                    "[CLOCK PREVIEW/editor] activeClocks={} targetHz={} previewHz={} previewEdgesPerSec={} pendingPreviewEdges={} clientTickCalls={} edgeBudgetPerClockPerTick={} budgetLimited={}",
                     activeClocks,
                     targetCyclesPerSecond,
-                    actualCyclesPerSecond,
-                    actualEdgesPerSecond,
+                    previewCyclesPerSecond,
+                    previewEdgesPerSecond,
                     pendingEdges,
-                    diagnosticClientTicks
+                    diagnosticClientTicks,
+                    EDGE_BUDGET_PER_CLOCK_PER_FRAME,
+                    budgetLimited
             );
 
             diagnosticStartNanos = now;

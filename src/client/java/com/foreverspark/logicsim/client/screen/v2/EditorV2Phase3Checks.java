@@ -20,9 +20,8 @@ public final class EditorV2Phase3Checks {
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPhase4TemplateMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPcbLayerMixin",
             "com.foreverspark.logicsim.mixin.client.CircuitCanvasPhase2ConfigMixin",
-            "com.foreverspark.logicsim.mixin.client.CircuitCanvasWiringV2Mixin",
-            "com.foreverspark.logicsim.mixin.client.CircuitCanvasDuplicateMixin",
-            "com.foreverspark.logicsim.mixin.client.CircuitCanvasWireSelectionMixin"
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasWiringV21Mixin",
+            "com.foreverspark.logicsim.mixin.client.CircuitCanvasDuplicateMixin"
     );
 
     private EditorV2Phase3Checks() {}

@@ -145,7 +145,9 @@ public final class WireConnection {
 
     @Override
     public int hashCode() {
-        return Objects.hash(sourceNodeId, sourcePort, targetNodeId, targetPort,
-                routePoints(), branchStart, layer(), viaRouteIndices());
+        // Wire objects are used as keys by editor drag/route state. Presentation metadata is deliberately mutable,
+        // so hashing route points/layers/vias makes a key unreachable immediately after the user edits the trace.
+        // Logical endpoints are stable for the lifetime of a WireConnection and still satisfy equals/hashCode.
+        return Objects.hash(sourceNodeId, sourcePort, targetNodeId, targetPort);
     }
 }
