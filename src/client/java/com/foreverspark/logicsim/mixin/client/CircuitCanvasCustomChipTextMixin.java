@@ -18,11 +18,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.List;
 
 /**
- * Clean custom-chip renderer.
- *
- * Text scales to the actual on-screen body rectangle. It never forces the chip body wider and it never uses
- * fixed screen-pixel offsets that drift as the canvas zoom changes. Port names stay in hover tooltips so dense
- * CPU schematics remain readable.
+ * Clean custom-chip renderer with screen-space invariant labels and pins.
+ * Zoom changes the world/body geometry only; labels are shortened rather than scaled.
  */
 @Mixin(value = CircuitCanvasWidget.class, priority = 1250)
 public abstract class CircuitCanvasCustomChipTextMixin {
@@ -55,8 +52,8 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         int strip = Math.max(2, (int)Math.round(4.0 * zoom));
         graphics.fill(x + 1, y + 1, x + w - 1, y + Math.min(h - 1, strip + 1), accent);
 
-        int padX = Math.max(4, (int)Math.round(8.0 * zoom));
-        int padY = Math.max(3, (int)Math.round(7.0 * zoom));
+        int padX = 4;
+        int padY = 3;
         logic$textInRect(
                 graphics,
                 node.displayName(),
@@ -64,7 +61,6 @@ public abstract class CircuitCanvasCustomChipTextMixin {
                 y + strip + padY,
                 x + w - padX,
                 y + h - padY,
-                1.55f,
                 0xFFF2F5F8
         );
 
@@ -83,20 +79,19 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         int strip = Math.max(2, (int)Math.round(4.0 * zoom));
         graphics.fill(x + 1, y + 1, x + w - 1, y + Math.min(h - 1, strip + 1), BuiltinDevices.DISPLAY_COLOR);
 
-        int px = Math.max(5, (int)Math.round(9.0 * zoom));
-        int py = Math.max(4, (int)Math.round(8.0 * zoom));
+        int px = 5;
+        int py = 4;
         int innerLeft = x + px;
         int innerRight = x + w - px;
         int innerTop = y + strip + py;
         int innerBottom = y + h - py;
 
-        // Simple monitor glyph instead of the old wall of fixed-size labels.
         int monitorTop = innerTop + Math.max(10, (innerBottom - innerTop) / 4);
         int monitorBottom = innerBottom - Math.max(8, (innerBottom - innerTop) / 5);
         if (innerRight - innerLeft > 18 && monitorBottom - monitorTop > 12) {
             graphics.fill(innerLeft, monitorTop, innerRight, monitorBottom, 0xFF071014);
             graphics.outline(innerLeft, monitorTop, innerRight - innerLeft, monitorBottom - monitorTop, 0xFF357987);
-            int glowInset = Math.max(2, (int)Math.round(2.0 * zoom));
+            int glowInset = 2;
             if (innerRight - innerLeft > glowInset * 2 + 4 && monitorBottom - monitorTop > glowInset * 2 + 4) {
                 graphics.outline(innerLeft + glowInset, monitorTop + glowInset,
                         innerRight - innerLeft - glowInset * 2,
@@ -106,11 +101,9 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         }
 
         logic$textInRect(graphics, BuiltinDevices.DISPLAY_LABEL,
-                innerLeft, innerTop, innerRight, monitorTop - 1,
-                1.35f, 0xFFF0FAFC);
+                innerLeft, innerTop, innerRight, monitorTop - 1, 0xFFF0FAFC);
         logic$textInRect(graphics, "PIXEL  ->  DATA64",
-                innerLeft, monitorBottom + 1, innerRight, innerBottom,
-                0.95f, 0xFF86C7D3);
+                innerLeft, monitorBottom + 1, innerRight, innerBottom, 0xFF86C7D3);
 
         logic$ports(graphics, node, inputs, outputs);
     }
@@ -129,29 +122,32 @@ public abstract class CircuitCanvasCustomChipTextMixin {
         }
     }
 
+    /** Fixed one-font-pixel-scale text. If the body is too narrow, truncate instead of scaling. */
     @Unique
     private void logic$textInRect(GuiGraphicsExtractor graphics, String text,
-                                  int left, int top, int right, int bottom,
-                                  float scaleCap, int color) {
+                                  int left, int top, int right, int bottom, int color) {
         if (text == null || text.isBlank()) return;
-        int availableWidth = Math.max(1, right - left);
-        int availableHeight = Math.max(1, bottom - top);
-        int rawWidth = Math.max(1, font().width(text));
-        double rawHeight = 9.0;
+        int availableWidth = Math.max(0, right - left);
+        int availableHeight = Math.max(0, bottom - top);
+        if (availableWidth <= 0 || availableHeight <= 2) return;
 
-        float zoomCap = (float)Math.max(0.24, Math.min(1.65, zoom));
-        float widthFit = (float)(availableWidth / (double)rawWidth);
-        float heightFit = (float)(availableHeight / rawHeight);
-        float scale = Math.max(0.20f, Math.min(scaleCap, Math.min(zoomCap, Math.min(widthFit, heightFit))));
+        String shown = logic$fit(text, availableWidth);
+        if (shown.isEmpty()) return;
+        int rawWidth = font().width(shown);
+        int tx = left + Math.max(0, (availableWidth - rawWidth) / 2);
+        int ty = top + Math.max(0, (availableHeight - 8) / 2);
+        graphics.text(font(), shown, tx, ty, color, false);
+    }
 
-        float centerX = (left + right) * 0.5f;
-        float centerY = (top + bottom) * 0.5f;
-        graphics.pose().pushMatrix();
-        graphics.pose().scale(scale);
-        int tx = Math.round(centerX / scale - rawWidth / 2.0f);
-        int ty = Math.round(centerY / scale - (float)rawHeight / 2.0f);
-        graphics.text(font(), text, tx, ty, color, false);
-        graphics.pose().popMatrix();
+    @Unique
+    private String logic$fit(String text, int maxWidth) {
+        if (maxWidth <= 0) return "";
+        if (font().width(text) <= maxWidth) return text;
+        String suffix = "…";
+        if (font().width(suffix) > maxWidth) return "";
+        int end = text.length();
+        while (end > 0 && font().width(text.substring(0, end) + suffix) > maxWidth) end--;
+        return text.substring(0, end) + suffix;
     }
 
     @Unique
