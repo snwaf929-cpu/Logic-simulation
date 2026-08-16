@@ -26,7 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * V2.1E CHIP safety guard. Named reusable CHIP edits get Save / Discard / Cancel before destructive navigation.
+ * V2.1E CHIP safety guard. Named and untitled CHIP edits get Save / Discard / Cancel before destructive navigation.
  * Editable BOARD workspaces are deliberately excluded because their established workflow autosaves project state.
  */
 @Mixin(value = CircuitEditorScreen.class, priority = 2350)
@@ -41,6 +41,7 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
     @Shadow private void setEditorEnabled(boolean enabled) { throw new AssertionError(); }
 
     @Unique private final Map<String, CircuitDocument> logic$savedBaselines = new LinkedHashMap<>();
+    @Unique private CircuitDocument logic$untitledBaseline;
     @Unique private LogicPendingAction logic$pendingAction = LogicPendingAction.NONE;
     @Unique private String logic$pendingChip;
     @Unique private boolean logic$promptVisible;
@@ -49,8 +50,8 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
     @Unique private boolean logic$performingGuardSave;
 
     @Inject(method = "init", at = @At("RETURN"))
-    private void logic$rememberInitialChip(CallbackInfo ci) {
-        logic$ensureBaselineForCurrentChip();
+    private void logic$rememberInitialWorkspace(CallbackInfo ci) {
+        logic$ensureBaselineForCurrentWorkspace();
     }
 
     @Inject(method = "openChip", at = @At("HEAD"), cancellable = true)
@@ -64,6 +65,7 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
 
     @Inject(method = "openChip", at = @At("RETURN"))
     private void logic$baselineOpenedChip(String name, CallbackInfo ci) {
+        logic$untitledBaseline = null;
         logic$replaceBaselineFromCanvas();
     }
 
@@ -78,12 +80,13 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
 
     @Inject(method = "newCircuit", at = @At("RETURN"))
     private void logic$baselineNewWorkspace(CallbackInfo ci) {
-        logic$ensureBaselineForCurrentChip();
+        if (logic$isBoardWorkspace()) return;
+        logic$untitledBaseline = canvas == null ? null : EditorDocumentSnapshot.copy(canvas.document());
     }
 
     @Inject(method = "onCanvasNavigationChanged", at = @At("RETURN"))
     private void logic$baselineNavigation(CircuitCanvasWidget.NavigationState state, CallbackInfo ci) {
-        logic$ensureBaselineForCurrentChip();
+        logic$ensureBaselineForCurrentWorkspace();
     }
 
     @Inject(method = "applySave", at = @At("HEAD"))
@@ -93,6 +96,7 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
 
     @Inject(method = "applySave", at = @At("RETURN"))
     private void logic$guardSaveFinished(CallbackInfo ci) {
+        logic$untitledBaseline = null;
         logic$replaceBaselineFromCanvas();
         if (!logic$guardSaveContinuation) {
             logic$performingGuardSave = false;
@@ -105,7 +109,6 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
 
     @Inject(method = "applyModal", at = @At("RETURN"))
     private void logic$guardApplyModalFinished(CallbackInfo ci) {
-        // applyModal catches save failures; ensure a later Cancel is not mistaken for the successful applySave closeModal.
         logic$performingGuardSave = false;
     }
 
@@ -160,7 +163,7 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
         graphics.fill(x, y, x + w, y + h, 0xFF171D24);
         graphics.outline(x, y, w, h, 0xFF5C6B7A);
         graphics.text(Minecraft.getInstance().font, "UNSAVED CHIP CHANGES", x + 16, y + 14, 0xFFFFD56A, true);
-        String chip = currentChipName == null || currentChipName.isBlank() ? "this CHIP" : currentChipName;
+        String chip = currentChipName == null || currentChipName.isBlank() ? "this untitled CHIP" : currentChipName;
         graphics.text(Minecraft.getInstance().font, "Save changes to " + logic$truncate(chip, 27) + " before continuing?",
                 x + 16, y + 38, 0xFFD7DEE8, false);
         graphics.text(Minecraft.getInstance().font, "S/Enter = Save    D = Discard    C/Esc = Cancel",
@@ -172,11 +175,13 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
 
     @Unique
     private boolean logic$needsChipPrompt() {
-        if (canvas == null || currentChipName == null || currentChipName.isBlank()) return false;
-        Object self = this;
-        if (self instanceof EditorWorkspaceAccess workspace && workspace.logic$isBoardWorkspace()) return false;
-        CircuitDocument baseline = logic$baselineFor(currentChipName);
-        return baseline != null && !EditorDocumentSnapshot.same(baseline, canvas.document());
+        if (canvas == null || logic$isBoardWorkspace()) return false;
+        if (currentChipName != null && !currentChipName.isBlank()) {
+            CircuitDocument baseline = logic$baselineFor(currentChipName);
+            return baseline != null && !EditorDocumentSnapshot.same(baseline, canvas.document());
+        }
+        if (logic$untitledBaseline == null) logic$untitledBaseline = EditorDocumentSnapshot.copy(canvas.document());
+        return !EditorDocumentSnapshot.same(logic$untitledBaseline, canvas.document());
     }
 
     @Unique
@@ -196,14 +201,29 @@ public abstract class CircuitEditorDirtyGuardV21EMixin {
     }
 
     @Unique
-    private void logic$ensureBaselineForCurrentChip() {
-        if (currentChipName != null && !currentChipName.isBlank()) logic$baselineFor(currentChipName);
+    private void logic$ensureBaselineForCurrentWorkspace() {
+        if (canvas == null || logic$isBoardWorkspace()) return;
+        if (currentChipName != null && !currentChipName.isBlank()) {
+            logic$baselineFor(currentChipName);
+            return;
+        }
+        if (logic$untitledBaseline == null) logic$untitledBaseline = EditorDocumentSnapshot.copy(canvas.document());
     }
 
     @Unique
     private void logic$replaceBaselineFromCanvas() {
-        if (canvas == null || currentChipName == null || currentChipName.isBlank()) return;
+        if (canvas == null || logic$isBoardWorkspace()) return;
+        if (currentChipName == null || currentChipName.isBlank()) {
+            logic$untitledBaseline = EditorDocumentSnapshot.copy(canvas.document());
+            return;
+        }
         logic$savedBaselines.put(logic$key(currentChipName), EditorDocumentSnapshot.copy(canvas.document()));
+    }
+
+    @Unique
+    private boolean logic$isBoardWorkspace() {
+        Object self = this;
+        return self instanceof EditorWorkspaceAccess workspace && workspace.logic$isBoardWorkspace();
     }
 
     @Unique
