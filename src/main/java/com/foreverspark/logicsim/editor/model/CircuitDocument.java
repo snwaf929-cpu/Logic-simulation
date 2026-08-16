@@ -1,5 +1,7 @@
 package com.foreverspark.logicsim.editor.model;
 
+import com.foreverspark.logicsim.block.CircuitWorkerPolicy;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -10,6 +12,11 @@ public final class CircuitDocument {
     public int nextNodeId = 1;
     /** Stable monotonically increasing id for cloned BOARD template groups. */
     public int nextTemplateInstanceId = 1;
+    /**
+     * Per-physical-BOARD simulation parallelism request. 0=AUTO, 1=single-worker, N=at most N workers.
+     * The runtime always clamps this against CircuitWorkerPolicy.systemMaximum() on the host machine.
+     */
+    public int simulationWorkers = CircuitWorkerPolicy.DEFAULT;
     public List<EditorNode> nodes = new ArrayList<>();
     public List<WireConnection> wires = new ArrayList<>();
 
@@ -64,6 +71,7 @@ public final class CircuitDocument {
     }
 
     public void normalize() {
+        simulationWorkers = CircuitWorkerPolicy.normalizePersisted(simulationWorkers);
         if (nodes == null) nodes = new ArrayList<>();
         nodes.removeIf(node -> node == null);
         if (wires == null) wires = new ArrayList<>();
