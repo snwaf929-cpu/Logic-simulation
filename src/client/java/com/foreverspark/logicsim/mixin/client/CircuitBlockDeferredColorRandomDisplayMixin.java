@@ -49,6 +49,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
     @Unique private String logic$lastSignature = "";
     @Unique private String logic$lastParallelSignature = "";
     @Unique private int logic$lastParallelExecutionWorkers = -1;
+    @Unique private int logic$lastParallelFramebufferWorkers = -1;
 
     @Inject(method = "refreshExternalDeviceTargets", at = @At("TAIL"))
     private void logic$refreshDeferredColorRandomDisplay(CallbackInfo ci) {
@@ -162,13 +163,14 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             int requested = CircuitSimulationWorker.configuredWorkerBudget(self);
             if (parallelPlan != null && workers > 1) {
                 logic$logParallel(self, requested, workers, true, parallelPlan);
-                long emitted = parallelPlan.advance(self, elapsedNanos, bulkBudget, surface::recordBatch);
+                long emitted = parallelPlan.advanceToSurface(self, elapsedNanos, bulkBudget, surface);
                 logic$logParallelExecution(self, parallelPlan);
                 return emitted;
             }
 
             logic$logParallel(self, requested, workers, false, parallelPlan);
             logic$lastParallelExecutionWorkers = -1;
+            logic$lastParallelFramebufferWorkers = -1;
             return plan.advance(elapsedNanos, bulkBudget, surface::recordBatch);
         }
 
@@ -182,6 +184,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
         logic$lastSignature = "";
         logic$lastParallelSignature = "";
         logic$lastParallelExecutionWorkers = -1;
+        logic$lastParallelFramebufferWorkers = -1;
     }
 
     @Unique
@@ -193,6 +196,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
         logic$resetTracker = null;
         logic$deviceIndex = -1;
         logic$lastParallelExecutionWorkers = -1;
+        logic$lastParallelFramebufferWorkers = -1;
         if (synchronizeFallback && old != null) old.synchronizeFallback();
     }
 
@@ -267,14 +271,14 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             ParallelDeferredColorDisplayFastPath.Plan plan
     ) {
         String signature = active
-                ? "active:" + requested + ":" + resolved
+                ? "active-v11:" + requested + ":" + resolved
                 : "inactive:" + requested + ":" + resolved + ":" + (plan == null ? "compile-unavailable" : "single-worker");
         if (signature.equals(logic$lastParallelSignature)) return;
         logic$lastParallelSignature = signature;
 
         if (active) {
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK PARALLEL] circuit={} active=true mode=counter-ranged-rgb-v10 configuredWorkers={} resolvedWorkers={} globalWorkers={} minCyclesPerWorker={} deterministicCommit=single-barrier sharedPool=true",
+                    "[CLOCK PARALLEL] circuit={} active=true mode=partitioned-rgb-framebuffer-v11 configuredWorkers={} resolvedWorkers={} globalWorkers={} minCyclesPerWorker={} generation=parallel-counter-ranges framebuffer=parallel-y-owners deterministicCommit=two-stage-barrier serialPublish=revision-only sharedPool=true",
                     self.getBlockPos(),
                     requested,
                     resolved,
@@ -294,13 +298,19 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
 
     @Unique
     private void logic$logParallelExecution(CircuitBlockEntity self, ParallelDeferredColorDisplayFastPath.Plan plan) {
-        int activeWorkers = plan.lastParallelWorkers();
-        if (activeWorkers == logic$lastParallelExecutionWorkers) return;
-        logic$lastParallelExecutionWorkers = activeWorkers;
+        if (plan.lastClockCycles() <= 0L) return;
+        int generationWorkers = plan.lastParallelWorkers();
+        int framebufferWorkers = plan.lastFramebufferWorkers();
+        if (generationWorkers == logic$lastParallelExecutionWorkers
+                && framebufferWorkers == logic$lastParallelFramebufferWorkers) return;
+        logic$lastParallelExecutionWorkers = generationWorkers;
+        logic$lastParallelFramebufferWorkers = framebufferWorkers;
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK PARALLEL EXEC] circuit={} mode=counter-ranged-rgb-v10 activeWorkers={} clockCycles={} displayWrites={} configuredCeiling={}",
+                "[CLOCK PARALLEL EXEC] circuit={} mode=partitioned-rgb-framebuffer-v11 generationWorkers={} framebufferWorkers={} framebufferOwners={} clockCycles={} displayWrites={} configuredCeiling={} serialFramebufferPass=false serialPublish=revision-only",
                 self.getBlockPos(),
-                activeWorkers,
+                generationWorkers,
+                framebufferWorkers,
+                plan.lastFramebufferOwners(),
                 plan.lastClockCycles(),
                 plan.lastDisplayWrites(),
                 CircuitSimulationWorker.resolvedWorkerBudget(self)
