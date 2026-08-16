@@ -14,11 +14,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * v6 hot-loop replacement for DeferredColorRandomDisplayFastPath.ColorSampler.
+ * Hot-loop replacement for DeferredColorRandomDisplayFastPath.ColorSampler.
  *
- * <p>Arbitrary RGB probabilities are compiled to a cache-sized mask table. Runtime cost for all arbitrary COLOR lanes
- * is one xorshift32 state transition plus one table load, instead of one packed byte comparison/RNG word per eight
- * lanes. Common 25/50/75/100% lanes retain the established bitwise sampler semantics.</p>
+ * <p>For the contiguous 16-bit RGB565 case, arbitrary probabilities use one xorshift32 transition plus two tiny
+ * 256-entry byte-table loads. The complete lookup footprint is 512 bytes while preserving the existing 1/256 RANDOM
+ * probability quantum. Common 25/50/75/100% lanes retain the established bitwise sampler semantics.</p>
  *
  * <p>The sample method is overwritten directly rather than injected with a cancellable callback. This method can run
  * tens of millions of times per second, so CallbackInfoReturnable construction/return boxing must not exist in the
@@ -41,6 +41,7 @@ public abstract class DeferredColorSamplerSingleWordMixin {
     @Unique private SingleWordRgbMaskSampler logic$singleWordSampler;
     @Unique private long logic$rng0;
     @Unique private long logic$rng1;
+    @Unique private boolean logic$arbitraryOnly;
 
     @Inject(method = "<init>(JJJJJJ[JJ)V", at = @At("TAIL"))
     private void logic$compileSingleWordMask(
@@ -62,14 +63,17 @@ public abstract class DeferredColorSamplerSingleWordMixin {
         logic$rng0 = logic$mix64(seed);
         logic$rng1 = logic$mix64(seed + LOGIC_RNG_SEED_GAMMA);
         if ((logic$rng0 | logic$rng1) == 0L) logic$rng1 = LOGIC_RNG_NONZERO_FALLBACK;
+        logic$arbitraryOnly = arbitraryMask == outputMask && activeCommonMask == 0L && chance100Mask == 0L;
 
         if (arbitraryMask != 0L && LOGIC_LOGGED.compareAndSet(false, true)) {
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK RGB SAMPLER] active=true mode=single-word-32bit-mask-v6-direct arbitraryLanes={} tableEntries={} compact16={} rngWordsPerColor={} probabilityQuantum=1/256 callbackFree=true",
+                    "[CLOCK RGB SAMPLER] active=true mode=split-table-32bit-mask-v9 arbitraryLanes={} tableEntries={} tableBytes={} compact16={} rngWordsPerColor={} arbitraryOnly={} probabilityQuantum=1/256 callbackFree=true",
                     logic$singleWordSampler.laneCount(),
                     logic$singleWordSampler.tableEntries(),
+                    logic$singleWordSampler.tableBytes(),
                     logic$singleWordSampler.compact16(),
-                    logic$singleWordSampler.rngWordsPerSample()
+                    logic$singleWordSampler.rngWordsPerSample(),
+                    logic$arbitraryOnly
             );
         }
     }
@@ -84,6 +88,10 @@ public abstract class DeferredColorSamplerSingleWordMixin {
         if (sampler == null) {
             throw new IllegalStateException("Single-word RGB sampler was not initialized");
         }
+
+        // The current 10%/5% RGB stress topology puts all 16 COLOR lanes in the arbitrary sampler. Avoid the general
+        // common-lane merge entirely in that overwhelmingly hot case.
+        if (logic$arbitraryOnly) return sampler.sampleMask();
 
         long result = chance100Mask;
         if (activeCommonMask != 0L) {
