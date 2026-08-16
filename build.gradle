@@ -161,6 +161,14 @@ tasks.register('parallelDisplayCommitSelfTest', JavaExec) {
     mainClass = 'com.foreverspark.logicsim.client.render.ParallelRealtimeDisplayCommitSelfTest'
 }
 
+tasks.register('editorCompletionSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Validates stable CHIP port ordering, BOARD hardware signatures, and editor metadata snapshots.'
+    dependsOn clientClasses
+    classpath = sourceSets.client.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.foreverspark.logicsim.client.screen.v2.EditorCompletionSelfTest'
+}
+
 tasks.named('check') {
     dependsOn tasks.named('displaySelfTest')
     dependsOn tasks.named('displayPipelineSelfTest')
@@ -173,6 +181,7 @@ tasks.named('check') {
     dependsOn tasks.named('singleWordRgbMaskSelfTest')
     dependsOn tasks.named('displayBatch32SelfTest')
     dependsOn tasks.named('parallelDisplayCommitSelfTest')
+    dependsOn tasks.named('editorCompletionSelfTest')
 }
 
 tasks.register('clientSelfTest', JavaExec) {
