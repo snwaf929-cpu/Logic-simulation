@@ -18,6 +18,7 @@ public final class EditorDocumentSnapshot {
         result.formatVersion = source.formatVersion;
         result.nextNodeId = source.nextNodeId;
         result.nextTemplateInstanceId = source.nextTemplateInstanceId;
+        result.simulationWorkers = source.simulationWorkers;
         result.nodes = new ArrayList<>(source.nodes.size());
         for (EditorNode node : source.nodes) result.nodes.add(copyNode(node));
         result.wires = new ArrayList<>(source.wires.size());
@@ -29,7 +30,8 @@ public final class EditorDocumentSnapshot {
     public static boolean same(CircuitDocument a, CircuitDocument b) {
         if (a == b) return true;
         if (a == null || b == null) return false;
-        if (a.formatVersion != b.formatVersion || a.nextNodeId != b.nextNodeId || a.nextTemplateInstanceId != b.nextTemplateInstanceId) return false;
+        if (a.formatVersion != b.formatVersion || a.nextNodeId != b.nextNodeId || a.nextTemplateInstanceId != b.nextTemplateInstanceId
+                || a.simulationWorkers != b.simulationWorkers) return false;
         if (a.nodes.size() != b.nodes.size() || a.wires.size() != b.wires.size()) return false;
         for (int i = 0; i < a.nodes.size(); i++) if (!sameNode(a.nodes.get(i), b.nodes.get(i))) return false;
         for (int i = 0; i < a.wires.size(); i++) if (!a.wires.get(i).equals(b.wires.get(i))) return false;
@@ -45,6 +47,7 @@ public final class EditorDocumentSnapshot {
         node.width = source.width;
         node.laneWidth = source.laneWidth;
         node.label = source.label == null ? "" : source.label;
+        node.chipPortOrder = source.chipPortOrder;
         node.chipName = source.chipName == null ? "" : source.chipName;
         node.constantValue = source.constantValue;
         node.inputDefaultValue = source.inputDefaultValue;
@@ -86,6 +89,7 @@ public final class EditorDocumentSnapshot {
     private static boolean sameNode(EditorNode a, EditorNode b) {
         return a.id == b.id && a.kind == b.kind && Double.compare(a.x, b.x) == 0 && Double.compare(a.y, b.y) == 0
                 && a.width == b.width && a.laneWidth == b.laneWidth && safe(a.label).equals(safe(b.label))
+                && a.chipPortOrder == b.chipPortOrder
                 && safe(a.chipName).equals(safe(b.chipName)) && a.constantValue == b.constantValue
                 && a.inputDefaultValue == b.inputDefaultValue && a.clockSource == b.clockSource
                 && a.clockFrequencyHz == b.clockFrequencyHz && a.randomSource == b.randomSource
