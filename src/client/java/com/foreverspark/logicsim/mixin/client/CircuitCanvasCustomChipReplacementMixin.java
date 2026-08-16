@@ -16,6 +16,9 @@ import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,6 +36,19 @@ public abstract class CircuitCanvasCustomChipReplacementMixin implements CustomC
     @Shadow @Final private Consumer<String> status;
 
     @Shadow private void recompile() { throw new AssertionError(); }
+
+    @Inject(method = "setCustomChipPlacement", at = @At("TAIL"))
+    private void logic$showReplacementHint(String chipName, CallbackInfo ci) {
+        if (selectedNodeIds.size() != 1 || selectedNodeId == null || placementChipName == null) return;
+        try {
+            EditorNode selected = document.node(selectedNodeId);
+            if (selected.kind == NodeKind.CUSTOM_CHIP && !placementChipName.equals(selected.chipName)) {
+                status.accept("Selected library CHIP " + placementChipName
+                        + " — left-click empty canvas to place, or Ctrl+R to replace the selected CHIP and keep compatible wires");
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
 
     @Override
     public boolean logic$replaceSelectedWithPlacementChip() {
@@ -73,7 +89,7 @@ public abstract class CircuitCanvasCustomChipReplacementMixin implements CustomC
         candidateNode.chipName = replacement;
         List<PortSpec> newInputs = NodePorts.inputs(candidateNode, chips);
         List<PortSpec> newOutputs = NodePorts.outputs(candidateNode, chips);
-        int candidateRemoved = logic$removeIncompatibleWires(candidate, candidateNode.id, oldInputs, oldOutputs, newInputs, newOutputs);
+        logic$removeIncompatibleWires(candidate, candidateNode.id, oldInputs, oldOutputs, newInputs, newOutputs);
         try {
             CircuitCompiler.compile(candidate, chips);
         } catch (RuntimeException error) {
@@ -92,8 +108,7 @@ public abstract class CircuitCanvasCustomChipReplacementMixin implements CustomC
         int kept = logic$attachedWireCount(document, selected.id);
         status.accept("Replaced " + (oldName.isBlank() ? "CHIP" : oldName) + " -> " + replacement
                 + " | kept " + kept + " compatible routed wire" + (kept == 1 ? "" : "s")
-                + (removed > 0 ? ", removed " + removed + " incompatible" : "")
-                + (candidateRemoved == removed ? "" : ""));
+                + (removed > 0 ? ", removed " + removed + " incompatible" : ""));
         return true;
     }
 
