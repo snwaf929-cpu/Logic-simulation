@@ -1,6 +1,8 @@
 package com.foreverspark.logicsim.network;
 
 import com.foreverspark.logicsim.block.CircuitBlockEntity;
+import com.foreverspark.logicsim.block.CircuitSimulationWorker;
+import com.foreverspark.logicsim.block.CircuitWorkerPolicy;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
@@ -27,6 +29,12 @@ public final class CircuitStatsNetworking {
             long actualHz = circuit.lastClockActualHz();
             long pending = circuit.lastClockPendingEdges();
             double wallMs = circuit.lastClockWallNanos() / 1_000_000.0;
+            int configuredWorkers = CircuitSimulationWorker.configuredWorkerBudget(circuit);
+            int resolvedWorkers = CircuitSimulationWorker.resolvedWorkerBudget(circuit);
+            int globalWorkers = CircuitSimulationWorker.workerCount();
+            String workerLabel = configuredWorkers == CircuitWorkerPolicy.AUTO
+                    ? "AUTO->" + resolvedWorkers
+                    : Integer.toString(resolvedWorkers);
             String state = circuit.runtimeError().isBlank()
                     ? (pending == 0L ? "KEEPING UP" : "BEHIND")
                     : "ERROR";
@@ -34,6 +42,7 @@ public final class CircuitStatsNetworking {
                     + " | target: " + targetHz + " Hz"
                     + " | actual: " + actualHz + " Hz"
                     + " | backlog: " + pending + " edges"
+                    + " | workers: " + workerLabel + "/" + globalWorkers
                     + " | worker slice: " + String.format(java.util.Locale.ROOT, "%.3f", wallMs) + " ms"
                     + " | " + state;
             player.sendSystemMessage(Component.literal(message));
