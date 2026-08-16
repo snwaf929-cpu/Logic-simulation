@@ -9,19 +9,19 @@ import com.foreverspark.logicsim.editor.runtime.CircuitTimingController;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 
 /**
- * v10 multi-worker companion for DeferredColorRandomDisplayFastPath.
+ * v11 multi-worker companion for DeferredColorRandomDisplayFastPath.
  *
  * <p>The v9 one-worker path owns mutable X/Y and RGB PRNG state, so splitting one batch between CPU cores would race.
- * This plan keeps the already-proven v9 topology and boundary mapping but uses a counter-addressed random permutation:
- * each virtual cycle can therefore be evaluated independently by a different worker. Contiguous cycle ranges write to
- * private scratch buffers, then the coordinator publishes those buffers in original cycle order. The final packed
- * RANDOM state is committed once after the barrier, preserving deterministic simulator state without concurrent writes
- * into CircuitSimulator.</p>
+ * This plan keeps the proven topology and boundary mapping but uses a counter-addressed random permutation: every
+ * virtual cycle can be evaluated independently. Generation ranges are deterministic and the final packed RANDOM state
+ * is committed once after the barrier.</p>
  *
- * <p>This specialization is deliberately limited to the existing zero-gate physical DISPLAY path. It does not claim
- * that arbitrary stateful NAND feedback can be parallelized by cycle; those circuits retain ordered execution.</p>
+ * <p>For native 64px/tile realtime DISPLAY walls, generation workers also bucket accepted pixels by disjoint Y-owner
+ * and precompute framebuffer index + RGB565. A second worker barrier applies those buckets in parallel while preserving
+ * original CLOCK order inside every owner. Only revision/non-zero publication remains serial.</p>
  */
 public final class ParallelDeferredColorDisplayFastPath {
     private static final long PIXEL_OPCODE = (long) DisplayCommandCodec.OP_PIXEL << 48;
@@ -115,7 +115,7 @@ public final class ParallelDeferredColorDisplayFastPath {
                     seed
             );
             return new CompileResult(plan,
-                    "active-counter-ranges:arbitraryColorLanes=" + arbitraryColor.laneCount()
+                    "active-counter-ranges-v11:arbitraryColorLanes=" + arbitraryColor.laneCount()
                             + ":tableBytes=" + arbitraryColor.tableBytes());
         } catch (IllegalAccessException exception) {
             return new CompileResult(null, "reflection-access:" + exception.getClass().getSimpleName());
@@ -151,12 +151,28 @@ public final class ParallelDeferredColorDisplayFastPath {
         private final int colorSourceShift;
         private final int xSourceShift;
         private final int ySourceShift;
+
+        // Legacy/generic publication retained for tests and non-native surfaces.
         private final long[][] scratchByWorker = new long[CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS][];
         private final int[] outputCounts = new int[CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS];
+
+        // Native64 v11: generation-range -> framebuffer-owner -> packed (pixelIndex << 16 | RGB565).
+        private final long[][][] ownerScratch = new long[CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS]
+                [CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS][];
+        private final int[][] ownerCounts = new int[CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS]
+                [CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS];
+        private final int[] commitNonZeroDeltas = new int[CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS];
+        private final long[] commitWritesPerOwner = new long[CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS];
+        private int[] ownerByY = new int[0];
+        private int ownerMapHeight = -1;
+        private int ownerMapCount = -1;
+
         private long sequence;
         private long lastClockCycles;
         private long lastDisplayWrites;
         private int lastParallelWorkers = 1;
+        private int lastFramebufferWorkers = 1;
+        private int lastFramebufferOwners = 1;
 
         private Plan(
                 DeferredColorRandomDisplayFastPath.Plan source,
@@ -208,11 +224,38 @@ public final class ParallelDeferredColorDisplayFastPath {
             this.sequence = seed;
         }
 
+        /** Generic v10-compatible path used by regression tests and non-native sinks. */
         public long advance(
                 CircuitBlockEntity circuit,
                 long elapsedNanos,
                 long edgeBudget,
                 CircuitTimingController.LongBatchConsumer sink
+        ) {
+            return advanceInternal(circuit, elapsedNanos, edgeBudget, sink, null);
+        }
+
+        /** Native64 v11 path: parallel generation + parallel disjoint-row framebuffer commit. */
+        public long advanceToSurface(
+                CircuitBlockEntity circuit,
+                long elapsedNanos,
+                long edgeBudget,
+                RealtimeDisplaySurface.Surface surface
+        ) {
+            if (surface == null) return advanceInternal(circuit, elapsedNanos, edgeBudget, null, null);
+            if (surface.density() != 64
+                    || surface.logicalWidth() != surface.backingWidth()
+                    || surface.logicalHeight() != surface.backingHeight()) {
+                return advanceInternal(circuit, elapsedNanos, edgeBudget, surface::recordBatch, null);
+            }
+            return advanceInternal(circuit, elapsedNanos, edgeBudget, null, surface);
+        }
+
+        private long advanceInternal(
+                CircuitBlockEntity circuit,
+                long elapsedNanos,
+                long edgeBudget,
+                CircuitTimingController.LongBatchConsumer sink,
+                RealtimeDisplaySurface.Surface directSurface
         ) {
             if (circuit == null) throw new IllegalArgumentException("Circuit Block is required");
             if (elapsedNanos < 0L || edgeBudget < 0L) throw new IllegalArgumentException("clock arguments must be >= 0");
@@ -224,7 +267,6 @@ public final class ParallelDeferredColorDisplayFastPath {
             if (!clock.timing().running()) {
                 lastClockCycles = 0L;
                 lastDisplayWrites = 0L;
-                lastParallelWorkers = 1;
                 return 0L;
             }
 
@@ -233,7 +275,6 @@ public final class ParallelDeferredColorDisplayFastPath {
             if (risingEdges <= 0L) {
                 lastClockCycles = 0L;
                 lastDisplayWrites = 0L;
-                lastParallelWorkers = 1;
                 return emitted;
             }
             if (risingEdges > Integer.MAX_VALUE) {
@@ -244,6 +285,17 @@ public final class ParallelDeferredColorDisplayFastPath {
             long counterBase = sequence;
             long preserved = state & ~clockOutputMask;
             boolean fixedCoordinateReject = (preserved & coordinateRejectLaneMask) != 0L;
+
+            int ownerCount = directSurface == null
+                    ? 0
+                    : Math.max(1, Math.min(
+                            CircuitSimulationWorker.resolvedWorkerBudget(circuit),
+                            Math.min(CircuitWorkerPolicyBridge.MAX_PERSISTED_WORKERS, directSurface.logicalHeight())
+                    ));
+            int[] ownerMap = ownerCount > 0 ? ensureOwnerMap(directSurface.logicalHeight(), ownerCount) : null;
+            int logicalWidth = directSurface == null ? 0 : directSurface.logicalWidth();
+            int logicalHeight = directSurface == null ? 0 : directSurface.logicalHeight();
+            int backingWidth = directSurface == null ? 0 : directSurface.backingWidth();
 
             int ranges = CircuitSimulationWorker.runParallelRanges(
                     circuit,
@@ -256,19 +308,37 @@ public final class ParallelDeferredColorDisplayFastPath {
                             counterBase,
                             preserved,
                             fixedCoordinateReject,
-                            sink != null
+                            sink != null,
+                            ownerCount,
+                            ownerMap,
+                            logicalWidth,
+                            logicalHeight,
+                            backingWidth
                     )
             );
 
             long displayWrites = 0L;
-            if (sink != null) {
+            for (int taskIndex = 0; taskIndex < ranges; taskIndex++) displayWrites += outputCounts[taskIndex];
+
+            if (directSurface != null && ownerCount > 0 && displayWrites > 0L) {
+                lastFramebufferWorkers = ParallelRealtimeDisplayCommitFastPath.commit(
+                        circuit,
+                        directSurface,
+                        ownerScratch,
+                        ownerCounts,
+                        ranges,
+                        ownerCount,
+                        commitNonZeroDeltas,
+                        commitWritesPerOwner
+                );
+                lastFramebufferOwners = ownerCount;
+            } else if (sink != null) {
                 for (int taskIndex = 0; taskIndex < ranges; taskIndex++) {
                     int count = outputCounts[taskIndex];
-                    displayWrites += count;
                     if (count > 0) sink.accept(scratchByWorker[taskIndex], count);
                 }
-            } else {
-                for (int taskIndex = 0; taskIndex < ranges; taskIndex++) displayWrites += outputCounts[taskIndex];
+                lastFramebufferWorkers = 1;
+                lastFramebufferOwners = 1;
             }
 
             // The final packed RANDOM state is derived by cycle index, so it is independent of task completion order.
@@ -287,6 +357,8 @@ public final class ParallelDeferredColorDisplayFastPath {
         public long lastClockCycles() { return lastClockCycles; }
         public long lastDisplayWrites() { return lastDisplayWrites; }
         public int lastParallelWorkers() { return lastParallelWorkers; }
+        public int lastFramebufferWorkers() { return lastFramebufferWorkers; }
+        public int lastFramebufferOwners() { return lastFramebufferOwners; }
         public int minimumCyclesPerWorker() { return MIN_CYCLES_PER_WORKER; }
 
         private void runRange(
@@ -296,10 +368,29 @@ public final class ParallelDeferredColorDisplayFastPath {
                 long counterBase,
                 long preserved,
                 boolean fixedCoordinateReject,
-                boolean produceCommands
+                boolean produceLegacyCommands,
+                int ownerCount,
+                int[] ownerMap,
+                int logicalWidth,
+                int logicalHeight,
+                int backingWidth
         ) {
             int capacity = end - start;
-            long[] scratch = produceCommands ? ensureScratch(taskIndex, capacity) : null;
+            boolean partitionedSurface = ownerCount > 0 && ownerMap != null;
+            long[] scratch = produceLegacyCommands ? ensureScratch(taskIndex, capacity) : null;
+
+            int[] taskOwnerCounts = null;
+            long[][] taskOwnerScratch = null;
+            if (partitionedSurface) {
+                taskOwnerCounts = ownerCounts[taskIndex];
+                taskOwnerScratch = ownerScratch[taskIndex];
+                Arrays.fill(taskOwnerCounts, 0, ownerCount, 0);
+                int expectedPerOwner = Math.max(256, ((capacity + ownerCount - 1) / ownerCount) << 1);
+                for (int owner = 0; owner < ownerCount; owner++) {
+                    ensureOwnerScratch(taskIndex, owner, expectedPerOwner);
+                }
+            }
+
             int out = 0;
             for (int cycle = start; cycle < end; cycle++) {
                 long key = counterBase + cycle;
@@ -307,8 +398,25 @@ public final class ParallelDeferredColorDisplayFastPath {
                 if (fixedCoordinateReject || (nonColor & clockCoordinateRejectMask) != 0L) continue;
 
                 long color = sampleColor(key);
-                if (scratch != null) {
-                    long finalState = preserved | nonColor | color;
+                long finalState = preserved | nonColor | color;
+
+                if (partitionedSurface) {
+                    long boundary = packBoundary(finalState);
+                    int globalX = (int) ((boundary >>> 16) & 0xFFFFL);
+                    int globalY = (int) ((boundary >>> 32) & 0xFFFFL);
+                    if (globalX >= logicalWidth || globalY >= logicalHeight) continue;
+
+                    int owner = ownerMap[globalY];
+                    int ownerOut = taskOwnerCounts[owner];
+                    long[] ownerBuffer = taskOwnerScratch[owner];
+                    if (ownerOut >= ownerBuffer.length) {
+                        ownerBuffer = ensureOwnerScratch(taskIndex, owner, ownerOut + 1);
+                        taskOwnerScratch[owner] = ownerBuffer;
+                    }
+                    int pixelIndex = globalY * backingWidth + globalX;
+                    ownerBuffer[ownerOut] = ((long) pixelIndex << 16) | (boundary & 0xFFFFL);
+                    taskOwnerCounts[owner] = ownerOut + 1;
+                } else if (scratch != null) {
                     scratch[out] = PIXEL_OPCODE | packBoundary(finalState);
                 }
                 out++;
@@ -324,6 +432,30 @@ public final class ParallelDeferredColorDisplayFastPath {
             long[] replacement = new long[next];
             scratchByWorker[taskIndex] = replacement;
             return replacement;
+        }
+
+        private long[] ensureOwnerScratch(int taskIndex, int owner, int count) {
+            long[] current = ownerScratch[taskIndex][owner];
+            if (current != null && current.length >= count) return current;
+            int next = current == null ? 256 : current.length;
+            while (next < count) next = Math.max(next + 1, next << 1);
+            long[] replacement = new long[next];
+            ownerScratch[taskIndex][owner] = replacement;
+            return replacement;
+        }
+
+        private int[] ensureOwnerMap(int logicalHeight, int ownerCount) {
+            if (ownerMapHeight == logicalHeight && ownerMapCount == ownerCount && ownerByY.length == logicalHeight) {
+                return ownerByY;
+            }
+            int[] map = ownerByY.length == logicalHeight ? ownerByY : new int[logicalHeight];
+            for (int y = 0; y < logicalHeight; y++) {
+                map[y] = Math.min(ownerCount - 1, (int) (((long) y * ownerCount) / logicalHeight));
+            }
+            ownerByY = map;
+            ownerMapHeight = logicalHeight;
+            ownerMapCount = ownerCount;
+            return map;
         }
 
         private long sampleNonColor(long key) {
