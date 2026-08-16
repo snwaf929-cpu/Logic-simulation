@@ -21,9 +21,10 @@ public final class EditorCompletionSelfTest {
     public static void main(String[] args) {
         chipPortOrderMigratesAndPersists();
         snapshotPreservesRuntimeMetadata();
+        wireHashRemainsStableDuringCadEdits();
         hardwareSignatureIgnoresCadOnlyChanges();
         hardwareSignatureTracksElectricalChanges();
-        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved cadRestart=false electricalRestart=true");
+        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved wireKeys=stable cadRestart=false electricalRestart=true");
     }
 
     private static void chipPortOrderMigratesAndPersists() {
@@ -32,10 +33,21 @@ public final class EditorCompletionSelfTest {
         EditorNode inB = chip.addNode(NodeKind.INPUT, 0, 24); inB.label = "B"; inB.width = 16;
         EditorNode outX = chip.addNode(NodeKind.OUTPUT, 120, 0); outX.label = "X";
         EditorNode outY = chip.addNode(NodeKind.OUTPUT, 120, 24); outY.label = "Y";
-        check(inA.chipPortOrder == -1 && inB.chipPortOrder == -1, "new/legacy terminals begin unassigned");
+        check(inA.chipPortOrder == 0 && inB.chipPortOrder == 1,
+                "new INPUT terminals receive durable order immediately");
+        check(outX.chipPortOrder == 0 && outY.chipPortOrder == 1,
+                "new OUTPUT terminals receive durable order immediately");
+
+        // Simulate a V2 file where the field did not exist. V3 normalization must recover the exact old node-id order.
+        inA.chipPortOrder = -1;
+        inB.chipPortOrder = -1;
+        outX.chipPortOrder = -1;
+        outY.chipPortOrder = -1;
+        chip.formatVersion = 2;
         chip.normalize();
         check(inA.chipPortOrder == 0 && inB.chipPortOrder == 1, "legacy INPUT order migrates from node id");
         check(outX.chipPortOrder == 0 && outY.chipPortOrder == 1, "legacy OUTPUT order migrates from node id");
+        check(chip.formatVersion == 3, "legacy V2 document upgrades to explicit CHIP-port-order V3");
 
         int swap = inA.chipPortOrder; inA.chipPortOrder = inB.chipPortOrder; inB.chipPortOrder = swap;
         swap = outX.chipPortOrder; outX.chipPortOrder = outY.chipPortOrder; outY.chipPortOrder = swap;
@@ -68,6 +80,18 @@ public final class EditorCompletionSelfTest {
         check(EditorDocumentSnapshot.same(board, copy), "snapshot equality includes worker budget and CHIP port order");
         copy.simulationWorkers = 2;
         check(!EditorDocumentSnapshot.same(board, copy), "worker-budget changes create undo/redo history entries");
+    }
+
+    private static void wireHashRemainsStableDuringCadEdits() {
+        CircuitDocument board = baseBoard();
+        var wire = board.wires.getFirst();
+        int before = wire.hashCode();
+        wire.setRoutePoints(List.of(new RoutePoint(24, 0), new RoutePoint(24, 36), new RoutePoint(72, 36)));
+        check(wire.hashCode() == before, "route-point edits keep WireConnection map hash stable");
+        wire.setLayer(WireLayer.BACK);
+        wire.setViaRouteIndices(List.of(1));
+        wire.setBranchStart(new RoutePoint(24, 18));
+        check(wire.hashCode() == before, "layer/via/branch edits keep WireConnection map hash stable");
     }
 
     private static void hardwareSignatureIgnoresCadOnlyChanges() {
