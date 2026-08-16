@@ -33,7 +33,7 @@ import java.lang.reflect.Method;
 @Mixin(value = CircuitBlockEntity.class, priority = 1600)
 public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
     @Unique private static final long LOGIC_GENERIC_EDGE_CHUNK = 4_096L;
-    @Unique private static final long LOGIC_RGB_EDGE_CHUNK = 131_072L;
+    @Unique private static final long LOGIC_RGB_EDGE_CHUNK = 262_144L;
 
     @Shadow private volatile CircuitProgramRuntime runtime;
 
@@ -140,7 +140,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
 
             long bulkBudget = edgeBudget;
             if (edgeBudget >= LOGIC_GENERIC_EDGE_CHUNK) {
-                bulkBudget = Math.min(LOGIC_RGB_EDGE_CHUNK, edgeBudget << 5);
+                bulkBudget = Math.min(LOGIC_RGB_EDGE_CHUNK, edgeBudget << 6);
             }
             return plan.advance(elapsedNanos, bulkBudget, surface::recordBatch);
         }
@@ -195,7 +195,7 @@ public abstract class CircuitBlockDeferredColorRandomDisplayMixin {
             RealtimeDisplaySurface.Surface surface = logic$surface;
             DisplayResetEdgeTracker tracker = logic$resetTracker;
             LogicSimulationMod.LOGGER.info(
-                    "[CLOCK BULK DEVICE RGB] circuit={} active=true resetSignalId={} deviceIndex={} randomLanes={} clockRandomLanes={} hotNonColorLanes={} deferredColorLanes={} arbitraryColorLanes={} arbitraryColorChunks={} externalTriggerGroups={} mode=deferred-packed-rgb-hotloop-v5 maxEdgeChunk={} logical={}x{} backing={}x{} coordinateRejectLanes={} boundaryPack={} batchPublication=true",
+                    "[CLOCK BULK DEVICE RGB] circuit={} active=true resetSignalId={} deviceIndex={} randomLanes={} clockRandomLanes={} hotNonColorLanes={} deferredColorLanes={} arbitraryColorLanes={} arbitraryColorChunks={} externalTriggerGroups={} mode=pipelined-rgb-hotloop-v9 maxEdgeChunk={} logical={}x{} backing={}x{} coordinateRejectLanes={} boundaryPack={} batchPublication=true scratchPipeline=true",
                     self.getBlockPos(),
                     tracker == null ? -1 : tracker.signalId(),
                     logic$deviceIndex,
