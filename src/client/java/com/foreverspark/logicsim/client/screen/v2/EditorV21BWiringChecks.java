@@ -13,6 +13,8 @@ public final class EditorV21BWiringChecks {
         virtualAutorouteDoesNotMutate();
         explicitRouteIsOrthogonal();
         legacyHiddenCornersNormalize();
+        legacyCornerDragKeepsClickedCorner();
+        legacySegmentHandleTargetsClickedLeg();
         endpointSegmentBecomesDraggable();
         segmentMovesPerpendicular();
         viaIndicesFollowInsertedHandles();
@@ -56,6 +58,41 @@ public final class EditorV21BWiringChecks {
         assertOrthogonal(wire, start, end, "first V2.1B edit expands legacy hidden corners into explicit orthogonal points");
         check(wire.viaRouteIndices().size() == 1 && wire.viaRouteIndices().getFirst() >= 1,
                 "legacy PCB via remains attached after route normalization");
+    }
+
+    private static void legacyCornerDragKeepsClickedCorner() {
+        WireConnection wire = new WireConnection(1, 0, 2, 0);
+        var start = new EditorWireRouting.Point(0, 0);
+        var end = new EditorWireRouting.Point(96, 54);
+        wire.setRoutePoints(List.of(new RoutePoint(42, 30), new RoutePoint(72, 42)));
+
+        // The click was made against old route index 1. Materialization inserts explicit L corners before the drag.
+        EditorWireRouting.materialize(wire, start, end);
+        check(wire.routePoints().size() >= 5, "legacy route gained explicit hidden corners before stale-index drag regression");
+        check(EditorWireRouting.moveRoutePoint(wire, start, end, 1, 78, 48),
+                "stale legacy route-point index remains resolvable after materialization");
+        RoutePoint moved = wire.routePoints().get(3);
+        check(moved.x() == 78 && moved.y() == 48,
+                "legacy corner drag moves the visible corner that was clicked, not an inserted normalization corner");
+        assertOrthogonal(wire, start, end, "legacy corner drag remains orthogonal after stale-index remap");
+    }
+
+    private static void legacySegmentHandleTargetsClickedLeg() {
+        WireConnection wire = new WireConnection(1, 0, 2, 0);
+        var start = new EditorWireRouting.Point(0, 0);
+        var end = new EditorWireRouting.Point(96, 54);
+        wire.setRoutePoints(List.of(new RoutePoint(42, 30), new RoutePoint(72, 42)));
+
+        // Old segment index 0 represented both hidden L legs. The cursor is on its vertical leg at X=42.
+        int movable = EditorWireRouting.addSegmentHandles(wire, start, end, 0, 42, 18);
+        check(movable >= 0, "double-clicking a legacy hidden-L leg adds handles after canonicalization");
+        boolean foundVerticalHandle = false;
+        for (RoutePoint point : wire.routePoints()) {
+            if (point.x() == 42 && (point.y() == 12 || point.y() == 24)) foundVerticalHandle = true;
+        }
+        check(foundVerticalHandle,
+                "legacy segment double-click targets the visible leg under the cursor instead of stale direct index 0");
+        assertOrthogonal(wire, start, end, "legacy segment handle insertion remains orthogonal");
     }
 
     private static void endpointSegmentBecomesDraggable() {
