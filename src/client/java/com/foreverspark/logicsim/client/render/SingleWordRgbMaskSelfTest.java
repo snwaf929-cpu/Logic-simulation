@@ -1,6 +1,6 @@
 package com.foreverspark.logicsim.client.render;
 
-/** Deterministic structural regression for the v6 single-word arbitrary-RGB sampler. */
+/** Deterministic structural regression for the single-word arbitrary-RGB sampler. */
 public final class SingleWordRgbMaskSelfTest {
     private SingleWordRgbMaskSelfTest() {}
 
@@ -19,9 +19,10 @@ public final class SingleWordRgbMaskSelfTest {
         );
 
         check(sampler.laneCount() == 16, "all 16 RGB565 lanes must be represented");
-        check(sampler.compact16(), "contiguous RGB565 lanes must use the 32 KiB compact table");
+        check(sampler.compact16(), "contiguous RGB565 lanes must use the split compact tables");
         check(sampler.compactShift() == 32, "RGB source shift mismatch");
-        check(sampler.tableEntries() == 16_384, "v6 table must remain cache-sized");
+        check(sampler.tableEntries() == 512, "compact RGB sampler must use two 256-entry tables");
+        check(sampler.tableBytes() == 512, "compact RGB lookup footprint must remain 512 bytes");
         check(sampler.rngWordsPerSample() == 1, "all arbitrary RGB lanes must consume one 32-bit PRNG word");
 
         int expectedHits = threshold * SingleWordRgbMaskSampler.ENTRIES_PER_THRESHOLD_QUANTUM;
@@ -57,10 +58,10 @@ public final class SingleWordRgbMaskSelfTest {
                     "lane " + bit + " probability drifted: expected=" + expected + " actual=" + actual);
         }
 
-        System.out.println("Single-word 32-bit arbitrary-RGB mask v6 self-test: PASS"
+        System.out.println("Single-word split-table arbitrary-RGB mask v9 self-test: PASS"
                 + " | lanes=" + sampler.laneCount()
                 + " tableEntries=" + sampler.tableEntries()
-                + " tableBytes=" + (sampler.tableEntries() * Character.BYTES)
+                + " tableBytes=" + sampler.tableBytes()
                 + " rngWordsPerColor=" + sampler.rngWordsPerSample()
                 + " probability=" + String.format("%.6f", expected)
                 + " samples=" + samples);
