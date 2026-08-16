@@ -62,14 +62,14 @@ public final class CircuitDocument {
     /** Stable public custom-CHIP input order, independent of node creation order after migration. */
     public List<EditorNode> inputNodes() {
         return nodes.stream().filter(node -> node.kind == NodeKind.INPUT)
-                .sorted(Comparator.comparingInt((EditorNode node) -> node.chipPortOrder).thenComparingInt(node -> node.id))
+                .sorted(chipPortComparator())
                 .toList();
     }
 
     /** Stable public custom-CHIP output order, independent of node creation order after migration. */
     public List<EditorNode> outputNodes() {
         return nodes.stream().filter(node -> node.kind == NodeKind.OUTPUT)
-                .sorted(Comparator.comparingInt((EditorNode node) -> node.chipPortOrder).thenComparingInt(node -> node.id))
+                .sorted(chipPortComparator())
                 .toList();
     }
 
@@ -171,9 +171,7 @@ public final class CircuitDocument {
     private void normalizeChipPortOrder(NodeKind kind) {
         List<EditorNode> ordered = nodes.stream()
                 .filter(node -> node.kind == kind)
-                .sorted(Comparator
-                        .comparingInt((EditorNode node) -> node.chipPortOrder < 0 ? Integer.MAX_VALUE : node.chipPortOrder)
-                        .thenComparingInt(node -> node.id))
+                .sorted(chipPortComparator())
                 .toList();
         for (int index = 0; index < ordered.size(); index++) ordered.get(index).chipPortOrder = index;
     }
@@ -185,5 +183,11 @@ public final class CircuitDocument {
             if (node.kind == kind && node.chipPortOrder >= 0) max = Math.max(max, node.chipPortOrder);
         }
         return max + 1;
+    }
+
+    private static Comparator<EditorNode> chipPortComparator() {
+        return Comparator
+                .comparingInt((EditorNode node) -> node.chipPortOrder < 0 ? Integer.MAX_VALUE : node.chipPortOrder)
+                .thenComparingInt(node -> node.id);
     }
 }
