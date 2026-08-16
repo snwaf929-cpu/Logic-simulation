@@ -4,43 +4,31 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /** Shared visible/hit-test geometry for Editor V2 signal and bus terminals. */
 public final class EditorPinGeometry {
-    /** Render/input both run on the client UI thread. Thread-local state prevents other threads from inheriting canvas LOD. */
-    private static final ThreadLocal<Double> CANVAS_ZOOM = ThreadLocal.withInitial(() -> 1.0);
-
     private EditorPinGeometry() {}
 
-    /** Called by the canvas before rendering so every legacy/specialized pin renderer shares one zoom LOD policy. */
-    public static void setCanvasZoom(double zoom) {
-        CANVAS_ZOOM.set(Double.isFinite(zoom) ? Math.max(0.20, Math.min(4.0, zoom)) : 1.0);
-    }
+    /**
+     * Retained as a compatibility no-op for older render mixins. Pins are screen-space UI and therefore must not
+     * grow or shrink when the circuit world is zoomed.
+     */
+    public static void setCanvasZoom(double zoom) {}
 
+    /** Screen-space geometry is deliberately zoom invariant. */
     public static double canvasZoom() {
-        return CANVAS_ZOOM.get();
+        return 1.0;
     }
 
     public static int halfSize(int width) {
-        int base;
-        if (width <= 1) base = 3;
-        else if (width <= 4) base = 4;
-        else if (width <= 16) base = 5;
-        else base = 6;
-
-        double zoom = canvasZoom();
-        if (zoom < 0.45) return Math.max(2, base - 2);
-        if (zoom < 0.72) return Math.max(2, base - 1);
-        if (zoom > 1.55) return Math.min(7, base + 1);
-        return base;
+        if (width <= 1) return 3;
+        if (width <= 4) return 4;
+        if (width <= 16) return 5;
+        return 6;
     }
 
     public static int chamfer(int width) {
-        int base = width >= 32 ? 2 : 1;
-        return halfSize(width) <= 2 ? 1 : base;
+        return width >= 32 ? 2 : 1;
     }
 
-    /**
-     * Exact V2 interaction geometry: the colored connector body is the click/hover/selection region.
-     * There is deliberately no hidden low-zoom padding.
-     */
+    /** The colored connector body is exactly the click/hover/selection region. */
     public static boolean contains(double dx, double dy, int width) {
         int half = halfSize(width);
         double ax = Math.abs(dx);
