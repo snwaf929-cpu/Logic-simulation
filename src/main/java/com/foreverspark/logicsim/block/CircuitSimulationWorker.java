@@ -15,7 +15,7 @@ import java.util.concurrent.locks.LockSupport;
  * Minecraft ticks are deliberately NOT the clock source. Each circuit is permanently assigned to one worker shard,
  * so a single circuit remains deterministic/single-threaded while independent Circuit Blocks can execute on separate
  * CPU cores. Active simulation stays cache-hot. On high-core-count systems the worker uses one step above normal Java
- * priority to reduce scheduler jitter at 100 MHz while still leaving multiple logical CPUs for Minecraft and the OS.
+ * priority to reduce scheduler jitter for high-rate clocks while still leaving most logical CPUs for Minecraft/OS work.
  */
 public final class CircuitSimulationWorker {
     private static final int PROCESSORS = Math.max(1, Runtime.getRuntime().availableProcessors());
@@ -51,11 +51,14 @@ public final class CircuitSimulationWorker {
         SHARDS.get(shardIndex(circuit)).remove(circuit);
     }
 
+    public static int logicalProcessorCount() { return PROCESSORS; }
+    public static int workerCount() { return WORKER_COUNT; }
+
     private static void ensureStarted() {
         if (!STARTED.compareAndSet(false, true)) return;
 
         LogicSimulationMod.LOGGER.info(
-                "[CLOCK WORKERS] processors={} workers={} priority={} pacing=cache-hot-sharded-fair handoffEvery={} handoffNanos={} minecraftTickIndependent=true",
+                "[CLOCK WORKERS] processors={} workers={} cpuShareCap=25% priority={} pacing=cache-hot-sharded-fair handoffEvery={} handoffNanos={} minecraftTickIndependent=true singleCircuitWorkers=1",
                 PROCESSORS,
                 WORKER_COUNT,
                 WORKER_PRIORITY,
@@ -119,8 +122,8 @@ public final class CircuitSimulationWorker {
     }
 
     private static int chooseWorkerCount(int processors) {
-        if (processors <= 4) return 1;
-        // Leave at least two logical CPUs for Minecraft/OS work and avoid spawning an excessive idle thread fleet.
-        return Math.max(2, Math.min(8, processors - 2));
+        // Global Circuit Block parallelism may use at most one quarter of the machine's logical processors.
+        // This is intentionally NOT a per-circuit multiplier: one circuit remains deterministic on one shard.
+        return Math.max(1, processors / 4);
     }
 }
