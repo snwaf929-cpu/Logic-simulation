@@ -44,6 +44,8 @@ public final class EditorDocumentSnapshot {
         node.kind = source.kind;
         node.x = source.x;
         node.y = source.y;
+        node.editorBodyWidth = source.editorBodyWidth;
+        node.editorBodyHeight = source.editorBodyHeight;
         node.width = source.width;
         node.laneWidth = source.laneWidth;
         node.label = source.label == null ? "" : source.label;
@@ -88,6 +90,8 @@ public final class EditorDocumentSnapshot {
 
     private static boolean sameNode(EditorNode a, EditorNode b) {
         return a.id == b.id && a.kind == b.kind && Double.compare(a.x, b.x) == 0 && Double.compare(a.y, b.y) == 0
+                && Double.compare(a.editorBodyWidth, b.editorBodyWidth) == 0
+                && Double.compare(a.editorBodyHeight, b.editorBodyHeight) == 0
                 && a.width == b.width && a.laneWidth == b.laneWidth && safe(a.label).equals(safe(b.label))
                 && a.chipPortOrder == b.chipPortOrder
                 && safe(a.chipName).equals(safe(b.chipName)) && a.constantValue == b.constantValue
