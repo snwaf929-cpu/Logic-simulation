@@ -21,10 +21,11 @@ public final class EditorCompletionSelfTest {
     public static void main(String[] args) {
         chipPortOrderMigratesAndPersists();
         snapshotPreservesRuntimeMetadata();
+        editorBodySizeIsCadOnlyAndSnapshotSafe();
         wireHashRemainsStableDuringCadEdits();
         hardwareSignatureIgnoresCadOnlyChanges();
         hardwareSignatureTracksElectricalChanges();
-        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved wireKeys=stable cadRestart=false electricalRestart=true");
+        System.out.println("Editor completion metadata/persistence self-test: PASS | chipPortOrder=stable snapshotWorkers=preserved bodyResize=cad-only wireKeys=stable cadRestart=false electricalRestart=true");
     }
 
     private static void chipPortOrderMigratesAndPersists() {
@@ -82,6 +83,30 @@ public final class EditorCompletionSelfTest {
         check(!EditorDocumentSnapshot.same(board, copy), "worker-budget changes create undo/redo history entries");
     }
 
+    private static void editorBodySizeIsCadOnlyAndSnapshotSafe() {
+        CircuitDocument board = baseBoard();
+        EditorNode nand = board.addNode(NodeKind.NAND, 60, 72);
+        String before = CircuitHardwareSignature.of(board);
+        nand.editorBodyWidth = 114.0;
+        nand.editorBodyHeight = 72.0;
+        String after = CircuitHardwareSignature.of(board);
+        check(before.equals(after), "per-instance editor body resize must not restart electrical hardware");
+
+        CircuitDocument copy = EditorDocumentSnapshot.copy(board);
+        EditorNode copiedNand = copy.node(nand.id);
+        check(copiedNand.editorBodyWidth == 114.0 && copiedNand.editorBodyHeight == 72.0,
+                "undo/redo snapshots preserve V2.1C body dimensions");
+        check(EditorDocumentSnapshot.same(board, copy), "snapshot equality includes V2.1C body dimensions");
+        copiedNand.editorBodyWidth = 120.0;
+        check(!EditorDocumentSnapshot.same(board, copy), "body resize creates an undo/redo history change");
+
+        nand.editorBodyWidth = Double.NaN;
+        nand.editorBodyHeight = -24.0;
+        board.normalize();
+        check(nand.editorBodyWidth == 0.0 && nand.editorBodyHeight == 0.0,
+                "invalid imported editor body dimensions normalize back to automatic sizing");
+    }
+
     private static void wireHashRemainsStableDuringCadEdits() {
         CircuitDocument board = baseBoard();
         var wire = board.wires.getFirst();
@@ -100,12 +125,14 @@ public final class EditorCompletionSelfTest {
         EditorNode input = board.node(1);
         input.x += 144;
         input.y += 72;
+        input.editorBodyWidth = 120.0;
+        input.editorBodyHeight = 48.0;
         input.locked = true;
         board.wires.getFirst().setRoutePoints(List.of(new RoutePoint(30, 0), new RoutePoint(30, 60)));
         board.wires.getFirst().setLayer(WireLayer.BACK);
         board.wires.getFirst().setViaRouteIndices(List.of(0));
         String after = CircuitHardwareSignature.of(board);
-        check(before.equals(after), "layout/lock/route/layer/via edits must not restart running electrical hardware");
+        check(before.equals(after), "layout/resize/lock/route/layer/via edits must not restart running electrical hardware");
     }
 
     private static void hardwareSignatureTracksElectricalChanges() {
