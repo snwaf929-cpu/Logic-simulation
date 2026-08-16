@@ -17,6 +17,7 @@
     "CircuitCanvasPhase2ConfigMixin",
     "CircuitCanvasChipPortOrderMixin",
     "CircuitCanvasEditorV2Mixin",
+    "CircuitCanvasFloatingInputMixin",
     "CircuitCanvasPhase2RenderMixin",
     "CircuitCanvasClockDiagnosticsMixin",
     "CircuitCanvasBranchMixin",
