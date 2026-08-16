@@ -123,8 +123,8 @@ public final class LibraryPersistenceSelfTest {
                 "template PCB copper metadata survives reopen");
         check(definition.circuit.wires.getFirst().viaRouteIndices().equals(List.of(0)),
                 "template PCB via metadata survives reopen");
-        check(definition.circuit.formatVersion == 2,
-                "Phase 4 optional metadata does not force a document-format migration");
+        check(definition.circuit.formatVersion == 3,
+                "V3 explicit reusable-CHIP port ordering migrates BOARD documents without breaking Phase 4 optional metadata");
     }
 
     private static CircuitDocument sampleCircuit() {
