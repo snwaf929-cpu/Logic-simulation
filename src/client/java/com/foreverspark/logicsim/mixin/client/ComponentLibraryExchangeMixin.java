@@ -6,6 +6,7 @@ import com.foreverspark.logicsim.client.screen.ComponentLibraryWidget;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.input.MouseButtonEvent;
+import org.lwjgl.util.tinyfd.TinyFileDialogs;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -16,6 +17,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.function.Consumer;
 
 /** Adds portable circuit exchange actions directly above MY CHIPS. */
@@ -52,12 +55,12 @@ public abstract class ComponentLibraryExchangeMixin {
 
         logic$importRowY = cursor;
         logic$drawRow(graphics, self, cursor, clipTop, clipBottom,
-                "IMPORT FILES", 0xFF55B96B, "INBOX", 0xFF91D79F);
+                "IMPORT FILE", 0xFF55B96B, "OPEN...", 0xFF91D79F);
         cursor += ROW_STEP;
 
         logic$exportRowY = cursor;
         logic$drawRow(graphics, self, cursor, clipTop, clipBottom,
-                "EXPORT SELECTED", 0xFF63A9D8, selectedChip == null ? "SELECT" : "BUNDLE", 0xFFA8D8F3);
+                "EXPORT SELECTED", 0xFF63A9D8, selectedChip == null ? "SELECT" : "SAVE...", 0xFFA8D8F3);
         cursor += ROW_STEP + 4;
 
         logic$drawSection(graphics, self, "MY CHIPS", cursor, clipTop, clipBottom);
@@ -74,15 +77,15 @@ public abstract class ComponentLibraryExchangeMixin {
         if (event.x() < left || event.x() >= right) return;
 
         if (logic$visibleHit(logic$importRowY, event.y(), clipTop, clipBottom)) {
-            if (event.button() == 0) logic$importFiles();
-            else if (event.button() == 1) logic$showImportFolder();
+            if (event.button() == 0) logic$importNative();
+            else if (event.button() == 1) logic$importInboxFallback();
             else return;
             ci.cancel();
             return;
         }
 
         if (logic$visibleHit(logic$exportRowY, event.y(), clipTop, clipBottom)) {
-            if (event.button() == 0) logic$exportSelected();
+            if (event.button() == 0) logic$exportNative();
             else if (event.button() == 1) logic$showExportFolder();
             else return;
             ci.cancel();
@@ -90,50 +93,84 @@ public abstract class ComponentLibraryExchangeMixin {
     }
 
     @Unique
-    private void logic$importFiles() {
+    private void logic$importNative() {
         try {
-            CircuitExchange.ImportResult result = CircuitExchange.importInbox(library);
-            if (!result.importedAnything() && !result.hasFailures()) {
-                status.accept("Import inbox is empty. Put .logicbundle.json or .logicchip.json in "
-                        + result.importDirectory().toAbsolutePath() + " then click IMPORT FILES again.");
+            CircuitExchange.ensureDirectories();
+            String chosen = TinyFileDialogs.tinyfd_openFileDialog(
+                    "Import Logic Simulation circuit",
+                    CircuitExchange.importDirectory().toAbsolutePath().toString(),
+                    null,
+                    "Logic Simulation exchange (.logicbundle.json / .logicchip.json)",
+                    false
+            );
+            if (chosen == null || chosen.isBlank()) {
+                status.accept("Import cancelled");
                 return;
             }
-            if (result.hasFailures()) {
-                String first = result.failures().get(0);
-                status.accept("Imported " + result.chipCount() + " chip(s) from " + result.fileCount()
-                        + " file(s); " + result.failures().size() + " failed. First: " + first);
-                return;
-            }
-            String root = result.roots().isEmpty() ? "" : " Root: " + String.join(", ", result.roots());
-            status.accept("Imported " + result.chipCount() + " chip(s) from " + result.fileCount()
-                    + " exchange file(s)." + root);
+            CircuitExchange.ImportResult result = CircuitExchange.importFiles(library, List.of(Path.of(chosen)));
+            logic$reportImport(result);
+        } catch (LinkageError error) {
+            status.accept("Native Open dialog unavailable: " + logic$message(error)
+                    + ". Right-click IMPORT FILE to use the inbox fallback.");
         } catch (IOException | RuntimeException exception) {
             status.accept("Import failed: " + logic$message(exception));
         }
     }
 
     @Unique
-    private void logic$exportSelected() {
+    private void logic$importInboxFallback() {
+        try {
+            CircuitExchange.ImportResult result = CircuitExchange.importInbox(library);
+            if (!result.importedAnything() && !result.hasFailures()) {
+                status.accept("Fallback inbox is empty: " + result.importDirectory().toAbsolutePath());
+                return;
+            }
+            logic$reportImport(result);
+        } catch (IOException | RuntimeException exception) {
+            status.accept("Inbox import failed: " + logic$message(exception));
+        }
+    }
+
+    @Unique
+    private void logic$reportImport(CircuitExchange.ImportResult result) {
+        if (result.hasFailures()) {
+            String first = result.failures().getFirst();
+            status.accept("Imported " + result.chipCount() + " chip(s) from " + result.fileCount()
+                    + " file(s); " + result.failures().size() + " failed. First: " + first);
+            return;
+        }
+        String root = result.roots().isEmpty() ? "" : " Root: " + String.join(", ", result.roots());
+        status.accept("Imported " + result.chipCount() + " chip(s) from " + result.fileCount()
+                + " exchange file(s)." + root);
+    }
+
+    @Unique
+    private void logic$exportNative() {
         if (selectedChip == null || selectedChip.isBlank()) {
             status.accept("Select a saved chip under MY CHIPS first, then click EXPORT SELECTED.");
             return;
         }
         try {
-            CircuitExchange.ExportResult result = CircuitExchange.exportChip(library, selectedChip);
+            CircuitExchange.ensureDirectories();
+            Path suggested = CircuitExchange.suggestedExportPath(selectedChip).toAbsolutePath();
+            String chosen = TinyFileDialogs.tinyfd_saveFileDialog(
+                    "Export Logic Simulation circuit",
+                    suggested.toString(),
+                    null,
+                    "Logic Simulation bundle (.logicbundle.json)"
+            );
+            if (chosen == null || chosen.isBlank()) {
+                status.accept("Export cancelled");
+                return;
+            }
+            CircuitExchange.ExportResult result = CircuitExchange.exportChipTo(library, selectedChip, Path.of(chosen));
             status.accept("Exported " + result.root() + " + " + Math.max(0, result.chipCount() - 1)
                     + " dependency chip(s) -> " + result.path().toAbsolutePath());
+        } catch (LinkageError error) {
+            status.accept("Native Save dialog unavailable: " + logic$message(error)
+                    + ". Right-click EXPORT SELECTED for the fallback folder path.");
         } catch (IOException | RuntimeException exception) {
             status.accept("Export failed: " + logic$message(exception));
-        }
-    }
-
-    @Unique
-    private void logic$showImportFolder() {
-        try {
-            CircuitExchange.ensureDirectories();
-            status.accept("IMPORT folder: " + CircuitExchange.importDirectory().toAbsolutePath());
-        } catch (IOException exception) {
-            status.accept("Cannot create exchange folder: " + logic$message(exception));
         }
     }
 
@@ -141,7 +178,7 @@ public abstract class ComponentLibraryExchangeMixin {
     private void logic$showExportFolder() {
         try {
             CircuitExchange.ensureDirectories();
-            status.accept("EXPORT folder: " + CircuitExchange.exportDirectory().toAbsolutePath());
+            status.accept("Fallback EXPORT folder: " + CircuitExchange.exportDirectory().toAbsolutePath());
         } catch (IOException exception) {
             status.accept("Cannot create exchange folder: " + logic$message(exception));
         }
@@ -177,8 +214,8 @@ public abstract class ComponentLibraryExchangeMixin {
     }
 
     @Unique
-    private static String logic$message(Exception exception) {
-        String message = exception.getMessage();
-        return message == null || message.isBlank() ? exception.getClass().getSimpleName() : message;
+    private static String logic$message(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null || message.isBlank() ? throwable.getClass().getSimpleName() : message;
     }
 }
