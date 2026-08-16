@@ -1,11 +1,16 @@
 package com.foreverspark.logicsim.mixin.client;
 
+import com.foreverspark.logicsim.client.screen.CanvasConfigAccess;
 import com.foreverspark.logicsim.client.screen.CircuitCanvasWidget;
+import com.foreverspark.logicsim.client.screen.EditorScreenContext;
+import com.foreverspark.logicsim.client.screen.v2.BoardTemplateCanvasAccess;
+import com.foreverspark.logicsim.client.screen.v2.CanvasPhase2ConfigAccess;
 import com.foreverspark.logicsim.client.screen.v2.EditorLayoutTools;
 import com.foreverspark.logicsim.client.screen.v2.EditorPhase6Access;
 import com.foreverspark.logicsim.editor.model.EditorNode;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Final;
@@ -28,6 +33,7 @@ public abstract class CircuitCanvasPhase6ContextMixin {
     @Unique private static final int LOGIC_MENU_ROW_HEIGHT = 17;
     @Unique private static final int LOGIC_MENU_HEADER_HEIGHT = 18;
     @Unique private static final List<LogicContextAction> LOGIC_ACTIONS = List.of(
+            new LogicContextAction("EDIT / PROPERTIES", LogicContextKind.EDIT),
             new LogicContextAction("LOCK / UNLOCK", LogicContextKind.LOCK),
             new LogicContextAction("DUPLICATE", LogicContextKind.DUPLICATE),
             new LogicContextAction("ALIGN LEFT", LogicContextKind.ALIGN_LEFT),
@@ -64,7 +70,7 @@ public abstract class CircuitCanvasPhase6ContextMixin {
                 return;
             }
             logic$openContext(self, event.x(), event.y());
-            status.accept("CONTEXT: layout, duplicate, or lock the current component selection");
+            status.accept("CONTEXT: edit properties, layout, duplicate, or lock the current component selection");
             ci.cancel();
             return;
         }
@@ -135,6 +141,7 @@ public abstract class CircuitCanvasPhase6ContextMixin {
     private void logic$runContextAction(LogicContextKind kind) {
         EditorPhase6Access phase6 = (EditorPhase6Access)(Object)this;
         switch (kind) {
+            case EDIT -> logic$editProperties();
             case LOCK -> phase6.logic$toggleSelectedLocks();
             case DUPLICATE -> duplicateSelection();
             case ALIGN_LEFT -> phase6.logic$alignSelected(EditorLayoutTools.Alignment.LEFT);
@@ -148,12 +155,28 @@ public abstract class CircuitCanvasPhase6ContextMixin {
     }
 
     @Unique
+    private void logic$editProperties() {
+        Screen parent = EditorScreenContext.current();
+        Object self = this;
+
+        // CLOCK/RANDOM have their own typed source editor and support same-type multi-selection batch editing.
+        if (self instanceof CanvasConfigAccess source && source.logic$editSelectedSources(parent)) return;
+        // Authored BOARD SOCKET metadata has a dedicated identity/direction/width/order dialog.
+        if (self instanceof BoardTemplateCanvasAccess board && board.logic$configureSelectedSocket(parent)) return;
+        // General widths/values/BUS_SLICE/NET_LABEL use the exact Phase-2 properties dialogs.
+        if (self instanceof CanvasPhase2ConfigAccess config && config.logic$configureSelected(parent)) return;
+        status.accept(selectedNodeIds.size() == 1
+                ? "Selected component has no editable properties"
+                : "EDIT / PROPERTIES requires one component, except CLOCK/RANDOM batch editing");
+    }
+
+    @Unique
     private static boolean logic$inside(CircuitCanvasWidget self, double x, double y) {
         return x >= self.getX() && x < self.getX() + self.getWidth() && y >= self.getY() && y < self.getY() + self.getHeight();
     }
 
     @Unique private enum LogicContextKind {
-        LOCK, DUPLICATE, ALIGN_LEFT, ALIGN_RIGHT, ALIGN_TOP, ALIGN_BOTTOM, ALIGN_PINS, DISTRIBUTE_H, DISTRIBUTE_V
+        EDIT, LOCK, DUPLICATE, ALIGN_LEFT, ALIGN_RIGHT, ALIGN_TOP, ALIGN_BOTTOM, ALIGN_PINS, DISTRIBUTE_H, DISTRIBUTE_V
     }
 
     @Unique private record LogicContextAction(String label, LogicContextKind kind) {}
