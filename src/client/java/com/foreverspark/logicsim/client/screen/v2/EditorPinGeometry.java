@@ -37,15 +37,17 @@ public final class EditorPinGeometry {
         return halfSize(width) <= 2 ? 1 : base;
     }
 
+    /**
+     * Exact V2 interaction geometry: the colored connector body is the click/hover/selection region.
+     * There is deliberately no hidden low-zoom padding.
+     */
     public static boolean contains(double dx, double dy, int width) {
-        int visualHalf = halfSize(width);
-        // Low-zoom pins draw smaller to reduce clutter but retain a minimum comfortable pointer target.
-        int half = Math.max(4, visualHalf + 1);
+        int half = halfSize(width);
         double ax = Math.abs(dx);
         double ay = Math.abs(dy);
         if (ax > half || ay > half) return false;
         if (width <= 1) return true;
-        return ax + ay <= half * 2.0 - Math.min(chamfer(width), half - 1);
+        return ax + ay <= half * 2.0 - Math.min(chamfer(width), Math.max(0, half - 1));
     }
 
     public static void draw(GuiGraphicsExtractor graphics, int x, int y, int width, int color) {
